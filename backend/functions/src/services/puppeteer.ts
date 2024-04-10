@@ -118,7 +118,7 @@ export class PuppeteerControl extends AsyncService {
             nextSnapshotDeferred = Defer();
         };
         page.on('snapshot', hdl);
-        const gotoPromise = page.goto(url, { waitUntil: 'networkidle2', timeout: 30_000 });
+        const gotoPromise = page.goto(url, { waitUntil: 'networkidle0', timeout: 30_000 });
         gotoPromise.finally(() => finalized = true);
 
         try {
