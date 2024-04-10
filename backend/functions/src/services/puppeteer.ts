@@ -42,7 +42,7 @@ export class PuppeteerControl extends AsyncService {
             await this.browser.close();
         }
         this.browser = await puppeteer.launch({
-            headless: false,
+            headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox'],
         });
         this.browser.once('disconnected', () => {
@@ -67,8 +67,7 @@ export class PuppeteerControl extends AsyncService {
         await page.evaluateOnNewDocument(READABILITY_JS);
 
         await page.evaluateOnNewDocument(() => {
-            // @ts-expect-error
-            window.giveSnapshot() = () => {
+            function giveSnapshot() {
                 // @ts-expect-error
                 return new Readability(document.cloneNode(true)).parse();
             };
@@ -79,9 +78,7 @@ export class PuppeteerControl extends AsyncService {
                     return;
                 }
 
-                // @ts-expect-error
-                const parsed = window.giveSnapshot();
-                console.log(parsed);
+                const parsed = giveSnapshot();
                 if (parsed) {
                     // @ts-expect-error
                     window.reportSnapshot(parsed);
@@ -91,7 +88,7 @@ export class PuppeteerControl extends AsyncService {
                     }
                     aftershot = setTimeout(() => {
                         // @ts-expect-error
-                        window.reportSnapshot(window.giveSnapshot());
+                        window.reportSnapshot(giveSnapshot());
                     }, 500);
                 }
             };
@@ -130,7 +127,7 @@ export class PuppeteerControl extends AsyncService {
                 const screenshot = await page.screenshot();
                 if (finalized) {
                     await gotoPromise;
-                    snapshot = await page.evaluate('window.giveSnapshot()');
+                    snapshot = await page.evaluate('new Readability(document.cloneNode(true)).parse()');
                     yield { snapshot, screenshot };
                     break;
                 }

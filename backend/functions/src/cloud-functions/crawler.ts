@@ -41,7 +41,6 @@ export class CrawlerHost extends RPCHost {
 
         try {
             for await (const scrapped of this.puppeteerControl.scrap(url)) {
-                this.logger.info(`Scrapped: ${scrapped.snapshot}`);
                 const content = typeof scrapped.snapshot === 'string' ? scrapped.snapshot : (scrapped.snapshot as any)?.content;
                 if (!content) {
                     continue;
