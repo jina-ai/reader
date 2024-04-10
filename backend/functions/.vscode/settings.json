@@ -1,0 +1,10 @@
+{
+    "cSpell.words": [
+        "AIHTTP",
+        "Castable",
+        "civkit",
+        "Firestore",
+        "openai"
+    ],
+    "typescript.tsdk": "node_modules/typescript/lib"
+}

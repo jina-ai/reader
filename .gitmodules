@@ -1,0 +1,3 @@
+[submodule "thinapps-shared"]
+	path = thinapps-shared
+	url = git@github.com:jina-ai/thinapps-shared.git

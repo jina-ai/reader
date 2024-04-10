@@ -1,0 +1,15 @@
+{
+    "name": "url2text",
+    "version": "1.0.0",
+    "description": "### Prerequisite - Node v18 (The build fails for Node version >18) - Yarn - Firebase CLI (`npm install -g firebase-tools`)",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "firebase-tools": "^12.4.2",
+        "typescript": "^5.1.6"
+    }
+}

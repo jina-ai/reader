@@ -1,0 +1,21 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",
+        "noImplicitReturns": true,
+        "noUnusedLocals": true,
+        "outDir": "build",
+        "sourceMap": true,
+        "strict": true,
+        "allowJs": true,
+        "target": "es2022",
+        "lib": ["es2022"],
+        "skipLibCheck": true,
+        "useDefineForClassFields": false,
+        "experimentalDecorators": true,
+        "emitDecoratorMetadata": true,
+        "esModuleInterop": true,
+        "noImplicitOverride": true,
+    },
+    "compileOnSave": true,
+    "include": ["src"]
+}
