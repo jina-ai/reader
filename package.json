@@ -1,5 +1,5 @@
 {
-    "name": "url2text",
+    "name": "reader",
     "version": "1.0.0",
     "description": "### Prerequisite - Node v18 (The build fails for Node version >18) - Yarn - Firebase CLI (`npm install -g firebase-tools`)",
     "main": "index.js",

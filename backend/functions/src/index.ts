@@ -28,7 +28,7 @@ Object.assign(exports, registry.exportGrouped({
     memory: '4GiB',
     timeoutSeconds: 540,
 }));
-registry.title = 'url2text';
+registry.title = 'reader';
 registry.version = '0.1.0';
 
 process.on('unhandledRejection', () => 'no big deal');

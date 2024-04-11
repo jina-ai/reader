@@ -1,4 +1,4 @@
-# Url2Text
+# reader
 
 ## Development Guide
 
@@ -12,7 +12,7 @@
 Clone the scenex repo by running the command:
 
 ```bash
-git clone git@github.com:jina-ai/url2text.git
+git clone git@github.com:jina-ai/reader.git
 git submodule init
 git submodule update
 ```
