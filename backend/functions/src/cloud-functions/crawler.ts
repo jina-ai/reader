@@ -5,6 +5,7 @@ import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl } from '../services/puppeteer';
 import TurnDownService from 'turndown';
 import { Request, Response } from 'express';
+import normalizeUrl from "@esm2cjs/normalize-url";
 
 
 @singleton()
@@ -57,11 +58,8 @@ ${contentText.trim()}
             res: Response,
         },
     ) {
-        const url = new URL(ctx.req.url, `${ctx.req.protocol}://${ctx.req.headers.host}`);
-        const rawPath = url.pathname.split('/').filter(Boolean);
-        const host = rawPath.shift();
-        const urlToCrawl = new URL(`${ctx.req.protocol}://${host}/${rawPath.join('/')}`);
-        urlToCrawl.search = url.search;
+        const noSlashURL = ctx.req.url.slice(1);
+        const urlToCrawl = new URL(normalizeUrl(noSlashURL));
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -88,7 +86,7 @@ ${contentText.trim()}
                     });
                 }
             } catch (err: any) {
-                this.logger.error(`Failed to crawl ${url}`, { err: marshalErrorLike(err) });
+                this.logger.error(`Failed to crawl ${urlToCrawl.toString()}`, { err: marshalErrorLike(err) });
                 sseStream.write({
                     event: 'error',
                     data: marshalErrorLike(err),
