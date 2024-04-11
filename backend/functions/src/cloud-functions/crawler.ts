@@ -11,7 +11,7 @@ import { Request, Response } from 'express';
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    turnDownService = new TurnDownService();
+    turnDownService = new TurnDownService().use(require('turndown-plugin-gfm'));
 
     constructor(
         protected globalLogger: Logger,
