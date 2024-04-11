@@ -18,11 +18,10 @@
     "from-preset": "npm run build && npm run emu:reset && npm run emu:start",
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log",
-    "gcp-build": "node node_modules/puppeteer/install.mjs"
+    "logs": "firebase functions:log"
   },
   "engines": {
-    "node": "20"
+    "node": "18"
   },
   "main": "build/index.js",
   "dependencies": {

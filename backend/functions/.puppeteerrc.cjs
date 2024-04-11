@@ -1,4 +1,4 @@
-const {join} = require('path');
+const { join } = require('path');
 
 let config = {};
 if (!process.env.FUNCTIONS_EMULATOR) {
