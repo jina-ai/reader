@@ -19,7 +19,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "gcp-build": "node node_modules/puppeteer/install.js"
+    "gcp-build": "node node_modules/puppeteer/install.mjs"
   },
   "engines": {
     "node": "20"

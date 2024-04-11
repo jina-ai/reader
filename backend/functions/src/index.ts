@@ -30,3 +30,5 @@ Object.assign(exports, registry.exportGrouped({
 }));
 registry.title = 'url2text';
 registry.version = '0.1.0';
+
+process.on('unhandledRejection', () => 'no big deal');

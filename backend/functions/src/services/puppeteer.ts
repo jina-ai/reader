@@ -1,4 +1,4 @@
-import { AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
+import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
 import { container, singleton } from 'tsyringe';
 import puppeteer, { Browser } from 'puppeteer';
 import { Logger } from '../shared/services/logger';
@@ -72,7 +72,6 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
         });
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
@@ -212,20 +211,20 @@ function giveSnapshot() {
                 });
 
                 return r;
+            }).catch((err) => {
+                this.logger.warn(`Failed to goto ${url}`, { err: marshalErrorLike(err) });
+                return Promise.reject(new AssertionFailureError({
+                    message: `Failed to goto ${url}: ${err}`,
+                    cause: err,
+                }));
+            }).finally(() => {
+                finalized = true;
             });
-
-        gotoPromise.catch((err) => {
-            this.logger.warn(`Browsing of ${url} not fully done`, { err: marshalErrorLike(err) });
-        }).finally(() => {
-            finalized = true;
-        });
 
         try {
             while (true) {
                 await Promise.race([nextSnapshotDeferred.promise, gotoPromise]);
                 if (finalized) {
-                    await gotoPromise;
-
                     yield { ...snapshot, screenshot };
                     break;
                 }
