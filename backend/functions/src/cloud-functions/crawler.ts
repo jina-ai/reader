@@ -30,7 +30,9 @@ export class CrawlerHost extends RPCHost {
     formatSnapshot(snapshot: PageSnapshot) {
 
         const toBeTurnedToMd = snapshot.parsed?.content;
-        const contentText = toBeTurnedToMd ? this.turnDownService.turndown(toBeTurnedToMd) : snapshot.text;
+        const turnedDown = toBeTurnedToMd ? this.turnDownService.turndown(toBeTurnedToMd).trim() : '';
+
+        const contentText = turnedDown && !(turnedDown.startsWith('<') && turnedDown.endsWith('>')) ? turnedDown : snapshot.text.trim();
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
@@ -51,6 +53,16 @@ ${contentText}
         return formatted;
     }
 
+    @CloudHTTPv2({
+        name: 'crawl2',
+        runtime: {
+            memory: '4GiB',
+            timeoutSeconds: 540,
+            concurrency: 4,
+        },
+        httpMethod: ['get', 'post'],
+        returnType: [String, OutputServerEventStream],
+    })
     @CloudHTTPv2({
         runtime: {
             memory: '4GiB',

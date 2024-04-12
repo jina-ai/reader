@@ -71,8 +71,7 @@ export class PuppeteerControl extends AsyncService {
             }
         }
         this.browser = await puppeteer.launch({
-            headless: true,
-            timeout: 60_000
+            headless: true
         });
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
