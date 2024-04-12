@@ -65,9 +65,9 @@ ${this.content}
     })
     @CloudHTTPv2({
         runtime: {
-            memory: '4GiB',
+            memory: '8GiB',
             timeoutSeconds: 540,
-            concurrency: 4,
+            concurrency: 16,
         },
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],

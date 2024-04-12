@@ -49,11 +49,12 @@ export class PuppeteerControl extends AsyncService {
             return page.browser().connected && !page.isClosed();
         }
     }, {
-        max: Math.max(1 + Math.floor(os.freemem() / 1024 * 1024 * 1024), 4),
+        max: Math.max(1 + Math.floor(os.freemem() / 1024 * 1024 * 1024), 16),
         min: 1,
         acquireTimeoutMillis: 60_000,
         testOnBorrow: true,
         testOnReturn: true,
+        autostart: false,
     });
 
     constructor(protected globalLogger: Logger) {
@@ -62,6 +63,8 @@ export class PuppeteerControl extends AsyncService {
 
     override async init() {
         await this.dependencyReady();
+
+        this.pagePool.start();
 
         if (this.browser) {
             if (this.browser.connected) {
@@ -72,7 +75,13 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             headless: true,
-            timeout: 45_000
+            timeout: 10_000
+        }).catch((err) => {
+            this.logger.error(`Unknown firebase issue, just die fast, quitting process.`, { err });
+            process.nextTick(()=> {
+                process.exit(1);
+            });
+            return Promise.reject(err);
         });
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
@@ -90,7 +99,7 @@ export class PuppeteerControl extends AsyncService {
         const page = await dedicatedContext.newPage();
         const preparations = [];
 
-        preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
+        // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
         preparations.push(page.setBypassCSP(true));
         preparations.push(page.setViewport({ width: 1920, height: 1080 }));
         preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
