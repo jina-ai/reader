@@ -19,10 +19,10 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "gcp-build": "npx puppeteer browsers install chrome"
+    "gcp-build": "node node_modules/puppeteer/install.mjs"
   },
   "engines": {
-    "node": "18"
+    "node": "20"
   },
   "main": "build/index.js",
   "dependencies": {
