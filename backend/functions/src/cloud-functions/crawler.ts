@@ -148,7 +148,7 @@ ${this.content}
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
 
-        return this.formatSnapshot(lastScrapped);
+        return `${this.formatSnapshot(lastScrapped)}`;
     }
 
 
