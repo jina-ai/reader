@@ -121,8 +121,10 @@ ${this.content}
             return sseStream;
         }
 
+        let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
+                lastScrapped = scrapped;
                 if (!scrapped?.parsed?.content) {
                     continue;
                 }
@@ -131,9 +133,12 @@ ${this.content}
 
                 return formatted;
             }
+
+            return this.formatSnapshot(lastScrapped);
         }
 
         for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
+            lastScrapped = scrapped;
             if (!scrapped?.parsed?.content) {
                 continue;
             }
@@ -143,7 +148,7 @@ ${this.content}
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
 
-        throw new Error('Unreachable');
+        return this.formatSnapshot(lastScrapped);
     }
 
 
