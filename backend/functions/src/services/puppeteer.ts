@@ -49,9 +49,9 @@ export class PuppeteerControl extends AsyncService {
             return page.browser().connected && !page.isClosed();
         }
     }, {
-        max: 1 + Math.floor(os.freemem() / 1024 * 1024 * 1024),
+        max: Math.max(1 + Math.floor(os.freemem() / 1024 * 1024 * 1024), 4),
         min: 1,
-        acquireTimeoutMillis: 15_000,
+        acquireTimeoutMillis: 60_000,
         testOnBorrow: true,
         testOnReturn: true,
     });
@@ -72,7 +72,7 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             headless: true,
-            timeout: 300_000
+            timeout: 60_000
         });
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
@@ -91,6 +91,7 @@ export class PuppeteerControl extends AsyncService {
         const preparations = [];
 
         preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
+        preparations.push(page.setBypassCSP(true));
         preparations.push(page.setViewport({ width: 1920, height: 1080 }));
         preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
             page.emit('snapshot', snapshot);

@@ -32,13 +32,21 @@ export class CrawlerHost extends RPCHost {
         const toBeTurnedToMd = snapshot.parsed?.content;
         const contentText = toBeTurnedToMd ? this.turnDownService.turndown(toBeTurnedToMd) : snapshot.text;
 
-        const formatted = `Title: ${(snapshot.parsed?.title || snapshot.title || '').trim()}
+        const formatted = {
+            title: (snapshot.parsed?.title || snapshot.title || '').trim(),
+            urlSource: snapshot.href.trim(),
+            markdownContent: contentText.trim(),
 
-URL Source: ${snapshot.href.trim()}
+            toString() {
+                return `Title: ${this.title}
+
+URL Source: ${this.urlSource}
 
 Markdown Content:
-${contentText.trim()}
+${contentText}
 `;
+            }
+        };
 
         return formatted;
     }
@@ -47,6 +55,7 @@ ${contentText.trim()}
         runtime: {
             memory: '4GiB',
             timeoutSeconds: 540,
+            concurrency: 4,
         },
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],
@@ -60,20 +69,22 @@ ${contentText.trim()}
     ) {
         const noSlashURL = ctx.req.url.slice(1);
         const urlToCrawl = new URL(normalizeUrl(noSlashURL));
+        const screenshotEnabled = Boolean(ctx.req.headers['x-screenshot']);
+        const noCache = Boolean(ctx.req.headers['x-no-cache']);
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString())) {
+                for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
                     if (!scrapped) {
                         continue;
                     }
 
                     const formatted = this.formatSnapshot(scrapped);
 
-                    if (scrapped.screenshot) {
+                    if (scrapped.screenshot && screenshotEnabled) {
                         sseStream.write({
                             event: 'screenshot',
                             data: scrapped.screenshot.toString('base64'),
@@ -99,37 +110,25 @@ ${contentText.trim()}
         }
 
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString())) {
+            for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
                 if (!scrapped?.parsed?.content) {
                     continue;
                 }
 
                 const formatted = this.formatSnapshot(scrapped);
 
-                if (scrapped.screenshot) {
-
-                    return [
-                        {
-                            type: 'image_url', image_url: {
-                                url: `data:image/jpeg;base64,${scrapped.screenshot.toString('base64')}`,
-                            }
-                        },
-                        { type: 'text', content: formatted },
-                    ];
-                }
-
                 return formatted;
             }
         }
 
-        for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString())) {
+        for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
             if (!scrapped?.parsed?.content) {
                 continue;
             }
 
             const formatted = this.formatSnapshot(scrapped);
 
-            return assignTransferProtocolMeta(formatted, { contentType: 'text/plain', envelope: null });
+            return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
 
         throw new Error('Unreachable');
