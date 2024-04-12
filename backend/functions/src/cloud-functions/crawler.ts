@@ -36,16 +36,16 @@ export class CrawlerHost extends RPCHost {
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
-            urlSource: snapshot.href.trim(),
-            markdownContent: contentText.trim(),
+            url: snapshot.href.trim(),
+            content: contentText.trim(),
 
             toString() {
                 return `Title: ${this.title}
 
-URL Source: ${this.urlSource}
+URL Source: ${this.url}
 
 Markdown Content:
-${contentText}
+${this.content}
 `;
             }
         };

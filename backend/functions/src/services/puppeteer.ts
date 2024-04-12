@@ -145,7 +145,7 @@ function giveSnapshot() {
 
     async *scrap(url: string, noCache: string | boolean = false) {
         const parsedUrl = new URL(url);
-        parsedUrl.search = '';
+        // parsedUrl.search = '';
         parsedUrl.hash = '';
         const normalizedUrl = parsedUrl.toString().toLowerCase();
         const digest = md5Hasher.hash(normalizedUrl);
@@ -191,7 +191,17 @@ function giveSnapshot() {
         page.on('snapshot', hdl);
 
         const gotoPromise = page.goto(url, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 30_000 })
-            .then(async (r) => {
+            .catch((err) => {
+                this.logger.warn(`Browsing of ${url} did not fully succeed`, { err: marshalErrorLike(err) });
+                return Promise.reject(new AssertionFailureError({
+                    message: `Failed to goto ${url}: ${err}`,
+                    cause: err,
+                }));
+            }).finally(async () => {
+                finalized = true;
+                if (!snapshot?.html) {
+                    return;
+                }
                 screenshot = await page.screenshot({
                     type: 'jpeg',
                     quality: 85,
@@ -210,16 +220,6 @@ function giveSnapshot() {
                 ).catch((err) => {
                     this.logger.warn(`Failed to save snapshot`, { err: marshalErrorLike(err) });
                 });
-
-                return r;
-            }).catch((err) => {
-                this.logger.warn(`Failed to goto ${url}`, { err: marshalErrorLike(err) });
-                return Promise.reject(new AssertionFailureError({
-                    message: `Failed to goto ${url}: ${err}`,
-                    cause: err,
-                }));
-            }).finally(() => {
-                finalized = true;
             });
 
         try {
