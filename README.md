@@ -1,6 +1,10 @@
 # Reader
 
+Your LLMs and agents deserve better input.
+
 Convert any URL to an LLM-friendly input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost. Find more at https://jina.ai/reader.
+
+![banner-reader-api.png](https://jina.ai/banner-reader-api.png)
 
 ## Usage
 
@@ -16,6 +20,7 @@ https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
 
 Use accept-header to control the streaming behavior:
 
+> Note, if you run this example below and not see streaming output but a single response, it means someone else has just run this within 5 min you and the result is cached already. Hence, the server simply returns the result instantly. Try with a different URL and you will see the streaming output.
 ```bash
 curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
