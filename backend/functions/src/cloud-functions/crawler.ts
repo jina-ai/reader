@@ -90,6 +90,10 @@ ${this.content}
 
             try {
                 for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
+                    if (!scrapped) {
+                        continue;
+                    }
+
                     const formatted = this.formatSnapshot(scrapped);
 
                     if (scrapped.screenshot && screenshotEnabled) {

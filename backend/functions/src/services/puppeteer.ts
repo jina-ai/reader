@@ -15,7 +15,7 @@ export interface PageSnapshot {
     href: string;
     html: string;
     text: string;
-    parsed: {
+    parsed?: {
         title: string;
         content: string;
         textContent: string;
@@ -78,7 +78,7 @@ export class PuppeteerControl extends AsyncService {
             timeout: 10_000
         }).catch((err) => {
             this.logger.error(`Unknown firebase issue, just die fast, quitting process.`, { err });
-            process.nextTick(()=> {
+            process.nextTick(() => {
                 process.exit(1);
             });
             return Promise.reject(err);
@@ -153,7 +153,7 @@ function giveSnapshot() {
         return page;
     }
 
-    async *scrap(url: string, noCache: string | boolean = false): AsyncGenerator<PageSnapshot> {
+    async *scrap(url: string, noCache: string | boolean = false): AsyncGenerator<PageSnapshot | undefined> {
         const parsedUrl = new URL(url);
         // parsedUrl.search = '';
         parsedUrl.hash = '';
@@ -236,7 +236,7 @@ function giveSnapshot() {
             while (true) {
                 await Promise.race([nextSnapshotDeferred.promise, gotoPromise]);
                 if (finalized) {
-                    yield { ...snapshot, screenshot };
+                    yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
                 yield snapshot;
