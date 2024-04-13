@@ -1,4 +1,4 @@
-import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, AssertionFailureError } from 'civkit';
+import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, AssertionFailureError, ParamValidationError } from 'civkit';
 import { singleton } from 'tsyringe';
 import { CloudHTTPv2, Ctx, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import _ from 'lodash';
@@ -32,11 +32,11 @@ export class CrawlerHost extends RPCHost {
         const toBeTurnedToMd = snapshot.parsed?.content;
         const turnedDown = toBeTurnedToMd ? this.turnDownService.turndown(toBeTurnedToMd).trim() : '';
 
-        const contentText = turnedDown && !(turnedDown.startsWith('<') && turnedDown.endsWith('>')) ? turnedDown : snapshot.text.trim();
+        const contentText = turnedDown && !(turnedDown.startsWith('<') && turnedDown.endsWith('>')) ? turnedDown : snapshot.text?.trim();
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
-            url: snapshot.href.trim(),
+            url: snapshot.href?.trim(),
             content: contentText.trim(),
 
             toString() {
@@ -80,7 +80,15 @@ ${this.content}
         },
     ) {
         const noSlashURL = ctx.req.url.slice(1);
-        const urlToCrawl = new URL(normalizeUrl(noSlashURL));
+        let urlToCrawl;
+        try {
+            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim()));
+        } catch (err) {
+            throw new ParamValidationError({
+                message: `${err}`,
+                path: 'url'
+            });
+        }
         const screenshotEnabled = Boolean(ctx.req.headers['x-screenshot']);
         const noCache = Boolean(ctx.req.headers['x-no-cache']);
 
@@ -125,7 +133,7 @@ ${this.content}
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
                 lastScrapped = scrapped;
-                if (!scrapped?.parsed?.content) {
+                if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                     continue;
                 }
 
@@ -143,7 +151,7 @@ ${this.content}
 
         for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
             lastScrapped = scrapped;
-            if (!scrapped?.parsed?.content) {
+            if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                 continue;
             }
 
