@@ -41,9 +41,11 @@ cd backend/functions
 npm install
 ```
 
-## About `[thinapps-shared](thinapps-shared)`
+## What is `[thinapps-shared](thinapps-shared)` submodule?
 
 You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not yet open-sourced and isn't integral to the Reader's primary functions, it helps with logging, syntax enhancements, etc. Feel free to disregard it for now.
+
+That said, this repo is *the* codebase behind `https://r.jina.ai`, so everytime we update here, will deploy the new version to the `https://r.jina.ai`.
 
 ## License
 Apache License 2.0
