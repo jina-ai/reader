@@ -153,7 +153,7 @@ function giveSnapshot() {
         return page;
     }
 
-    async *scrap(url: string, noCache: string | boolean = false) {
+    async *scrap(url: string, noCache: string | boolean = false): AsyncGenerator<PageSnapshot> {
         const parsedUrl = new URL(url);
         // parsedUrl.search = '';
         parsedUrl.hash = '';

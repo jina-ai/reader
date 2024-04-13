@@ -1,4 +1,4 @@
-import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection } from 'civkit';
+import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, AssertionFailureError } from 'civkit';
 import { singleton } from 'tsyringe';
 import { CloudHTTPv2, Ctx, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import _ from 'lodash';
@@ -90,10 +90,6 @@ ${this.content}
 
             try {
                 for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
-                    if (!scrapped) {
-                        continue;
-                    }
-
                     const formatted = this.formatSnapshot(scrapped);
 
                     if (scrapped.screenshot && screenshotEnabled) {
@@ -134,6 +130,10 @@ ${this.content}
                 return formatted;
             }
 
+            if (!lastScrapped) {
+                throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
+            }
+
             return this.formatSnapshot(lastScrapped);
         }
 
@@ -146,6 +146,10 @@ ${this.content}
             const formatted = this.formatSnapshot(scrapped);
 
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
+        }
+
+        if (!lastScrapped) {
+            throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
         }
 
         return `${this.formatSnapshot(lastScrapped)}`;
