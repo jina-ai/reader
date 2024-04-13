@@ -5,7 +5,7 @@ Your LLMs deserve better input.
 Convert any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
 
 - Live demo: https://jina.ai/reader
-- Or just visit https://r.jina.ai/https://github.com/jina-ai/reader and see yourself.
+- Or just visit this URL https://r.jina.ai/https://github.com/jina-ai/reader and see yourself.
 
 ![banner-reader-api.png](https://jina.ai/banner-reader-api.png)
 
@@ -65,12 +65,12 @@ npm install
 
 ## What is `[thinapps-shared](thinapps-shared)` submodule?
 
-You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not yet open-sourced and isn't integral to the Reader's primary functions, it helps with logging, syntax enhancements, etc. Feel free to disregard it for now.
+You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not open-sourced and isn't integral to the Reader's functions, it mainly helps with decorators, logging, secrets management, etc. Feel free to ignore it for now.
 
-That said, this repo is *the* codebase behind `https://r.jina.ai`, so everytime we update here, will deploy the new version to the `https://r.jina.ai`.
+That said, this is *the single codebase* behind `https://r.jina.ai`, so everytime we commit here, we will deploy the new version to the `https://r.jina.ai`.
 
 ## Having trouble on some websites?
 Please raise an issue with the URL you are having trouble with. We will look into it and try to fix it.
 
 ## License
-Apache License 2.0
+Reader is backed by [Jina AI](https://jina.ai) and licensed under [Apache-2.0](./LICENSE).
