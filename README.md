@@ -11,7 +11,7 @@ Convert any URL to an **LLM-friendly** input with a simple prefix `https://r.jin
 
 ## Usage
 
-### Standard
+### Standard mode
 
 To use the Reader, simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
 
