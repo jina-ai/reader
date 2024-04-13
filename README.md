@@ -4,13 +4,15 @@ Convert any URL to an LLM-friendly input with a simple prefix `https://r.jina.ai
 
 ## Usage
 
+### Standard
+
 To use the Reader, simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
 
 ```bash
 https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
 ```
 
-### Streaming
+### Streaming mode
 
 Use accept-header to control the streaming behavior:
 
@@ -18,6 +20,12 @@ Use accept-header to control the streaming behavior:
 curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
 
+### JSON mode
+
+This is still very early and the result is not really a good JSON but three simple field `url`, `title` and `content`. You can use accept-header to control the output format:
+```bash
+curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
+```
 
 ## Install
 
@@ -32,3 +40,10 @@ git clone git@github.com:jina-ai/reader.git
 cd backend/functions
 npm install
 ```
+
+## About `[thinapps-shared](thinapps-shared)`
+
+You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not yet open-sourced and isn't integral to the Reader's primary functions, it helps with logging, syntax enhancements, etc. Feel free to disregard it for now.
+
+## License
+Apache License 2.0
