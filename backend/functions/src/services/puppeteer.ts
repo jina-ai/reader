@@ -100,6 +100,7 @@ export class PuppeteerControl extends AsyncService {
         const preparations = [];
 
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
+        preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));
         preparations.push(page.setViewport({ width: 1920, height: 1080 }));
         preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
