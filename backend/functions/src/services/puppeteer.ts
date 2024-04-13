@@ -1,11 +1,13 @@
 import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
 import { container, singleton } from 'tsyringe';
-import puppeteer, { Browser } from 'puppeteer';
+import type { Browser } from 'puppeteer';
 import { Logger } from '../shared/services/logger';
 import genericPool from 'generic-pool';
 import os from 'os';
 import fs from 'fs';
 import { Crawled } from '../db/crawled';
+import puppeteer from 'puppeteer-extra';
+import puppeteerStealth from 'puppeteer-extra-plugin-stealth';
 
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -30,6 +32,12 @@ export interface PageSnapshot {
     screenshot?: Buffer;
 }
 const md5Hasher = new HashManager('md5', 'hex');
+
+puppeteer.use(puppeteerStealth());
+// const puppeteerUAOverride = require('puppeteer-extra-plugin-stealth/evasions/user-agent-override');
+// puppeteer.use(puppeteerUAOverride({
+//     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
+// }))
 
 @singleton()
 export class PuppeteerControl extends AsyncService {
@@ -77,9 +85,10 @@ export class PuppeteerControl extends AsyncService {
             headless: true,
             timeout: 10_000
         }).catch((err) => {
-            this.logger.error(`Unknown firebase issue, just die fast, quitting process.`, { err });
+            this.logger.error(`Unknown firebase issue, just die fast.`, { err });
             process.nextTick(() => {
-                process.exit(1);
+                this.emit('error', err);
+                // process.exit(1);
             });
             return Promise.reject(err);
         });
@@ -100,7 +109,7 @@ export class PuppeteerControl extends AsyncService {
         const preparations = [];
 
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
-        preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
+        // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));
         preparations.push(page.setViewport({ width: 1920, height: 1080 }));
         preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
