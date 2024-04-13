@@ -20,9 +20,23 @@ Use accept-header to control the streaming behavior:
 curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
 
+If your downstream LLM/agent system requires immediate content delivery or needs to process data in chunks to interleave the IO and LLM time, use Streaming Mode. This allows for quicker access and efficient handling of data:
+
+```text
+
+Reader API:  streamContent1 ----> streamContent2 ----> streamContent3 ---> ... 
+                          |                    |                     |
+                          v                    |                     |
+Your LLM:                 LLM(streamContent1)  |                     |
+                                               v                     |
+                                               LLM(streamContent2)   |
+                                                                     v
+                                                                     LLM(streamContent3)
+```
+
 ### JSON mode
 
-This is still very early and the result is not really a good JSON but three simple field `url`, `title` and `content`. You can use accept-header to control the output format:
+This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
 ```bash
 curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
@@ -46,6 +60,9 @@ npm install
 You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not yet open-sourced and isn't integral to the Reader's primary functions, it helps with logging, syntax enhancements, etc. Feel free to disregard it for now.
 
 That said, this repo is *the* codebase behind `https://r.jina.ai`, so everytime we update here, will deploy the new version to the `https://r.jina.ai`.
+
+## Having trouble on some websites?
+Please raise an issue with the URL you are having trouble with. We will look into it and try to fix it.
 
 ## License
 Apache License 2.0
