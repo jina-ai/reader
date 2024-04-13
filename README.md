@@ -63,7 +63,7 @@ cd backend/functions
 npm install
 ```
 
-## What is `[thinapps-shared](thinapps-shared)` submodule?
+## What is `thinapps-shared` submodule?
 
 You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not open-sourced and isn't integral to the Reader's functions, it mainly helps with decorators, logging, secrets management, etc. Feel free to ignore it for now.
 
