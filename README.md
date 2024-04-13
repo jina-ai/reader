@@ -4,7 +4,8 @@ Your LLMs deserve better input.
 
 Convert any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
 
-Find more at https://jina.ai/reader.
+- Live demo: https://jina.ai/reader
+- Or just visit https://r.jina.ai/https://github.com/jina-ai/reader and see yourself.
 
 ![banner-reader-api.png](https://jina.ai/banner-reader-api.png)
 
