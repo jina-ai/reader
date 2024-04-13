@@ -7,17 +7,15 @@ Convert any URL to an **LLM-friendly** input with a simple prefix `https://r.jin
 - Live demo: https://jina.ai/reader
 - Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://r.jina.ai/https://x.com/elonmusk and see yourself.
 
-![banner-reader-api.png](https://jina.ai/banner-reader-api.png)
+[![banner-reader-api.png](https://jina.ai/banner-reader-api.png)](https://jina.ai/reader)
 
 ## Usage
 
 ### Standard mode
 
-To use the Reader, simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
+Simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
 
-```bash
 https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
-```
 
 ### Streaming mode
 
