@@ -7,6 +7,64 @@ import TurnDownService from 'turndown';
 import { Request, Response } from 'express';
 import normalizeUrl from "@esm2cjs/normalize-url";
 
+type ImageInfo = {
+  original: string;
+  alt: string;
+  src: string;
+  isLinked: boolean;
+  linkUrl?: string;
+};
+
+async function captionImages(markdown: string): Promise<string> {
+  const imageRegex = /(!\[([^\]]*)\]\(([^)\s]+)(?:\s"[^"]*")?\))(\](?:\(([^\)]+)\)))?/g;
+  let updatedMarkdown = markdown;
+  const images: ImageInfo[] = [];
+
+  // Extracting all images and their details from the markdown
+  let match: RegExpExecArray | null;
+  while ((match = imageRegex.exec(markdown))) {
+    const isLinked = !!match[4]; // Check if image is linked
+    const imageInfo: ImageInfo = {
+      original: match[0],
+      alt: match[2],
+      src: match[3],
+      isLinked: isLinked,
+      linkUrl: isLinked ? match[5] : undefined
+    };
+    images.push(imageInfo);
+  }
+
+  // Filtering images with missing alt text
+  const imagesWithMissingAlt = images.filter(image => image.alt.trim() === '');
+
+  // Captioning images in parallel
+  const captionPromises = imagesWithMissingAlt.map(image =>
+    captionImage(image.src).then(caption => ({
+      ...image,
+      alt: caption
+    }))
+  );
+
+  const captionedImages = await Promise.all(captionPromises);
+
+  // Replacing the old markdown image syntax with new captions
+  captionedImages.forEach(image => {
+    const imageMarkdown = image.isLinked
+      ? `[![${image.alt}](${image.src})](${image.linkUrl})`
+      : `![${image.alt}](${image.src})`;
+    updatedMarkdown = updatedMarkdown.replace(image.original, imageMarkdown);
+  });
+
+  return updatedMarkdown;
+}
+
+// calling blip2 or whatever faster
+async function captionImage(url: string): Promise<string> {
+  // TODO: This function should return a caption for the given URL
+  // @yanlong
+  return Promise.resolve(`Caption for ${url}`);
+}
+
 function tidyMarkdown(markdown: string): string {
 
     // Step 1: Handle complex broken links with text and optional images spread across multiple lines
@@ -74,10 +132,12 @@ export class CrawlerHost extends RPCHost {
 
         const cleanText = tidyMarkdown(contentText).trim();
 
+        const captionedText = captionImages(cleanText);
+
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
             url: snapshot.href?.trim(),
-            content: cleanText,
+            content: captionedText,
 
             toString() {
                 return `Title: ${this.title}
