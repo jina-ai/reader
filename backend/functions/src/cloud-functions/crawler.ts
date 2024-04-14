@@ -8,6 +8,7 @@ import { Request, Response } from 'express';
 import normalizeUrl from "@esm2cjs/normalize-url";
 
 function tidyMarkdown(markdown: string): string {
+
     // Step 1: Handle complex broken links with text and optional images spread across multiple lines
     let normalizedMarkdown = markdown.replace(/\[\s*([^]+?)\s*\]\s*\(\s*([^)]+)\s*\)/g, (match, text, url) => {
         // Remove internal new lines and excessive spaces within the text
@@ -39,7 +40,10 @@ function tidyMarkdown(markdown: string): string {
     // Step 3: Replace more than two consecutive empty lines with exactly two empty lines
     normalizedMarkdown = normalizedMarkdown.replace(/\n{3,}/g, '\n\n');
 
-    return normalizedMarkdown;
+    // Step 4: Remove leading spaces from each line
+    normalizedMarkdown = normalizedMarkdown.replace(/^[ \t]+/gm, '');
+
+    return normalizedMarkdown.trim();
 }
 
 @singleton()
