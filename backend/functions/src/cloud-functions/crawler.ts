@@ -32,7 +32,13 @@ export class CrawlerHost extends RPCHost {
         const toBeTurnedToMd = snapshot.parsed?.content;
         const turnedDown = toBeTurnedToMd ? this.turnDownService.turndown(toBeTurnedToMd).trim() : '';
 
-        const contentText = turnedDown && !(turnedDown.startsWith('<') && turnedDown.endsWith('>')) ? turnedDown : snapshot.text?.trim();
+        let contentText = turnedDown;
+        if (contentText.startsWith('<') && contentText.endsWith('>')) {
+            contentText = this.turnDownService.turndown(snapshot.html);
+        }
+        if (contentText.startsWith('<') || contentText.endsWith('>')) {
+            contentText = snapshot.text;
+        }
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),

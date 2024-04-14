@@ -7,8 +7,6 @@ import os from 'os';
 import fs from 'fs';
 import { Crawled } from '../db/crawled';
 import puppeteer from 'puppeteer-extra';
-import puppeteerStealth from 'puppeteer-extra-plugin-stealth';
-
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
@@ -33,10 +31,12 @@ export interface PageSnapshot {
 }
 const md5Hasher = new HashManager('md5', 'hex');
 
+const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(puppeteerStealth());
 // const puppeteerUAOverride = require('puppeteer-extra-plugin-stealth/evasions/user-agent-override');
 // puppeteer.use(puppeteerUAOverride({
-//     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
+//     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
+//     platform: `Linux`,
 // }))
 
 @singleton()
