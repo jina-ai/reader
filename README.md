@@ -40,6 +40,8 @@ Your LLM:                 LLM(streamContent1)  |                     |
                                                                      LLM(streamContent3)
 ```
 
+Stream mode is also useful when the target page is large to render. If you find standard mode gives you incomplete content, try streaming mode. 
+
 ### JSON mode
 
 This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
