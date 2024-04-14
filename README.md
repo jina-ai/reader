@@ -1,112 +1,74 @@
-# reader
+# Reader
 
-## Development Guide
+Your LLMs deserve better input.
 
-### Prerequisite
-- Node v18 (The build fails for Node version >18)
-- Yarn
-- Firebase CLI (`npm install -g firebase-tools`)
+Convert any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
 
-### Installation
+- Live demo: https://jina.ai/reader
+- Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://r.jina.ai/https://x.com/elonmusk and see yourself.
 
-Clone the scenex repo by running the command:
+[![banner-reader-api.png](https://jina.ai/banner-reader-api.png)](https://jina.ai/reader)
 
+## Usage
+
+### Standard mode
+
+Simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
+
+https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
+
+### Streaming mode
+
+Use accept-header to control the streaming behavior:
+
+> Note, if you run this example below and not see streaming output but a single response, it means someone else has just run this within 5 min you and the result is cached already. Hence, the server simply returns the result instantly. Try with a different URL and you will see the streaming output.
 ```bash
-git clone git@github.com:jina-ai/reader.git
-git submodule init
-git submodule update
+curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
 
-After a successful clone, install the packages for backend and the webapp.
+If your downstream LLM/agent system requires immediate content delivery or needs to process data in chunks to interleave the IO and LLM time, use Streaming Mode. This allows for quicker access and efficient handling of data:
+
+```text
+
+Reader API:  streamContent1 ----> streamContent2 ----> streamContent3 ---> ... 
+                          |                    |                     |
+                          v                    |                     |
+Your LLM:                 LLM(streamContent1)  |                     |
+                                               v                     |
+                                               LLM(streamContent2)   |
+                                                                     v
+                                                                     LLM(streamContent3)
+```
+
+### JSON mode
+
+This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
+```bash
+curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
+```
+
+## Install
+
+You will need the following tools to run the project:
+- Node v18 (The build fails for Node version >18)
+- Firebase CLI (`npm install -g firebase-tools`)
 
 For backend, go to the `backend/functions` directory and install the npm dependencies.
 
 ```bash
+git clone git@github.com:jina-ai/reader.git
 cd backend/functions
 npm install
 ```
 
-For the frontend (webapp), go to the `webapp` directory and install the yarn dependencies.
+## What is `thinapps-shared` submodule?
 
-```bash
-cd webapp
-yarn
-```
+You might notice a reference to `thinapps-shared` submodule, an internal package we use to share code across our products. While it’s not open-sourced and isn't integral to the Reader's functions, it mainly helps with decorators, logging, secrets management, etc. Feel free to ignore it for now.
 
-### Configure
+That said, this is *the single codebase* behind `https://r.jina.ai`, so everytime we commit here, we will deploy the new version to the `https://r.jina.ai`.
 
-**Establish localhost connection:**
+## Having trouble on some websites?
+Please raise an issue with the URL you are having trouble with. We will look into it and try to fix it.
 
-Once the packages are installed, go to the `App.vue` file inside the `webapp/src/` and uncomment the below code:
-
-```js
-connectFunctionsEmulator(functions, 'localhost', 5001);
-```
-
-### Run The Application Now
-
-To run the backend server, inside the `backend/functions` dir run the below command:
-
-```bash
-npm run serve
-```
-
-To run the frontend app, inside the `webapp` dir run the below command:
-
-```bash
-yarn dev
-```
-
-### Known Errors
-
-1. If you encounter 'npm ERR! /bin/sh: pkg-config: command not found' error in Mac, run the command `brew install pkg-config cairo libpng jpeg giflib pango librsvg`
-
-## Best practices
-
-### Directory structure
-
-There are three folders:
-1. `webapp` is the frontend project of `SceneX`, knowledge requirements:
-- Vue 3
-- Quasar
-- ...
-
-2. `backend` contains source code of backend logic, knowledge requirements:
-- Nodejs
-- Firebase
-- ...
-
-3. `scripts` folder includes custom scripts we might need during the development or for production, currently we have the following scripts:
-- `translate` is responsible for translating and updating our i18n language files in frontend project.
-
-### Best practices of frontend
-1. **Quasar docs** is your `best friend`. Since the frontend project highly depends on framework `Quasar`. It is recommended to use the predefined classes and components and avoid defining your custom classes
-2. **Double check** of the UI output in `Dark mode` and `Light mode`. Again, use predefined classes and props.
-3. **Plugins in boot** folder: create corresponding file in `boot` folder and use them in `quasar.config.js`:
-```js
-module.exports = configure(function() {
-  return {
-    ...
-    boot: [
-      'i18n',
-      'axios',
-      'firebase',
-      'addressbar-color',
-      'quasar-lang-pack'
-    ],
-    ...
-  }
-})
-
-```
-
-### Best practices of backend
-1. **Remember to deploy your functions** by running:
-```bash
-# deploy all functions
-firebase deploy --only functions
-
-# deploy a specific function
-firebase deploy --only functions:{function name}
-
-```
+## License
+Reader is backed by [Jina AI](https://jina.ai) and licensed under [Apache-2.0](./LICENSE).
