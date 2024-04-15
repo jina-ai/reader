@@ -2,7 +2,7 @@
 
 Your LLMs deserve better input.
 
-Convert any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
+Reader converts any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
 
 - Live demo: https://jina.ai/reader
 - Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://r.jina.ai/https://x.com/elonmusk and see yourself.
@@ -39,6 +39,8 @@ Your LLM:                 LLM(streamContent1)  |                     |
                                                                      v
                                                                      LLM(streamContent3)
 ```
+
+Stream mode is also useful when the target page is large to render. If you find standard mode gives you incomplete content, try streaming mode. 
 
 ### JSON mode
 
