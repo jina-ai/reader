@@ -3,9 +3,10 @@ import { singleton } from 'tsyringe';
 import { CloudHTTPv2, Ctx, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl } from '../services/puppeteer';
-import TurnDownService from 'turndown';
 import { Request, Response } from 'express';
 import normalizeUrl from "@esm2cjs/normalize-url";
+import { AltTextService } from '../services/alt-text';
+import TurndownService from 'turndown';
 
 function tidyMarkdown(markdown: string): string {
 
@@ -50,11 +51,14 @@ function tidyMarkdown(markdown: string): string {
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    turnDownService = new TurnDownService().use(require('turndown-plugin-gfm').gfm);
+    turnDownPlugins = [require('turndown-plugin-gfm').gfm];
+
+    imageShortUrlPrefix?: string;
 
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
+        protected altTextService: AltTextService,
     ) {
         super(...arguments);
     }
@@ -65,20 +69,55 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    formatSnapshot(snapshot: PageSnapshot) {
-
+    async formatSnapshot(snapshot: PageSnapshot) {
         const toBeTurnedToMd = snapshot.parsed?.content;
-        const turnedDown = toBeTurnedToMd ? this.turnDownService.turndown(toBeTurnedToMd).trim() : '';
-
-        let contentText = turnedDown;
-        if (contentText.startsWith('<') && contentText.endsWith('>')) {
-            contentText = this.turnDownService.turndown(snapshot.html);
+        let turnDownService = new TurndownService();
+        for (const plugin of this.turnDownPlugins) {
+            turnDownService = turnDownService.use(plugin);
         }
-        if (contentText.startsWith('<') || contentText.endsWith('>')) {
+
+        let contentText = '';
+        if (toBeTurnedToMd) {
+            const urlToAltMap: { [k: string]: { shortDigest: string, alt?: string; }; } = {};
+            const tasks = (snapshot.imgs || []).map(async (x) => {
+                const r = await this.altTextService.getAltTextAndShortDigest(x).catch((err)=> {
+                    this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
+                    return undefined;
+                });
+                if (r) {
+                    urlToAltMap[x.src.trim()] = r;
+                }
+            });
+
+            await Promise.all(tasks);
+
+            turnDownService.addRule('img-generated-alt', {
+                filter: 'img',
+                replacement: (_content, node) => {
+                    const src = (node.getAttribute('src') || '').trim();
+                    const alt = cleanAttribute(node.getAttribute('alt'));
+                    if (!src) {
+                        return '';
+                    }
+                    const mapped = urlToAltMap[src];
+                    if (mapped) {
+                        return `![${mapped.alt || alt}](${this.imageShortUrlPrefix ? `${this.imageShortUrlPrefix}/${mapped.shortDigest}` : src})`;
+                    }
+                    return `![${alt}](${src})`;
+                }
+            });
+
+            contentText = turnDownService.turndown(toBeTurnedToMd).trim();
+        }
+
+        if (contentText.startsWith('<') && contentText.endsWith('>')) {
+            contentText = turnDownService.turndown(snapshot.html);
+        }
+        if (!contentText || contentText.startsWith('<') || contentText.endsWith('>')) {
             contentText = snapshot.text;
         }
 
-        const cleanText = tidyMarkdown(contentText).trim();
+        const cleanText = tidyMarkdown(contentText || '').trim();
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
@@ -148,7 +187,7 @@ ${this.content}
                         continue;
                     }
 
-                    const formatted = this.formatSnapshot(scrapped);
+                    const formatted = await this.formatSnapshot(scrapped);
 
                     if (scrapped.screenshot && screenshotEnabled) {
                         sseStream.write({
@@ -183,7 +222,7 @@ ${this.content}
                     continue;
                 }
 
-                const formatted = this.formatSnapshot(scrapped);
+                const formatted = await this.formatSnapshot(scrapped);
 
                 return formatted;
             }
@@ -192,7 +231,7 @@ ${this.content}
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            return this.formatSnapshot(lastScrapped);
+            return await this.formatSnapshot(lastScrapped);
         }
 
         for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
@@ -201,7 +240,7 @@ ${this.content}
                 continue;
             }
 
-            const formatted = this.formatSnapshot(scrapped);
+            const formatted = await this.formatSnapshot(scrapped);
 
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
@@ -210,8 +249,12 @@ ${this.content}
             throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
         }
 
-        return `${this.formatSnapshot(lastScrapped)}`;
+        return `${await this.formatSnapshot(lastScrapped)}`;
     }
 
 
+}
+
+function cleanAttribute(attribute: string) {
+    return attribute ? attribute.replace(/(\n+\s*)+/g, '\n') : '';
 }

@@ -10,6 +10,16 @@ import puppeteer from 'puppeteer-extra';
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
+export interface ImgBrief {
+    src: string;
+    loaded: boolean;
+    width: number;
+    height: number;
+    naturalWidth: number;
+    naturalHeight: number;
+    alt?: string;
+}
+
 export interface PageSnapshot {
     title: string;
     href: string;
@@ -28,6 +38,7 @@ export interface PageSnapshot {
         publishedTime: string;
     } | null;
     screenshot?: Buffer;
+    imgs?: ImgBrief[];
 }
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -82,7 +93,7 @@ export class PuppeteerControl extends AsyncService {
             }
         }
         this.browser = await puppeteer.launch({
-            headless: true,
+            headless: false,
             timeout: 10_000
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
@@ -117,14 +128,36 @@ export class PuppeteerControl extends AsyncService {
         }));
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
         preparations.push(page.evaluateOnNewDocument(`
+function briefImgs(elem) {
+    const imageTags = Array.from((elem || document).querySelectorAll('img[src]'));
+
+    return imageTags.map((x)=> ({
+        src: x.src,
+        loaded: x.complete,
+        width: x.width,
+        height: x.height,
+        naturalWidth: x.naturalWidth,
+        naturalHeight: x.naturalHeight,
+        alt: x.alt || x.title,
+    }));
+}
 function giveSnapshot() {
-    return {
+    const parsed = new Readability(document.cloneNode(true)).parse();
+    const r = {
         title: document.title,
         href: document.location.href,
         html: document.documentElement.outerHTML,
         text: document.body.innerText,
-        parsed: new Readability(document.cloneNode(true)).parse(),
+        parsed: parsed,
+        imgs: [],
     };
+    if (parsed && parsed.content) {
+        const elem = document.createElement('div');
+        elem.innerHTML = parsed.content;
+        r.imgs = briefImgs(elem);
+    }
+
+    return r;
 }
 `));
         preparations.push(page.evaluateOnNewDocument(() => {
