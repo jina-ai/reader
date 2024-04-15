@@ -38,10 +38,10 @@ async function captionImages(markdown: string): Promise<string> {
   const imagesWithMissingAlt = images.filter(image => image.alt.trim() === '');
 
   // Captioning images in parallel
-  const captionPromises = imagesWithMissingAlt.map(image =>
+  const captionPromises = imagesWithMissingAlt.map((image, index) =>
     captionImage(image.src).then(caption => ({
       ...image,
-      alt: caption
+      alt: `Image ${index + 1}: ${caption}`
     }))
   );
 
