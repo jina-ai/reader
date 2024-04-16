@@ -110,10 +110,10 @@ export class CrawlerHost extends RPCHost {
             contentText = turnDownService.turndown(toBeTurnedToMd).trim();
         }
 
-        if (contentText.startsWith('<') && contentText.endsWith('>')) {
+        if (!contentText || (contentText.startsWith('<') && contentText.endsWith('>'))) {
             contentText = turnDownService.turndown(snapshot.html);
         }
-        if (!contentText || contentText.startsWith('<') || contentText.endsWith('>')) {
+        if (!contentText || (contentText.startsWith('<') && contentText.endsWith('>'))) {
             contentText = snapshot.text;
         }
 
