@@ -11,6 +11,11 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 
 [![banner-reader-api.png](https://jina.ai/banner-reader-api.png)](https://jina.ai/reader)
 
+
+## Updates
+
+- **2024-04-15**: Reader now supports image reading! It captions all images at the specified URL and adds `Image [idx]: [caption]` as an alt tag (if they initially lack one). This enables downstream LLMs to interact with the images in reasoning, summarizing etc. [See example here](https://x.com/JinaAI_/status/1780094402071023926).
+
 ## Usage
 
 ### Standard mode
