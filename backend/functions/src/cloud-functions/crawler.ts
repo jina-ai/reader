@@ -53,8 +53,6 @@ export class CrawlerHost extends RPCHost {
 
     turnDownPlugins = [require('turndown-plugin-gfm').gfm];
 
-    imageShortUrlPrefix?: string;
-
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
@@ -78,13 +76,13 @@ export class CrawlerHost extends RPCHost {
 
         let contentText = '';
         if (toBeTurnedToMd) {
-            const urlToAltMap: { [k: string]: { shortDigest: string, alt?: string; }; } = {};
+            const urlToAltMap: { [k: string]: string | undefined; } = {};
             const tasks = (snapshot.imgs || []).map(async (x) => {
-                const r = await this.altTextService.getAltTextAndShortDigest(x).catch((err)=> {
+                const r = await this.altTextService.getAltText(x).catch((err: any) => {
                     this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
                     return undefined;
                 });
-                if (r) {
+                if (r && x.src) {
                     urlToAltMap[x.src.trim()] = r;
                 }
             });
@@ -103,7 +101,7 @@ export class CrawlerHost extends RPCHost {
                     const mapped = urlToAltMap[src];
                     imgIdx++;
                     if (mapped) {
-                        return `![Image ${imgIdx}: ${mapped.alt || alt}](${this.imageShortUrlPrefix ? `${this.imageShortUrlPrefix}/${mapped.shortDigest}` : src})`;
+                        return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
                     }
                     return `![Image ${imgIdx}: ${alt}](${src})`;
                 }
@@ -115,7 +113,7 @@ export class CrawlerHost extends RPCHost {
         if (!contentText || (contentText.startsWith('<') && contentText.endsWith('>'))) {
             contentText = turnDownService.turndown(snapshot.html);
         }
-        if (!contentText || (contentText.startsWith('<') && contentText.endsWith('>'))) {
+        if (!contentText || (contentText.startsWith('<') || contentText.endsWith('>'))) {
             contentText = snapshot.text;
         }
 
