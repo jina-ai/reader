@@ -7,6 +7,8 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 - Live demo: https://jina.ai/reader
 - Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://r.jina.ai/https://x.com/elonmusk and see yourself.
 
+> Feel free to use https://r.jina.ai/* in production. It is free, stable and scalable. We are maintaining it actively as one of the core products of Jina AI.
+
 [![banner-reader-api.png](https://jina.ai/banner-reader-api.png)](https://jina.ai/reader)
 
 ## Usage
