@@ -35,7 +35,7 @@ export class AltTextService extends AsyncService {
 
             const r = await this.imageInterrogator.interrogate('blip2', {
                 image: exported,
-                // prompt: `A formal caption of this image in one sentence such that it could be used as alt text of this image in the HTML <img> tag. Return "**NSFW**" if you don't feel comfortable captioning it. Be concise and in the third person.`
+                // prompt: `A formal caption in one sentence, concise and in the third person: HTML <img> alt text of this image. Return "**NSFW**" if you don't feel comfortable captioning it.`
             });
 
             return r.replaceAll(/[\n\"]|(\.\s*$)/g, '').trim();
