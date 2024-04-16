@@ -1,6 +1,6 @@
 import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
 import { container, singleton } from 'tsyringe';
-import type { Browser } from 'puppeteer';
+import type { Browser, Page } from 'puppeteer';
 import { Logger } from '../shared/services/logger';
 import genericPool from 'generic-pool';
 import os from 'os';
@@ -93,7 +93,6 @@ export class PuppeteerControl extends AsyncService {
             }
         }
         this.browser = await puppeteer.launch({
-            headless: true,
             timeout: 10_000
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
@@ -266,6 +265,16 @@ function giveSnapshot() {
                     quality: 85,
                 });
                 snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                if (!snapshot.parsed?.content) {
+                    const salvaged = await this.salvage(url, page);
+                    if (salvaged) {
+                        screenshot = await page.screenshot({
+                            type: 'jpeg',
+                            quality: 85,
+                        });
+                        snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                    }
+                }
                 this.logger.info(`Snapshot of ${url} done`, { url, digest, title: snapshot?.title, href: snapshot?.href });
                 const nowDate = new Date();
                 Crawled.save(
@@ -298,6 +307,27 @@ function giveSnapshot() {
                 });
             });
         }
+    }
+
+    async salvage(url: string, page: Page) {
+        this.logger.info(`Salvaging ${url}`);
+        const googleArchiveUrl = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(url)}`;
+        const resp = await fetch(googleArchiveUrl, {
+            headers: {
+                'User-Agent': `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
+            }
+        });
+        resp.body?.cancel().catch(() => void 0);
+        if (!resp.ok) {
+            this.logger.warn(`No salvation found for url: ${url}`, { status: resp.status, url });
+            return null;
+        }
+
+        await page.goto(googleArchiveUrl, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 15_000 }).catch((err) => {
+            this.logger.warn(`Page salvation did not fully succeed.`, { err: marshalErrorLike(err) });
+        });
+
+        return true;
     }
 }
 
