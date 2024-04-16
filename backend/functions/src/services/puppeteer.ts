@@ -7,10 +7,18 @@ import os from 'os';
 import fs from 'fs';
 import { Crawled } from '../db/crawled';
 import puppeteer from 'puppeteer-extra';
-import puppeteerStealth from 'puppeteer-extra-plugin-stealth';
-
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
+
+export interface ImgBrief {
+    src: string;
+    loaded: boolean;
+    width: number;
+    height: number;
+    naturalWidth: number;
+    naturalHeight: number;
+    alt?: string;
+}
 
 export interface PageSnapshot {
     title: string;
@@ -30,13 +38,16 @@ export interface PageSnapshot {
         publishedTime: string;
     } | null;
     screenshot?: Buffer;
+    imgs?: ImgBrief[];
 }
 const md5Hasher = new HashManager('md5', 'hex');
 
+const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(puppeteerStealth());
 // const puppeteerUAOverride = require('puppeteer-extra-plugin-stealth/evasions/user-agent-override');
 // puppeteer.use(puppeteerUAOverride({
-//     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
+//     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
+//     platform: `Linux`,
 // }))
 
 @singleton()
@@ -84,7 +95,7 @@ export class PuppeteerControl extends AsyncService {
         this.browser = await puppeteer.launch({
             headless: true,
             timeout: 10_000
-        }).catch((err) => {
+        }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
             process.nextTick(() => {
                 this.emit('error', err);
@@ -117,14 +128,42 @@ export class PuppeteerControl extends AsyncService {
         }));
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
         preparations.push(page.evaluateOnNewDocument(`
+function briefImgs(elem) {
+    const imageTags = Array.from((elem || document).querySelectorAll('img[src]'));
+
+    return imageTags.map((x)=> ({
+        src: x.src,
+        loaded: x.complete,
+        width: x.width,
+        height: x.height,
+        naturalWidth: x.naturalWidth,
+        naturalHeight: x.naturalHeight,
+        alt: x.alt || x.title,
+    }));
+}
 function giveSnapshot() {
-    return {
+    let parsed;
+    try {
+        parsed = new Readability(document.cloneNode(true)).parse();
+    } catch (err) {
+        void 0;
+    }
+
+    const r = {
         title: document.title,
         href: document.location.href,
         html: document.documentElement.outerHTML,
         text: document.body.innerText,
-        parsed: new Readability(document.cloneNode(true)).parse(),
+        parsed: parsed,
+        imgs: [],
     };
+    if (parsed && parsed.content) {
+        const elem = document.createElement('div');
+        elem.innerHTML = parsed.content;
+        r.imgs = briefImgs(elem);
+    }
+
+    return r;
 }
 `));
         preparations.push(page.evaluateOnNewDocument(() => {
