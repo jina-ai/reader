@@ -118,12 +118,21 @@ export class PuppeteerControl extends AsyncService {
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
         preparations.push(page.evaluateOnNewDocument(`
 function giveSnapshot() {
+    let parsedContent;
+    try {
+        // Attempt to parse the cloned document
+        parsedContent = new Readability(document.cloneNode(true)).parse();
+    } catch (error) {
+        // If an error occurs, log it and set parsedContent to undefined
+        parsedContent = undefined;
+    }
+
     return {
         title: document.title,
         href: document.location.href,
         html: document.documentElement.outerHTML,
         text: document.body.innerText,
-        parsed: new Readability(document.cloneNode(true)).parse(),
+        parsed: parsedContent
     };
 }
 `));
