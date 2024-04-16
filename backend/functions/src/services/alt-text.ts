@@ -33,12 +33,12 @@ export class AltTextService extends AsyncService {
             const resized = this.canvasService.fitImageToSquareBox(img, 1024);
             const exported = await this.canvasService.canvasToBuffer(resized, 'image/png');
 
-            const r = await this.imageInterrogator.interrogate('gpt-4-turbo-2024-04-09', {
+            const r = await this.imageInterrogator.interrogate('blip2', {
                 image: exported,
-                prompt: `A formal caption of this image in one sentence such that it could be used as alt text of this image in the HTML <img> tag. Return "**NSFW**" if you don't feel comfortable captioning it. Be concise and in the third person.`
+                // prompt: `A formal caption of this image in one sentence such that it could be used as alt text of this image in the HTML <img> tag. Return "**NSFW**" if you don't feel comfortable captioning it. Be concise and in the third person.`
             });
 
-            return r.replaceAll(/[\n\"]/g, '').trim().replace(/.$/, '');
+            return r.replaceAll(/[\n\"]|(\.\s*$)/g, '').trim();
         } catch (err) {
             throw new AssertionFailureError({ message: `Could not generate alt text for url ${url}`, cause: err });
         }

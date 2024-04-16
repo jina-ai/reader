@@ -93,7 +93,7 @@ export class PuppeteerControl extends AsyncService {
             }
         }
         this.browser = await puppeteer.launch({
-            headless: false,
+            headless: true,
             timeout: 10_000
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
@@ -142,7 +142,13 @@ function briefImgs(elem) {
     }));
 }
 function giveSnapshot() {
-    const parsed = new Readability(document.cloneNode(true)).parse();
+    let parsed;
+    try {
+        parsed = new Readability(document.cloneNode(true)).parse();
+    } catch (err) {
+        void 0;
+    }
+
     const r = {
         title: document.title,
         href: document.location.href,
