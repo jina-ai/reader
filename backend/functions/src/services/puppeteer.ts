@@ -265,7 +265,7 @@ function giveSnapshot() {
                     quality: 85,
                 });
                 snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
-                if (!snapshot.parsed?.content) {
+                if (!snapshot.title || !snapshot.parsed?.content) {
                     const salvaged = await this.salvage(url, page);
                     if (salvaged) {
                         screenshot = await page.screenshot({
