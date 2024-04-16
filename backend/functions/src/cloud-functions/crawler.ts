@@ -177,12 +177,10 @@ export class CrawlerHost extends RPCHost {
 
         const cleanText = tidyMarkdown(contentText || '').trim();
 
-        const captionedText = captionImages(cleanText);
-
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
             url: snapshot.href?.trim(),
-            content: captionedText,
+            content: cleanText,
 
             toString() {
                 return `Title: ${this.title}
