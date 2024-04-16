@@ -90,6 +90,7 @@ export class CrawlerHost extends RPCHost {
             });
 
             await Promise.all(tasks);
+            let imgIdx = 0;
 
             turnDownService.addRule('img-generated-alt', {
                 filter: 'img',
@@ -100,10 +101,11 @@ export class CrawlerHost extends RPCHost {
                         return '';
                     }
                     const mapped = urlToAltMap[src];
+                    imgIdx++;
                     if (mapped) {
-                        return `![${mapped.alt || alt}](${this.imageShortUrlPrefix ? `${this.imageShortUrlPrefix}/${mapped.shortDigest}` : src})`;
+                        return `![Image ${imgIdx}: ${mapped.alt || alt}](${this.imageShortUrlPrefix ? `${this.imageShortUrlPrefix}/${mapped.shortDigest}` : src})`;
                     }
-                    return `![${alt}](${src})`;
+                    return `![Image ${imgIdx}: ${alt}](${src})`;
                 }
             });
 
