@@ -44,31 +44,32 @@ export class AltTextService extends AsyncService {
         }
     }
 
-    async getAltTextAndShortDigest(imgBrief: ImgBrief) {
+    async getAltText(imgBrief: ImgBrief) {
         if (!imgBrief.src) {
             return undefined;
+        }
+        if (imgBrief.alt) {
+            return imgBrief.alt;
         }
         const digest = md5Hasher.hash(imgBrief.src);
         const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
 
         const existing = await ImgAlt.fromFirestore(shortDigest);
 
-        if (existing?.generatedAlt) {
-            return {
-                shortDigest,
-                alt: existing.generatedAlt,
-            };
+        if (existing) {
+            return existing.generatedAlt || existing.originalAlt || '';
         }
 
-        let generatedCaption;
+        let generatedCaption = '';
 
-        if (!imgBrief.alt) {
-            try {
-                generatedCaption = await this.caption(imgBrief.src);
-            } catch (err) {
-                this.logger.warn(`Unable to generate alt text for ${imgBrief.src}`, { err });
-            }
+        try {
+            generatedCaption = await this.caption(imgBrief.src);
+        } catch (err) {
+            this.logger.warn(`Unable to generate alt text for ${imgBrief.src}`, { err });
         }
+
+        // Don't try again until the next day
+        const expireMixin = generatedCaption ? {} : { expireAt: new Date(Date.now() + 1000 * 3600 * 24) };
 
         await ImgAlt.COLLECTION.doc(shortDigest).set(
             {
@@ -79,13 +80,11 @@ export class AltTextService extends AsyncService {
                 urlDigest: digest,
                 originalAlt: imgBrief.alt || '',
                 generatedAlt: generatedCaption || '',
-                createdAt: new Date()
+                createdAt: new Date(),
+                ...expireMixin
             }, { merge: true }
         );
 
-        return {
-            shortDigest,
-            alt: generatedCaption,
-        };
+        return generatedCaption;
     }
 }
