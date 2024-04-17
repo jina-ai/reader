@@ -168,7 +168,7 @@ ${this.content}
         const noSlashURL = ctx.req.url.slice(1);
         let urlToCrawl;
         try {
-            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim()));
+            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { removeTrailingSlash: false, removeSingleSlash: false }));
         } catch (err) {
             throw new ParamValidationError({
                 message: `${err}`,
