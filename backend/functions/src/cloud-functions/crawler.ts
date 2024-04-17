@@ -67,7 +67,7 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    async formatSnapshot(snapshot: PageSnapshot) {
+    async formatSnapshot(snapshot: PageSnapshot, nominalUrl?: string) {
         const toBeTurnedToMd = snapshot.parsed?.content;
         let turnDownService = new TurndownService();
         for (const plugin of this.turnDownPlugins) {
@@ -121,7 +121,7 @@ export class CrawlerHost extends RPCHost {
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
-            url: snapshot.href?.trim(),
+            url: nominalUrl || snapshot.href?.trim(),
             content: cleanText,
 
             toString() {
@@ -188,7 +188,7 @@ ${this.content}
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(scrapped);
+                    const formatted = await this.formatSnapshot(scrapped, urlToCrawl?.toString());
 
                     if (scrapped.screenshot && screenshotEnabled) {
                         sseStream.write({
@@ -223,7 +223,7 @@ ${this.content}
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(scrapped);
+                const formatted = await this.formatSnapshot(scrapped, urlToCrawl?.toString());
 
                 return formatted;
             }
@@ -232,7 +232,7 @@ ${this.content}
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            return await this.formatSnapshot(lastScrapped);
+            return await this.formatSnapshot(lastScrapped, urlToCrawl?.toString());
         }
 
         for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
@@ -241,7 +241,7 @@ ${this.content}
                 continue;
             }
 
-            const formatted = await this.formatSnapshot(scrapped);
+            const formatted = await this.formatSnapshot(scrapped, urlToCrawl?.toString());
 
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
@@ -250,7 +250,7 @@ ${this.content}
             throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
         }
 
-        return `${await this.formatSnapshot(lastScrapped)}`;
+        return `${await this.formatSnapshot(lastScrapped, urlToCrawl?.toString())}`;
     }
 
 
