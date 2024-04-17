@@ -123,12 +123,18 @@ export class CrawlerHost extends RPCHost {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
             url: nominalUrl || snapshot.href?.trim(),
             content: cleanText,
+            publishedTime: snapshot.parsed?.publishedTime || undefined,
 
             toString() {
+                const mixins = [];
+                if (this.publishedTime) {
+                    mixins.push(`Published Time: ${this.publishedTime}`);
+                }
+
                 return `Title: ${this.title}
 
 URL Source: ${this.url}
-
+${mixins.length ? `\n${mixins.join('\n\n')}\n` : ''}
 Markdown Content:
 ${this.content}
 `;

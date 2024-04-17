@@ -20,23 +20,25 @@ export interface ImgBrief {
     alt?: string;
 }
 
+export interface ReadabilityParsed {
+    title: string;
+    content: string;
+    textContent: string;
+    length: number;
+    excerpt: string;
+    byline: string;
+    dir: string;
+    siteName: string;
+    lang: string;
+    publishedTime: string;
+}
+
 export interface PageSnapshot {
     title: string;
     href: string;
     html: string;
     text: string;
-    parsed?: {
-        title: string;
-        content: string;
-        textContent: string;
-        length: number;
-        excerpt: string;
-        byline: string;
-        dir: string;
-        siteName: string;
-        lang: string;
-        publishedTime: string;
-    } | null;
+    parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
     imgs?: ImgBrief[];
 }
@@ -121,7 +123,7 @@ export class PuppeteerControl extends AsyncService {
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));
-        preparations.push(page.setViewport({ width: 1920, height: 1080 }));
+        preparations.push(page.setViewport({ width: 1024, height: 1024 }));
         preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
             page.emit('snapshot', snapshot);
         }));
@@ -262,7 +264,7 @@ function giveSnapshot() {
                 }
                 screenshot = await page.screenshot({
                     type: 'jpeg',
-                    quality: 85,
+                    quality: 75,
                 });
                 snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
                 if (!snapshot.title || !snapshot.parsed?.content) {
@@ -270,7 +272,7 @@ function giveSnapshot() {
                     if (salvaged) {
                         screenshot = await page.screenshot({
                             type: 'jpeg',
-                            quality: 85,
+                            quality: 75,
                         });
                         snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
                     }
