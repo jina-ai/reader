@@ -153,6 +153,7 @@ ${this.content}
             memory: '8GiB',
             timeoutSeconds: 540,
             concurrency: 16,
+            maxInstances: 625,
         },
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],
