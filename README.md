@@ -26,17 +26,15 @@ https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
 
 ### Streaming Mode
 
-Streaming mode is useful when you find that the standard mode provides an incomplete result. This is because streaming mode will wait a bit longer until the page is fully rendered.
-
-Use the accept-header to control the streaming behavior:
+Streaming mode is useful when you find that the standard mode provides an incomplete result. This is because streaming mode will wait a bit longer until the page is fully rendered. Use the accept-header to toggle the streaming mode:
 
 ```bash
 curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
 
-The data comes in a stream; each subsequent chunk contains more complete information. The last chunk should provide the most complete and final result.
+The data comes in a stream; each subsequent chunk contains more complete information. **The last chunk should provide the most complete and final result.**
 
-For example, compare these two curl commands below:
+For example, compare these two curl commands below. You can see streaming one gives you complete information at last, whereas standard mode does not. This is because the content loading on this particular site is triggered by some js *after* the page is fully loaded, and standard mode returns the page "too soon".
 ```bash
 curl -H 'x-no-cache: true' https://access.redhat.com/security/cve/CVE-2023-45853
 curl -H "Accept: text/event-stream" -H 'x-no-cache: true' https://r.jina.ai/https://access.redhat.com/security/cve/CVE-2023-45853
@@ -57,7 +55,7 @@ Your LLM:                 LLM(streamContent1)  |                     |
                                                                      LLM(streamContent3)
 ```
 
-Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`.
+Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`, each subsequent chunk contains more complete information.
 
 ### JSON mode
 
