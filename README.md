@@ -24,19 +24,29 @@ Simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL 
 
 https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
 
-### Streaming mode
+### Streaming Mode
 
-Use accept-header to control the streaming behavior:
+Streaming mode is useful when you find that the standard mode provides an incomplete result. This is because streaming mode will wait a bit longer until the page is fully rendered.
 
-> Note, if you run this example below and not see streaming output but a single response, it means someone else has just run this within 5 min you and the result is cached already. Hence, the server simply returns the result instantly. Try with a different URL and you will see the streaming output.
+Use the accept-header to control the streaming behavior:
+
 ```bash
 curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
 
-If your downstream LLM/agent system requires immediate content delivery or needs to process data in chunks to interleave the IO and LLM time, use Streaming Mode. This allows for quicker access and efficient handling of data:
+The data comes in a stream; each subsequent chunk contains more complete information. The last chunk should provide the most complete and final result.
+
+For example, compare these two curl commands below:
+```bash
+curl -H 'x-no-cache: true' https://access.redhat.com/security/cve/CVE-2023-45853
+curl -H "Accept: text/event-stream" -H 'x-no-cache: true' https://r.jina.ai/https://access.redhat.com/security/cve/CVE-2023-45853
+```
+
+> Note: `-H 'x-no-cache: true'` is used only for demonstration purposes to bypass the cache.
+
+Streaming mode is also useful if your downstream LLM/agent system requires immediate content delivery or needs to process data in chunks to interleave I/O and LLM processing times. This allows for quicker access and more efficient data handling:
 
 ```text
-
 Reader API:  streamContent1 ----> streamContent2 ----> streamContent3 ---> ... 
                           |                    |                     |
                           v                    |                     |
@@ -47,7 +57,7 @@ Your LLM:                 LLM(streamContent1)  |                     |
                                                                      LLM(streamContent3)
 ```
 
-Stream mode is also useful when the target page is large to render. If you find standard mode gives you incomplete content, try streaming mode. 
+Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`.
 
 ### JSON mode
 
