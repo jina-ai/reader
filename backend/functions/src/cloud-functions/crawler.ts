@@ -195,6 +195,12 @@ ${this.content}
         let urlToCrawl;
         try {
             urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false }));
+            if (urlToCrawl.protocol !== 'http:' && urlToCrawl.protocol !== 'https:') {
+                throw new ParamValidationError({
+                    message: `Invalid protocol ${urlToCrawl.protocol}`,
+                    path: 'url'
+                });
+            }
         } catch (err) {
             throw new ParamValidationError({
                 message: `${err}`,
