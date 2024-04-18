@@ -51,6 +51,10 @@ puppeteer.use(puppeteerStealth());
 //     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
 //     platform: `Linux`,
 // }))
+const puppeteerBlockResources = require('puppeteer-extra-plugin-block-resources');
+puppeteer.use(puppeteerBlockResources({
+    blockedTypes: new Set(['media']),
+}));
 
 @singleton()
 export class PuppeteerControl extends AsyncService {

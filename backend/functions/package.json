@@ -48,6 +48,7 @@
     "openai": "^4.20.0",
     "puppeteer": "^22.6.3",
     "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-block-resources": "^2.4.3",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "stripe": "^11.11.0",
     "tiktoken": "^1.0.10",
