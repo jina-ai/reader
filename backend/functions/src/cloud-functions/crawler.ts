@@ -51,7 +51,7 @@ function tidyMarkdown(markdown: string): string {
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    turnDownPlugins = [require('turndown-plugin-gfm').gfm];
+    turnDownPlugins = [require('turndown-plugin-gfm').tables];
 
     constructor(
         protected globalLogger: Logger,
@@ -107,11 +107,31 @@ export class CrawlerHost extends RPCHost {
                 }
             });
 
-            contentText = turnDownService.turndown(toBeTurnedToMd).trim();
+            try {
+                contentText = turnDownService.turndown(toBeTurnedToMd).trim();
+            } catch (err) {
+                this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
+                const vanillaTurnDownService = new TurndownService();
+                try {
+                    contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
+                } catch (err2) {
+                    this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
+                }
+            }
         }
 
         if (!contentText || (contentText.startsWith('<') && contentText.endsWith('>'))) {
-            contentText = turnDownService.turndown(snapshot.html);
+            try {
+                contentText = turnDownService.turndown(snapshot.html);
+            } catch (err) {
+                this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
+                const vanillaTurnDownService = new TurndownService();
+                try {
+                    contentText = vanillaTurnDownService.turndown(snapshot.html);
+                } catch (err2) {
+                    this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
+                }
+            }
         }
         if (!contentText || (contentText.startsWith('<') || contentText.endsWith('>'))) {
             contentText = snapshot.text;
