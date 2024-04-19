@@ -73,3 +73,6 @@ build/
 .firebase-emu/
 *.log
 .DS_Store
+
+*.local
+.secret.*

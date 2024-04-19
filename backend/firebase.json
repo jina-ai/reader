@@ -11,8 +11,9 @@
         "node_modules",
         "src",
         ".git",
-        "firebase-debug.log",
-        "firebase-debug.*.log"
+        "*.log",
+        "*.local",
+        ".secret.*"
       ],
       "predeploy": [
         "npm --prefix \"$RESOURCE_DIR\" run build:clean",
