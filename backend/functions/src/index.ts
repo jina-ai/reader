@@ -23,5 +23,17 @@ process.on('unhandledRejection', (err) => {
         return;
     }
 
+    // Looks like Firebase runtime does not handle error properly.
+    // Make sure to quit the process.
+    process.nextTick(() => process.exit(1));
+
+    throw err;
+});
+
+process.on('uncaughtException', (err) => {
+    // Looks like Firebase runtime does not handle error properly.
+    // Make sure to quit the process.
+    process.nextTick(() => process.exit(1));
+
     throw err;
 });
