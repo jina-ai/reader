@@ -2,11 +2,13 @@ import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, A
 import { singleton } from 'tsyringe';
 import { CloudHTTPv2, Ctx, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import _ from 'lodash';
-import { PageSnapshot, PuppeteerControl } from '../services/puppeteer';
+import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
 import normalizeUrl from "@esm2cjs/normalize-url";
 import { AltTextService } from '../services/alt-text';
 import TurndownService from 'turndown';
+import { parseString as parseSetCookieString } from 'set-cookie-parser';
+import { CookieParam } from 'puppeteer';
 
 function tidyMarkdown(markdown: string): string {
 
@@ -67,7 +69,32 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    async formatSnapshot(snapshot: PageSnapshot, nominalUrl?: string) {
+    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot, nominalUrl?: string) {
+        if (mode === 'screenshot') {
+            return {
+                screenshot: snapshot.screenshot?.toString('base64'),
+                toString() {
+                    return this.screenshot;
+                }
+            };
+        }
+        if (mode === 'html') {
+            return {
+                html: snapshot.html,
+                toString() {
+                    return this.html;
+                }
+            };
+        }
+        if (mode === 'text') {
+            return {
+                text: snapshot.text,
+                toString() {
+                    return this.text;
+                }
+            };
+        }
+
         const toBeTurnedToMd = snapshot.parsed?.content;
         let turnDownService = new TurndownService();
         for (const plugin of this.turnDownPlugins) {
@@ -171,6 +198,7 @@ ${this.content}
             timeoutSeconds: 540,
             concurrency: 4,
         },
+        tags: ['Crawler'],
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],
     })
@@ -181,6 +209,57 @@ ${this.content}
             concurrency: 21,
             maxInstances: 476,
         },
+        openapi: {
+            operation: {
+                parameters: {
+                    'Accept': {
+                        description: `Specifies your preference for the response format. \n\n` +
+                            `Supported formats:\n` +
+                            `- text/event-stream\n` +
+                            `- application/json  or  text/json\n` +
+                            `- text/plain`
+                        ,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-No-Cache': {
+                        description: `Ignores internal cache if this header is specified with a value.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-Respond-With': {
+                        description: `Specifies the form factor of the crawled data you prefer. \n\n` +
+                            `Supported formats:\n` +
+                            `- markdown\n` +
+                            `- html\n` +
+                            `- text\n` +
+                            `- screenshot\n\n` +
+                            `Defaults to: markdown`
+                        ,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-Proxy-Url': {
+                        description: `Specifies your custom proxy if you prefer to use one. \n\n` +
+                            `Supported protocols:\n` +
+                            `- http\n` +
+                            `- https\n` +
+                            `- socks4\n` +
+                            `- socks5\n\n` +
+                            `For authentication, https://user:pass@host:port`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-Set-Cookie': {
+                        description: `Sets cookie(s) to the headless browser for your request. \n\n` +
+                            `Syntax is the same with standard Set-Cookie`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                }
+            }
+        },
+        tags: ['Crawler'],
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],
     })
@@ -207,27 +286,41 @@ ${this.content}
                 path: 'url'
             });
         }
-        const screenshotEnabled = Boolean(ctx.req.headers['x-screenshot']);
-        const noCache = Boolean(ctx.req.headers['x-no-cache']);
+        const customMode = ctx.req.get('x-respond-with') || 'markdown';
+        const noCache = Boolean(ctx.req.get('x-no-cache'));
+        const cookies: CookieParam[] = [];
+        const setCookieHeaders = ctx.req.headers['x-set-cookie'];
+        if (Array.isArray(setCookieHeaders)) {
+            for (const setCookie of setCookieHeaders) {
+                cookies.push({
+                    ...parseSetCookieString(setCookie, { decodeValues: false }) as CookieParam,
+                    domain: urlToCrawl.hostname,
+                });
+            }
+        } else if (setCookieHeaders) {
+            cookies.push({
+                ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
+                domain: urlToCrawl.hostname,
+            });
+        }
+
+        const crawlOpts: ScrappingOptions = {
+            noCache,
+            proxyUrl: ctx.req.get('x-proxy-url'),
+            cookies,
+        };
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
+                for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), crawlOpts)) {
                     if (!scrapped) {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(scrapped, urlToCrawl?.toString());
-
-                    if (scrapped.screenshot && screenshotEnabled) {
-                        sseStream.write({
-                            event: 'screenshot',
-                            data: scrapped.screenshot.toString('base64'),
-                        });
-                    }
+                    const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl?.toString());
 
                     sseStream.write({
                         event: 'data',
@@ -249,13 +342,13 @@ ${this.content}
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
+            for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), crawlOpts)) {
                 lastScrapped = scrapped;
                 if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(scrapped, urlToCrawl?.toString());
+                const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl?.toString());
 
                 return formatted;
             }
@@ -264,16 +357,21 @@ ${this.content}
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            return await this.formatSnapshot(lastScrapped, urlToCrawl?.toString());
+            return await this.formatSnapshot(customMode, lastScrapped, urlToCrawl?.toString());
         }
 
-        for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), noCache)) {
+        for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), crawlOpts)) {
             lastScrapped = scrapped;
             if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                 continue;
             }
 
-            const formatted = await this.formatSnapshot(scrapped, urlToCrawl?.toString());
+            if (customMode === 'screenshot' && scrapped?.screenshot) {
+                return assignTransferProtocolMeta(scrapped.screenshot, { contentType: 'image/jpeg', envelope: null });
+            }
+
+            const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl?.toString());
+
 
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
@@ -282,7 +380,14 @@ ${this.content}
             throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
         }
 
-        return `${await this.formatSnapshot(lastScrapped, urlToCrawl?.toString())}`;
+        if (customMode === 'screenshot') {
+            if (!lastScrapped.screenshot) {
+                throw new AssertionFailureError(`No screenshot available for URL ${urlToCrawl}`);
+            }
+            return assignTransferProtocolMeta(lastScrapped.screenshot, { contentType: 'image/jpeg', envelope: null });
+        }
+
+        return assignTransferProtocolMeta(`${await this.formatSnapshot(customMode, lastScrapped, urlToCrawl?.toString())}`, { contentType: 'text/plain', envelope: null });
     }
 
 

@@ -1,12 +1,13 @@
 import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
 import { container, singleton } from 'tsyringe';
-import type { Browser, Page } from 'puppeteer';
+import type { Browser, CookieParam, HTTPRequest, Page } from 'puppeteer';
 import { Logger } from '../shared/services/logger';
 import genericPool from 'generic-pool';
 import os from 'os';
 import fs from 'fs';
 import { Crawled } from '../db/crawled';
 import puppeteer from 'puppeteer-extra';
+import puppeteerPageProxy from 'puppeteer-page-proxy';
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
@@ -42,6 +43,13 @@ export interface PageSnapshot {
     screenshot?: Buffer;
     imgs?: ImgBrief[];
 }
+
+export interface ScrappingOptions {
+    noCache?: boolean;
+    proxyUrl?: string;
+    cookies?: CookieParam[];
+}
+
 const md5Hasher = new HashManager('md5', 'hex');
 
 const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
@@ -51,10 +59,6 @@ puppeteer.use(puppeteerStealth());
 //     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
 //     platform: `Linux`,
 // }))
-const puppeteerBlockResources = require('puppeteer-extra-plugin-block-resources');
-puppeteer.use(puppeteerBlockResources({
-    blockedTypes: new Set(['media']),
-}));
 
 @singleton()
 export class PuppeteerControl extends AsyncService {
@@ -199,15 +203,26 @@ function giveSnapshot() {
             // @ts-expect-error
             document.addEventListener('load', handlePageLoad);
         }));
-
+        preparations.push(page.setRequestInterception(true));
         await Promise.all(preparations);
+
+        page.on('request', (interceptedRequest) => {
+            if (interceptedRequest.isInterceptResolutionHandled()) {
+                return;
+            }
+
+            if (interceptedRequest.resourceType() === 'media') {
+                return interceptedRequest.abort('blockedbyclient', 0);
+            }
+            return interceptedRequest.continue(interceptedRequest.continueRequestOverrides(), 0);
+        });
 
         // TODO: further setup the page;
 
         return page;
     }
 
-    async *scrap(url: string, noCache: string | boolean = false): AsyncGenerator<PageSnapshot | undefined> {
+    async *scrap(url: string, options: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
         const parsedUrl = new URL(url);
         // parsedUrl.search = '';
         parsedUrl.hash = '';
@@ -218,7 +233,7 @@ function giveSnapshot() {
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
 
-        if (!noCache) {
+        if (!options.noCache) {
             const cached = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
             if (cached && cached.createdAt.valueOf() > (Date.now() - 1000 * 300)) {
@@ -242,6 +257,33 @@ function giveSnapshot() {
         }
 
         const page = await this.pagePool.acquire();
+        if (options.proxyUrl) {
+            // puppeteer-page-proxy is unmaintained, hack it to make it work
+            function hack(cpdHTTPRequest: HTTPRequest) {
+                const hackedConstructor = Object.create(cpdHTTPRequest.constructor, {
+                    name: {
+                        value: 'HTTPRequest', enumerable: false, configurable: false
+                    }
+                });
+                const hackedCpdHTTPRequest = Object.create(cpdHTTPRequest, {
+                    constructor: { value: hackedConstructor, enumerable: false }
+                });
+
+                return hackedCpdHTTPRequest;
+            }
+            page.on('request', (interceptedRequest) => {
+                if (interceptedRequest.isInterceptResolutionHandled()) {
+                    return;
+                }
+                interceptedRequest.continue()
+
+                puppeteerPageProxy(hack(interceptedRequest), options.proxyUrl!);
+            });
+        }
+        if (options.cookies) {
+            await page.setCookie(...options.cookies);
+        }
+
         let nextSnapshotDeferred = Defer();
         let finalized = false;
         const hdl = (s: any) => {
