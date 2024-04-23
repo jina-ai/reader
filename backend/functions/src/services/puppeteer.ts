@@ -1,13 +1,16 @@
 import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
 import { container, singleton } from 'tsyringe';
-import type { Browser, CookieParam, HTTPRequest, Page } from 'puppeteer';
 import { Logger } from '../shared/services/logger';
 import genericPool from 'generic-pool';
 import os from 'os';
 import fs from 'fs';
 import { Crawled } from '../db/crawled';
+import type { Browser, CookieParam, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
-import puppeteerPageProxy from 'puppeteer-page-proxy';
+
+import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
+import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
+
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
@@ -59,6 +62,14 @@ puppeteer.use(puppeteerStealth());
 //     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
 //     platform: `Linux`,
 // }))
+
+puppeteer.use(puppeteerBlockResources({
+    blockedTypes: new Set(['media']),
+    interceptResolutionPriority: 1,
+}));
+puppeteer.use(puppeteerPageProxy({
+    interceptResolutionPriority: 1,
+}));
 
 @singleton()
 export class PuppeteerControl extends AsyncService {
@@ -203,19 +214,7 @@ function giveSnapshot() {
             // @ts-expect-error
             document.addEventListener('load', handlePageLoad);
         }));
-        preparations.push(page.setRequestInterception(true));
         await Promise.all(preparations);
-
-        page.on('request', (interceptedRequest) => {
-            if (interceptedRequest.isInterceptResolutionHandled()) {
-                return;
-            }
-
-            if (interceptedRequest.resourceType() === 'media') {
-                return interceptedRequest.abort('blockedbyclient', 0);
-            }
-            return interceptedRequest.continue(interceptedRequest.continueRequestOverrides(), 0);
-        });
 
         // TODO: further setup the page;
 
@@ -258,27 +257,7 @@ function giveSnapshot() {
 
         const page = await this.pagePool.acquire();
         if (options.proxyUrl) {
-            // puppeteer-page-proxy is unmaintained, hack it to make it work
-            function hack(cpdHTTPRequest: HTTPRequest) {
-                const hackedConstructor = Object.create(cpdHTTPRequest.constructor, {
-                    name: {
-                        value: 'HTTPRequest', enumerable: false, configurable: false
-                    }
-                });
-                const hackedCpdHTTPRequest = Object.create(cpdHTTPRequest, {
-                    constructor: { value: hackedConstructor, enumerable: false }
-                });
-
-                return hackedCpdHTTPRequest;
-            }
-            page.on('request', (interceptedRequest) => {
-                if (interceptedRequest.isInterceptResolutionHandled()) {
-                    return;
-                }
-                interceptedRequest.continue()
-
-                puppeteerPageProxy(hack(interceptedRequest), options.proxyUrl!);
-            });
+            await page.useProxy(options.proxyUrl);
         }
         if (options.cookies) {
             await page.setCookie(...options.cookies);
