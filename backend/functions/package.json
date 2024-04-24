@@ -38,7 +38,7 @@
     "cors": "^2.8.5",
     "dayjs": "^1.11.9",
     "express": "^4.19.2",
-    "firebase-admin": "^11.5.0",
+    "firebase-admin": "^12.1.0",
     "firebase-functions": "^4.8.0",
     "generic-pool": "^3.9.0",
     "htmlparser2": "^9.0.0",
