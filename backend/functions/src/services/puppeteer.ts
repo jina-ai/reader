@@ -141,7 +141,10 @@ export class PuppeteerControl extends AsyncService {
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));
         preparations.push(page.setViewport({ width: 1024, height: 1024 }));
-        preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
+        preparations.push(page.exposeFunction('reportSnapshot', (snapshot: PageSnapshot) => {
+            if (snapshot.href === 'about:blank') {
+                return;
+            }
             page.emit('snapshot', snapshot);
         }));
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
@@ -189,34 +192,29 @@ function giveSnapshot() {
     return r;
 }
 `));
-        preparations.push(page.evaluateOnNewDocument(() => {
-            let aftershot: any;
-            const handlePageLoad = () => {
-                // @ts-expect-error
-                if (document.readyState !== 'complete' && document.readyState !== 'interactive') {
-                    return;
-                }
-                // @ts-expect-error
-                const parsed = giveSnapshot();
-                if (parsed) {
-                    // @ts-expect-error
-                    window.reportSnapshot(parsed);
-                } else {
-                    if (aftershot) {
-                        clearTimeout(aftershot);
-                    }
-                    aftershot = setTimeout(() => {
-                        // @ts-expect-error
-                        window.reportSnapshot(giveSnapshot());
-                    }, 500);
-                }
-            };
-            // setInterval(handlePageLoad, 1000);
-            // @ts-expect-error
-            document.addEventListener('readystatechange', handlePageLoad);
-            // @ts-expect-error
-            document.addEventListener('load', handlePageLoad);
-        }));
+        preparations.push(page.evaluateOnNewDocument(`
+let aftershot = undefined;
+const handlePageLoad = () => {
+    if (document.readyState !== 'complete') {
+        return;
+    }
+    const parsed = giveSnapshot();
+    window.reportSnapshot(parsed);
+    if (!parsed.text) {
+        if (aftershot) {
+            clearTimeout(aftershot);
+        }
+        aftershot = setTimeout(() => {
+            const r = giveSnapshot();
+            if (r && r.text) {
+                window.reportSnapshot(r);
+            }
+        }, 500);
+    }
+};
+document.addEventListener('readystatechange', handlePageLoad);
+document.addEventListener('load', handlePageLoad);
+`));
         await Promise.all(preparations);
 
         // TODO: further setup the page;
@@ -232,8 +230,6 @@ function giveSnapshot() {
 
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
-
-
 
         const page = await this.pagePool.acquire();
         if (options.proxyUrl) {
@@ -263,19 +259,20 @@ function giveSnapshot() {
                     cause: err,
                 }));
             }).finally(async () => {
-                finalized = true;
                 if (!snapshot?.html) {
+                    finalized = true;
                     return;
                 }
-                screenshot = await page.screenshot();
                 snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                screenshot = await page.screenshot();
                 if (!snapshot.title || !snapshot.parsed?.content) {
                     const salvaged = await this.salvage(url, page);
                     if (salvaged) {
-                        screenshot = await page.screenshot();
                         snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                        screenshot = await page.screenshot();
                     }
                 }
+                finalized = true;
                 this.logger.info(`Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
                 this.emit(
                     'crawled',
@@ -296,7 +293,9 @@ function giveSnapshot() {
                     screenshot = await page.screenshot();
                     lastHTML = snapshot.html;
                 }
-                yield { ...snapshot, screenshot } as PageSnapshot;
+                if (snapshot || screenshot) {
+                    yield { ...snapshot, screenshot } as PageSnapshot;
+                }
             }
         } finally {
             gotoPromise.finally(() => {
@@ -325,6 +324,8 @@ function giveSnapshot() {
         await page.goto(googleArchiveUrl, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 15_000 }).catch((err) => {
             this.logger.warn(`Page salvation did not fully succeed.`, { err: marshalErrorLike(err) });
         });
+
+        this.logger.info(`Salvation completed.`);
 
         return true;
     }

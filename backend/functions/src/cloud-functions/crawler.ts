@@ -409,14 +409,15 @@ ${this.content}
 
         if (cache) {
             const age = Date.now() - cache.createdAt.valueOf();
-            this.logger.info(`Cache hit for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
-                url: urlToCrawl, digest, age
+            const stale = cache.createdAt.valueOf() > (Date.now() - this.cacheValidMs);
+            this.logger.info(`${stale ? 'Only stale ' : ''}Cache exists for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
+                url: urlToCrawl, digest, age, stale
             });
 
             const r = cache.snapshot;
 
             return {
-                isFresh: cache.createdAt.valueOf() > (Date.now() - this.cacheValidMs),
+                isFresh: !stale,
                 snapshot: {
                     ...r,
                     screenshot: undefined,
