@@ -13,7 +13,8 @@
         ".git",
         "*.log",
         "*.local",
-        ".secret.*"
+        ".secret.*",
+        ".firebase-emu"
       ],
       "predeploy": [
         "npm --prefix \"$RESOURCE_DIR\" run build:clean",
