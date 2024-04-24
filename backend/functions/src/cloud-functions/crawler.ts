@@ -309,6 +309,7 @@ ${this.content}
         const crawlOpts: ScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
             cookies,
+            favorScreenshot: customMode === 'screenshot'
         };
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -418,6 +419,7 @@ ${this.content}
 
             return {
                 isFresh: !stale,
+                ...cache,
                 snapshot: {
                     ...r,
                     screenshot: undefined,
@@ -471,7 +473,7 @@ ${this.content}
             cache = await this.queryCache(urlToCrawl);
         }
 
-        if (cache?.isFresh) {
+        if (cache?.isFresh && (!crawlOpts.favorScreenshot || (crawlOpts.favorScreenshot && cache?.screenshotAvailable))) {
             yield cache.snapshot;
 
             return;

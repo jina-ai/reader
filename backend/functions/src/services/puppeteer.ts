@@ -50,6 +50,7 @@ export interface PageSnapshot {
 export interface ScrappingOptions {
     proxyUrl?: string;
     cookies?: CookieParam[];
+    favorScreenshot?: boolean;
 }
 
 
@@ -289,7 +290,7 @@ document.addEventListener('load', handlePageLoad);
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
-                if (snapshot?.title && snapshot?.html !== lastHTML) {
+                if (options.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
                     screenshot = await page.screenshot();
                     lastHTML = snapshot.html;
                 }
