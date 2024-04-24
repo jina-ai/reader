@@ -1,4 +1,9 @@
-import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, AssertionFailureError, ParamValidationError, HashManager } from 'civkit';
+import {
+    assignTransferProtocolMeta, marshalErrorLike,
+    RPCHost, RPCReflection,
+    HashManager,
+    AssertionFailureError, ParamValidationError,
+} from 'civkit';
 import { singleton } from 'tsyringe';
 import { CloudHTTPv2, Ctx, FirebaseStorageBucketControl, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import _ from 'lodash';
@@ -361,7 +366,6 @@ ${this.content}
             if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                 continue;
             }
-
 
             const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
             if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {

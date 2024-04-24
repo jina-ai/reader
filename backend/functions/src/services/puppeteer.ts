@@ -2,7 +2,7 @@ import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
 import genericPool from 'generic-pool';
-import { AssertionFailureError, AsyncService, Defer, marshalErrorLike } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, Page } from 'puppeteer';
