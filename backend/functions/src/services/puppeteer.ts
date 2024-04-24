@@ -97,13 +97,11 @@ export class PuppeteerControl extends AsyncService {
 
     constructor(protected globalLogger: Logger) {
         super(...arguments);
-
-        this.logger.info(`PuppeteerControl initializing with pool size ${this.pagePool.max}`, { poolSize: this.pagePool.max });
     }
 
     override async init() {
         await this.dependencyReady();
-
+        this.logger.info(`PuppeteerControl initializing with pool size ${this.pagePool.max}`, { poolSize: this.pagePool.max });
         this.pagePool.start();
 
         if (this.browser) {
