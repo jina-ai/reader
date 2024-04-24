@@ -1,6 +1,7 @@
 import { Also, parseJSONText, Prop } from 'civkit';
 import { FirestoreRecord } from '../shared/lib/firestore';
 import _ from 'lodash';
+import type { PageSnapshot } from '../services/puppeteer';
 
 @Also({
     dictOf: Object
@@ -21,7 +22,10 @@ export class Crawled extends FirestoreRecord {
     urlPathDigest!: string;
 
     @Prop()
-    snapshot!: any;
+    snapshot!: PageSnapshot & { screenshot: never; };
+
+    @Prop()
+    screenshotAvailable?: boolean;
 
     @Prop()
     createdAt!: Date;

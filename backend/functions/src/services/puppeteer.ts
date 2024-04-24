@@ -1,12 +1,16 @@
-import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
-import { container, singleton } from 'tsyringe';
-import type { Browser, Page } from 'puppeteer';
-import { Logger } from '../shared/services/logger';
-import genericPool from 'generic-pool';
 import os from 'os';
 import fs from 'fs';
-import { Crawled } from '../db/crawled';
+import { container, singleton } from 'tsyringe';
+import genericPool from 'generic-pool';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError } from 'civkit';
+import { Logger } from '../shared/services/logger';
+
+import type { Browser, CookieParam, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
+
+import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
+import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
+
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
@@ -42,7 +46,12 @@ export interface PageSnapshot {
     screenshot?: Buffer;
     imgs?: ImgBrief[];
 }
-const md5Hasher = new HashManager('md5', 'hex');
+
+export interface ScrappingOptions {
+    proxyUrl?: string;
+    cookies?: CookieParam[];
+}
+
 
 const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(puppeteerStealth());
@@ -51,9 +60,13 @@ puppeteer.use(puppeteerStealth());
 //     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
 //     platform: `Linux`,
 // }))
-const puppeteerBlockResources = require('puppeteer-extra-plugin-block-resources');
+
 puppeteer.use(puppeteerBlockResources({
     blockedTypes: new Set(['media']),
+    interceptResolutionPriority: 1,
+}));
+puppeteer.use(puppeteerPageProxy({
+    interceptResolutionPriority: 1,
 }));
 
 @singleton()
@@ -74,7 +87,7 @@ export class PuppeteerControl extends AsyncService {
             return page.browser().connected && !page.isClosed();
         }
     }, {
-        max: Math.max(1 + Math.floor(os.freemem() / (1024 * 1024 * 1024)), 16),
+        max: Math.max(1 + Math.floor(os.totalmem() / (384 * 1024 * 1024)), 16),
         min: 1,
         acquireTimeoutMillis: 60_000,
         testOnBorrow: true,
@@ -88,7 +101,7 @@ export class PuppeteerControl extends AsyncService {
 
     override async init() {
         await this.dependencyReady();
-
+        this.logger.info(`PuppeteerControl initializing with pool size ${this.pagePool.max}`, { poolSize: this.pagePool.max });
         this.pagePool.start();
 
         if (this.browser) {
@@ -128,7 +141,10 @@ export class PuppeteerControl extends AsyncService {
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));
         preparations.push(page.setViewport({ width: 1024, height: 1024 }));
-        preparations.push(page.exposeFunction('reportSnapshot', (snapshot: any) => {
+        preparations.push(page.exposeFunction('reportSnapshot', (snapshot: PageSnapshot) => {
+            if (snapshot.href === 'about:blank') {
+                return;
+            }
             page.emit('snapshot', snapshot);
         }));
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
@@ -166,40 +182,39 @@ function giveSnapshot() {
         const elem = document.createElement('div');
         elem.innerHTML = parsed.content;
         r.imgs = briefImgs(elem);
+    } else {
+        const allImgs = briefImgs();
+        if (allImgs.length === 1) {
+            r.imgs = allImgs;
+        }
     }
 
     return r;
 }
 `));
-        preparations.push(page.evaluateOnNewDocument(() => {
-            let aftershot: any;
-            const handlePageLoad = () => {
-                // @ts-expect-error
-                if (document.readyState !== 'complete' && document.readyState !== 'interactive') {
-                    return;
-                }
-                // @ts-expect-error
-                const parsed = giveSnapshot();
-                if (parsed) {
-                    // @ts-expect-error
-                    window.reportSnapshot(parsed);
-                } else {
-                    if (aftershot) {
-                        clearTimeout(aftershot);
-                    }
-                    aftershot = setTimeout(() => {
-                        // @ts-expect-error
-                        window.reportSnapshot(giveSnapshot());
-                    }, 500);
-                }
-            };
-            // setInterval(handlePageLoad, 1000);
-            // @ts-expect-error
-            document.addEventListener('readystatechange', handlePageLoad);
-            // @ts-expect-error
-            document.addEventListener('load', handlePageLoad);
-        }));
-
+        preparations.push(page.evaluateOnNewDocument(`
+let aftershot = undefined;
+const handlePageLoad = () => {
+    if (document.readyState !== 'complete') {
+        return;
+    }
+    const parsed = giveSnapshot();
+    window.reportSnapshot(parsed);
+    if (!parsed.text) {
+        if (aftershot) {
+            clearTimeout(aftershot);
+        }
+        aftershot = setTimeout(() => {
+            const r = giveSnapshot();
+            if (r && r.text) {
+                window.reportSnapshot(r);
+            }
+        }, 500);
+    }
+};
+document.addEventListener('readystatechange', handlePageLoad);
+document.addEventListener('load', handlePageLoad);
+`));
         await Promise.all(preparations);
 
         // TODO: further setup the page;
@@ -207,41 +222,23 @@ function giveSnapshot() {
         return page;
     }
 
-    async *scrap(url: string, noCache: string | boolean = false): AsyncGenerator<PageSnapshot | undefined> {
-        const parsedUrl = new URL(url);
+    async *scrap(parsedUrl: URL, options: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
         // parsedUrl.search = '';
-        parsedUrl.hash = '';
-        const normalizedUrl = parsedUrl.toString().toLowerCase();
-        const digest = md5Hasher.hash(normalizedUrl);
-        this.logger.info(`Scraping ${url}, normalized digest: ${digest}`, { url, digest });
+        const url = parsedUrl.toString();
+
+        this.logger.info(`Scraping ${url}`, { url });
 
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
 
-        if (!noCache) {
-            const cached = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
-
-            if (cached && cached.createdAt.valueOf() > (Date.now() - 1000 * 300)) {
-                const age = Date.now() - cached.createdAt.valueOf();
-                this.logger.info(`Cache hit for ${url}, normalized digest: ${digest}, ${age}ms old`, { url, digest, age });
-                snapshot = {
-                    ...cached.snapshot
-                };
-                if (snapshot) {
-                    delete snapshot.screenshot;
-                }
-
-                screenshot = cached.snapshot?.screenshot ? Buffer.from(cached.snapshot.screenshot, 'base64') : undefined;
-                yield {
-                    ...cached.snapshot,
-                    screenshot: cached.snapshot?.screenshot ? Buffer.from(cached.snapshot.screenshot, 'base64') : undefined
-                };
-
-                return;
-            }
+        const page = await this.pagePool.acquire();
+        if (options.proxyUrl) {
+            await page.useProxy(options.proxyUrl);
+        }
+        if (options.cookies) {
+            await page.setCookie(...options.cookies);
         }
 
-        const page = await this.pagePool.acquire();
         let nextSnapshotDeferred = Defer();
         let finalized = false;
         const hdl = (s: any) => {
@@ -262,48 +259,43 @@ function giveSnapshot() {
                     cause: err,
                 }));
             }).finally(async () => {
-                finalized = true;
                 if (!snapshot?.html) {
+                    finalized = true;
                     return;
                 }
-                screenshot = await page.screenshot({
-                    type: 'jpeg',
-                    quality: 75,
-                });
                 snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                screenshot = await page.screenshot();
                 if (!snapshot.title || !snapshot.parsed?.content) {
                     const salvaged = await this.salvage(url, page);
                     if (salvaged) {
-                        screenshot = await page.screenshot({
-                            type: 'jpeg',
-                            quality: 75,
-                        });
                         snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                        screenshot = await page.screenshot();
                     }
                 }
-                this.logger.info(`Snapshot of ${url} done`, { url, digest, title: snapshot?.title, href: snapshot?.href });
-                const nowDate = new Date();
-                Crawled.save(
-                    Crawled.from({
-                        url,
-                        createdAt: nowDate,
-                        expireAt: new Date(nowDate.valueOf() + 1000 * 3600 * 24 * 7),
-                        urlPathDigest: digest,
-                        snapshot: { ...snapshot, screenshot: screenshot?.toString('base64') || '' },
-                    }).degradeForFireStore()
-                ).catch((err) => {
-                    this.logger.warn(`Failed to save snapshot`, { err: marshalErrorLike(err) });
-                });
+                finalized = true;
+                this.logger.info(`Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
+                this.emit(
+                    'crawled',
+                    { ...snapshot, screenshot },
+                    { ...options, url: parsedUrl }
+                );
             });
 
         try {
+            let lastHTML = snapshot?.html;
             while (true) {
                 await Promise.race([nextSnapshotDeferred.promise, gotoPromise]);
                 if (finalized) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
-                yield snapshot;
+                if (snapshot?.title && snapshot?.html !== lastHTML) {
+                    screenshot = await page.screenshot();
+                    lastHTML = snapshot.html;
+                }
+                if (snapshot || screenshot) {
+                    yield { ...snapshot, screenshot } as PageSnapshot;
+                }
             }
         } finally {
             gotoPromise.finally(() => {
@@ -332,6 +324,8 @@ function giveSnapshot() {
         await page.goto(googleArchiveUrl, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 15_000 }).catch((err) => {
             this.logger.warn(`Page salvation did not fully succeed.`, { err: marshalErrorLike(err) });
         });
+
+        this.logger.info(`Salvation completed.`);
 
         return true;
     }
