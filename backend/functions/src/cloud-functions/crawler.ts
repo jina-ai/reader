@@ -1,6 +1,6 @@
-import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, AssertionFailureError, ParamValidationError } from 'civkit';
+import { assignTransferProtocolMeta, marshalErrorLike, RPCHost, RPCReflection, AssertionFailureError, ParamValidationError, HashManager } from 'civkit';
 import { singleton } from 'tsyringe';
-import { CloudHTTPv2, Ctx, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { CloudHTTPv2, Ctx, FirebaseStorageBucketControl, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
@@ -9,45 +9,12 @@ import { AltTextService } from '../services/alt-text';
 import TurndownService from 'turndown';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import { CookieParam } from 'puppeteer';
+import { Crawled } from '../db/crawled';
+import { tidyMarkdown } from '../utils/markdown';
+import { cleanAttribute } from '../utils/misc';
+import { randomUUID } from 'crypto';
 
-function tidyMarkdown(markdown: string): string {
-
-    // Step 1: Handle complex broken links with text and optional images spread across multiple lines
-    let normalizedMarkdown = markdown.replace(/\[\s*([^]+?)\s*\]\s*\(\s*([^)]+)\s*\)/g, (match, text, url) => {
-        // Remove internal new lines and excessive spaces within the text
-        text = text.replace(/\s+/g, ' ').trim();
-        url = url.replace(/\s+/g, '').trim();
-        return `[${text}](${url})`;
-    });
-
-    normalizedMarkdown = normalizedMarkdown.replace(/\[\s*([^!]*?)\s*\n*(?:!\[([^\]]*)\]\((.*?)\))?\s*\n*\]\s*\(\s*([^)]+)\s*\)/g, (match, text, alt, imgUrl, linkUrl) => {
-        // Normalize by removing excessive spaces and new lines
-        text = text.replace(/\s+/g, ' ').trim();
-        alt = alt ? alt.replace(/\s+/g, ' ').trim() : '';
-        imgUrl = imgUrl ? imgUrl.replace(/\s+/g, '').trim() : '';
-        linkUrl = linkUrl.replace(/\s+/g, '').trim();
-        if (imgUrl) {
-            return `[${text} ![${alt}](${imgUrl})](${linkUrl})`;
-        } else {
-            return `[${text}](${linkUrl})`;
-        }
-    });
-
-    // Step 2: Normalize regular links that may be broken across lines
-    normalizedMarkdown = normalizedMarkdown.replace(/\[\s*([^\]]+)\]\s*\(\s*([^)]+)\)/g, (match, text, url) => {
-        text = text.replace(/\s+/g, ' ').trim();
-        url = url.replace(/\s+/g, '').trim();
-        return `[${text}](${url})`;
-    });
-
-    // Step 3: Replace more than two consecutive empty lines with exactly two empty lines
-    normalizedMarkdown = normalizedMarkdown.replace(/\n{3,}/g, '\n\n');
-
-    // Step 4: Remove leading spaces from each line
-    normalizedMarkdown = normalizedMarkdown.replace(/^[ \t]+/gm, '');
-
-    return normalizedMarkdown.trim();
-}
+const md5Hasher = new HashManager('md5', 'hex');
 
 @singleton()
 export class CrawlerHost extends RPCHost {
@@ -55,12 +22,29 @@ export class CrawlerHost extends RPCHost {
 
     turnDownPlugins = [require('turndown-plugin-gfm').tables];
 
+    cacheRetentionMs = 1000 * 3600 * 24 * 7;
+    cacheValidMs = 1000 * 300;
+    urlValidMs = 1000 * 3600 * 4;
+
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
         protected altTextService: AltTextService,
+        protected firebaseObjectStorage: FirebaseStorageBucketControl,
     ) {
         super(...arguments);
+
+        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ScrappingOptions & { url: URL; }) => {
+            if (!snapshot.title?.trim()) {
+                return;
+            }
+            if (options.cookies?.length) {
+                // Potential privacy issue, dont cache if cookies are used
+                return;
+            }
+
+            await this.setToCache(options.url, snapshot);
+        });
     }
 
     override async init() {
@@ -69,12 +53,24 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot, nominalUrl?: string) {
+    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
+        screenshotUrl?: string;
+    }, nominalUrl?: URL) {
         if (mode === 'screenshot') {
+            if (snapshot.screenshot && !snapshot.screenshotUrl) {
+                const fid = `instant-screenshots/${randomUUID()}`;
+                await this.firebaseObjectStorage.saveFile(fid, snapshot.screenshot, {
+                    metadata: {
+                        contentType: 'image/png',
+                    }
+                });
+                snapshot.screenshotUrl = await this.firebaseObjectStorage.signDownloadUrl(fid, Date.now() + this.urlValidMs);
+            }
+
             return {
-                screenshot: snapshot.screenshot?.toString('base64'),
+                screenshotUrl: snapshot.screenshotUrl,
                 toString() {
-                    return this.screenshot;
+                    return this.screenshotUrl;
                 }
             };
         }
@@ -100,10 +96,8 @@ export class CrawlerHost extends RPCHost {
         for (const plugin of this.turnDownPlugins) {
             turnDownService = turnDownService.use(plugin);
         }
-
-        let contentText = '';
-        if (toBeTurnedToMd) {
-            const urlToAltMap: { [k: string]: string | undefined; } = {};
+        const urlToAltMap: { [k: string]: string | undefined; } = {};
+        if (snapshot.imgs?.length) {
             const tasks = (snapshot.imgs || []).map(async (x) => {
                 const r = await this.altTextService.getAltText(x).catch((err: any) => {
                     this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
@@ -115,25 +109,27 @@ export class CrawlerHost extends RPCHost {
             });
 
             await Promise.all(tasks);
-            let imgIdx = 0;
-
-            turnDownService.addRule('img-generated-alt', {
-                filter: 'img',
-                replacement: (_content, node) => {
-                    const src = (node.getAttribute('src') || '').trim();
-                    const alt = cleanAttribute(node.getAttribute('alt'));
-                    if (!src) {
-                        return '';
-                    }
-                    const mapped = urlToAltMap[src];
-                    imgIdx++;
-                    if (mapped) {
-                        return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
-                    }
-                    return `![Image ${imgIdx}: ${alt}](${src})`;
+        }
+        let imgIdx = 0;
+        turnDownService.addRule('img-generated-alt', {
+            filter: 'img',
+            replacement: (_content, node) => {
+                const src = (node.getAttribute('src') || '').trim();
+                const alt = cleanAttribute(node.getAttribute('alt'));
+                if (!src) {
+                    return '';
                 }
-            });
+                const mapped = urlToAltMap[src];
+                imgIdx++;
+                if (mapped) {
+                    return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
+                }
+                return `![Image ${imgIdx}: ${alt}](${src})`;
+            }
+        });
 
+        let contentText = '';
+        if (toBeTurnedToMd) {
             try {
                 contentText = turnDownService.turndown(toBeTurnedToMd).trim();
             } catch (err) {
@@ -168,7 +164,7 @@ export class CrawlerHost extends RPCHost {
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
-            url: nominalUrl || snapshot.href?.trim(),
+            url: nominalUrl?.toString() || snapshot.href?.trim(),
             content: cleanText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,
 
@@ -286,6 +282,7 @@ ${this.content}
                 path: 'url'
             });
         }
+
         const customMode = ctx.req.get('x-respond-with') || 'markdown';
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         const cookies: CookieParam[] = [];
@@ -305,7 +302,6 @@ ${this.content}
         }
 
         const crawlOpts: ScrappingOptions = {
-            noCache,
             proxyUrl: ctx.req.get('x-proxy-url'),
             cookies,
         };
@@ -315,12 +311,12 @@ ${this.content}
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), crawlOpts)) {
+                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
                     if (!scrapped) {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl?.toString());
+                    const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
 
                     sseStream.write({
                         event: 'data',
@@ -328,7 +324,7 @@ ${this.content}
                     });
                 }
             } catch (err: any) {
-                this.logger.error(`Failed to crawl ${urlToCrawl.toString()}`, { err: marshalErrorLike(err) });
+                this.logger.error(`Failed to crawl ${urlToCrawl}`, { err: marshalErrorLike(err) });
                 sseStream.write({
                     event: 'error',
                     data: marshalErrorLike(err),
@@ -342,13 +338,13 @@ ${this.content}
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), crawlOpts)) {
+            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
                 lastScrapped = scrapped;
                 if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl?.toString());
+                const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
 
                 return formatted;
             }
@@ -357,21 +353,23 @@ ${this.content}
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            return await this.formatSnapshot(customMode, lastScrapped, urlToCrawl?.toString());
+            return await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
         }
 
-        for await (const scrapped of this.puppeteerControl.scrap(urlToCrawl.toString(), crawlOpts)) {
+        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
             lastScrapped = scrapped;
             if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                 continue;
             }
 
-            if (customMode === 'screenshot' && scrapped?.screenshot) {
-                return assignTransferProtocolMeta(scrapped.screenshot, { contentType: 'image/jpeg', envelope: null });
+
+            const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+            if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+
+                return assignTransferProtocolMeta(`${formatted}`,
+                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
+                );
             }
-
-            const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl?.toString());
-
 
             return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
@@ -380,19 +378,98 @@ ${this.content}
             throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
         }
 
-        if (customMode === 'screenshot') {
-            if (!lastScrapped.screenshot) {
-                throw new AssertionFailureError(`No screenshot available for URL ${urlToCrawl}`);
-            }
-            return assignTransferProtocolMeta(lastScrapped.screenshot, { contentType: 'image/jpeg', envelope: null });
+        const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+        if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+
+            return assignTransferProtocolMeta(`${formatted}`,
+                { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
+            );
         }
 
-        return assignTransferProtocolMeta(`${await this.formatSnapshot(customMode, lastScrapped, urlToCrawl?.toString())}`, { contentType: 'text/plain', envelope: null });
+        return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
     }
 
+    getUrlDigest(urlToCrawl: URL) {
+        const normalizedURL = new URL(urlToCrawl);
+        normalizedURL.hash = '';
+        const normalizedUrl = normalizedURL.toString().toLowerCase();
+        const digest = md5Hasher.hash(normalizedUrl.toString());
 
-}
+        return digest;
+    }
 
-function cleanAttribute(attribute: string) {
-    return attribute ? attribute.replace(/(\n+\s*)+/g, '\n') : '';
+    async queryCache(urlToCrawl: URL) {
+        const digest = this.getUrlDigest(urlToCrawl);
+
+        const cache = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
+
+        if (cache && cache.createdAt.valueOf() > (Date.now() - this.cacheValidMs)) {
+            const age = Date.now() - cache.createdAt.valueOf();
+            this.logger.info(`Cache hit for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
+                url: urlToCrawl, digest, age
+            });
+
+            const r = cache.snapshot;
+
+            return {
+                ...r,
+                screenshot: undefined,
+                screenshotUrl: cache.screenshotAvailable ?
+                    await this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs) : undefined,
+            } as PageSnapshot & { screenshot: never; screenshotUrl?: string; };
+        }
+
+        return undefined;
+    }
+
+    async setToCache(urlToCrawl: URL, snapshot: PageSnapshot) {
+        const digest = this.getUrlDigest(urlToCrawl);
+
+        this.logger.info(`Caching snapshot of ${urlToCrawl}...`, { url: urlToCrawl, digest, title: snapshot?.title, href: snapshot?.href });
+        const nowDate = new Date();
+
+        const cache = Crawled.from({
+            _id: randomUUID(),
+            url: urlToCrawl.toString(),
+            createdAt: nowDate,
+            expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs),
+            urlPathDigest: digest,
+            snapshot: {
+                ...snapshot,
+                screenshot: null
+            },
+        });
+
+        if (snapshot.screenshot) {
+            await this.firebaseObjectStorage.saveFile(`screenshots/${cache._id}`, snapshot.screenshot, {
+                metadata: {
+                    contentType: 'image/png',
+                }
+            });
+            cache.screenshotAvailable = true;
+        }
+        const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
+            this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err: marshalErrorLike(err) });
+
+            return undefined;
+        });
+
+        return r;
+    }
+
+    async *cachedScrap(urlToCrawl: URL, crawlOpts: ScrappingOptions, noCache: boolean = false) {
+        let cache;
+        if (!noCache && !crawlOpts.cookies?.length) {
+            cache = await this.queryCache(urlToCrawl);
+        }
+
+        if (cache) {
+            yield cache;
+
+            return;
+        }
+
+        yield* this.puppeteerControl.scrap(urlToCrawl, crawlOpts);
+    }
+
 }

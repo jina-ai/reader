@@ -1,10 +1,10 @@
-import { AssertionFailureError, AsyncService, Defer, HashManager, marshalErrorLike } from 'civkit';
-import { container, singleton } from 'tsyringe';
-import { Logger } from '../shared/services/logger';
-import genericPool from 'generic-pool';
 import os from 'os';
 import fs from 'fs';
-import { Crawled } from '../db/crawled';
+import { container, singleton } from 'tsyringe';
+import genericPool from 'generic-pool';
+import { AssertionFailureError, AsyncService, Defer, marshalErrorLike } from 'civkit';
+import { Logger } from '../shared/services/logger';
+
 import type { Browser, CookieParam, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
 
@@ -48,12 +48,10 @@ export interface PageSnapshot {
 }
 
 export interface ScrappingOptions {
-    noCache?: boolean;
     proxyUrl?: string;
     cookies?: CookieParam[];
 }
 
-const md5Hasher = new HashManager('md5', 'hex');
 
 const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(puppeteerStealth());
@@ -181,6 +179,11 @@ function giveSnapshot() {
         const elem = document.createElement('div');
         elem.innerHTML = parsed.content;
         r.imgs = briefImgs(elem);
+    } else {
+        const allImgs = briefImgs();
+        if (allImgs.length === 1) {
+            r.imgs = allImgs;
+        }
     }
 
     return r;
@@ -221,39 +224,16 @@ function giveSnapshot() {
         return page;
     }
 
-    async *scrap(url: string, options: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
-        const parsedUrl = new URL(url);
+    async *scrap(parsedUrl: URL, options: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
         // parsedUrl.search = '';
-        parsedUrl.hash = '';
-        const normalizedUrl = parsedUrl.toString().toLowerCase();
-        const digest = md5Hasher.hash(normalizedUrl);
-        this.logger.info(`Scraping ${url}, normalized digest: ${digest}`, { url, digest });
+        const url = parsedUrl.toString();
+
+        this.logger.info(`Scraping ${url}`, { url });
 
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
 
-        if (!options.noCache) {
-            const cached = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
-            if (cached && cached.createdAt.valueOf() > (Date.now() - 1000 * 300)) {
-                const age = Date.now() - cached.createdAt.valueOf();
-                this.logger.info(`Cache hit for ${url}, normalized digest: ${digest}, ${age}ms old`, { url, digest, age });
-                snapshot = {
-                    ...cached.snapshot
-                };
-                if (snapshot) {
-                    delete snapshot.screenshot;
-                }
-
-                screenshot = cached.snapshot?.screenshot ? Buffer.from(cached.snapshot.screenshot, 'base64') : undefined;
-                yield {
-                    ...cached.snapshot,
-                    screenshot: cached.snapshot?.screenshot ? Buffer.from(cached.snapshot.screenshot, 'base64') : undefined
-                };
-
-                return;
-            }
-        }
 
         const page = await this.pagePool.acquire();
         if (options.proxyUrl) {
@@ -287,44 +267,36 @@ function giveSnapshot() {
                 if (!snapshot?.html) {
                     return;
                 }
-                screenshot = await page.screenshot({
-                    type: 'jpeg',
-                    quality: 75,
-                });
+                screenshot = await page.screenshot();
                 snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
                 if (!snapshot.title || !snapshot.parsed?.content) {
                     const salvaged = await this.salvage(url, page);
                     if (salvaged) {
-                        screenshot = await page.screenshot({
-                            type: 'jpeg',
-                            quality: 75,
-                        });
+                        screenshot = await page.screenshot();
                         snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
                     }
                 }
-                this.logger.info(`Snapshot of ${url} done`, { url, digest, title: snapshot?.title, href: snapshot?.href });
-                const nowDate = new Date();
-                Crawled.save(
-                    Crawled.from({
-                        url,
-                        createdAt: nowDate,
-                        expireAt: new Date(nowDate.valueOf() + 1000 * 3600 * 24 * 7),
-                        urlPathDigest: digest,
-                        snapshot: { ...snapshot, screenshot: screenshot?.toString('base64') || '' },
-                    }).degradeForFireStore()
-                ).catch((err) => {
-                    this.logger.warn(`Failed to save snapshot`, { err: marshalErrorLike(err) });
-                });
+                this.logger.info(`Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
+                this.emit(
+                    'crawled',
+                    { ...snapshot, screenshot },
+                    { ...options, url: parsedUrl }
+                );
             });
 
         try {
+            let lastHTML = snapshot?.html;
             while (true) {
                 await Promise.race([nextSnapshotDeferred.promise, gotoPromise]);
                 if (finalized) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
-                yield snapshot;
+                if (snapshot?.title && snapshot?.html !== lastHTML) {
+                    screenshot = await page.screenshot();
+                    lastHTML = snapshot.html;
+                }
+                yield { ...snapshot, screenshot } as PageSnapshot;
             }
         } finally {
             gotoPromise.finally(() => {
