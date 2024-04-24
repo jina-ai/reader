@@ -14,6 +14,7 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 
 ## Updates
 
+- **2024-04-24**: You now have more fine-grained control over Reader API using headers, e.g. forwarding cookies, using HTTP proxy.
 - **2024-04-15**: Reader now supports image reading! It captions all images at the specified URL and adds `Image [idx]: [caption]` as an alt tag (if they initially lack one). This enables downstream LLMs to interact with the images in reasoning, summarizing etc. [See example here](https://x.com/JinaAI_/status/1780094402071023926).
 
 ## Usage
@@ -57,12 +58,28 @@ Your LLM:                 LLM(streamContent1)  |                     |
 
 Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`, each subsequent chunk contains more complete information.
 
-### JSON mode
+### JSON mode (super early beta)
 
 This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
 ```bash
 curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
+
+### Using request headers
+
+As you have already seen above, one can control the behavior of the Reader API using request headers. Here is a complete list of supported headers.
+
+- You can ask the Reader API to forward cookies settings via the `x-set-cookie` header.
+  - Note that requests with cookies will not be cached.
+- You can bypass `readability` filtering via the `x-respond-with` header, specifically:
+  - `x-respond-with: html` returns `documentElement.outerHTML`
+  - `x-respond-with: text` returns `document.body.innerText`
+  - `x-respond-with: screenshot` returns or redirects to the URL of the webpage's screenshot
+  - The default behavior is equivalent to `x-respond-with: markdown`
+- You can specify a proxy server via the `x-proxy-url` header.
+- You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
+
+ 
 
 ## Install
 
