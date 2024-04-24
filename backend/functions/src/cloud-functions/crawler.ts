@@ -407,7 +407,7 @@ ${this.content}
 
         const cache = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
-        if (cache && cache.createdAt.valueOf() > (Date.now() - this.cacheValidMs)) {
+        if (cache) {
             const age = Date.now() - cache.createdAt.valueOf();
             this.logger.info(`Cache hit for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
                 url: urlToCrawl, digest, age
@@ -416,11 +416,14 @@ ${this.content}
             const r = cache.snapshot;
 
             return {
-                ...r,
-                screenshot: undefined,
-                screenshotUrl: cache.screenshotAvailable ?
-                    await this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs) : undefined,
-            } as PageSnapshot & { screenshot: never; screenshotUrl?: string; };
+                isFresh: cache.createdAt.valueOf() > (Date.now() - this.cacheValidMs),
+                snapshot: {
+                    ...r,
+                    screenshot: undefined,
+                    screenshotUrl: cache.screenshotAvailable ?
+                        await this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs) : undefined,
+                } as PageSnapshot & { screenshotUrl?: string; }
+            };
         }
 
         return undefined;
@@ -467,13 +470,22 @@ ${this.content}
             cache = await this.queryCache(urlToCrawl);
         }
 
-        if (cache) {
-            yield cache;
+        if (cache?.isFresh) {
+            yield cache.snapshot;
 
             return;
         }
 
-        yield* this.puppeteerControl.scrap(urlToCrawl, crawlOpts);
+        try {
+            yield* this.puppeteerControl.scrap(urlToCrawl, crawlOpts);
+        } catch (err: any) {
+            if (cache) {
+                this.logger.warn(`Failed to scrap ${urlToCrawl}, but a stale cache is available. Falling back to cache`, { err: marshalErrorLike(err) });
+                yield cache.snapshot;
+                return;
+            }
+            throw err;
+        }
     }
 
 }
