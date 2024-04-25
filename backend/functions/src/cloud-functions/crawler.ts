@@ -263,6 +263,7 @@ ${this.content}
         tags: ['Crawler'],
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],
+        exposeRoot: true,
     })
     async crawl(
         @RPCReflect() rpcReflect: RPCReflection,
@@ -272,18 +273,26 @@ ${this.content}
         },
     ) {
         const noSlashURL = ctx.req.url.slice(1);
+        if (!noSlashURL) {
+            return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
+[Homepage] https://jina.ai/reader
+[Source code] https://github.com/jina-ai/reader
+`,
+                { contentType: 'text/plain', envelope: null }
+            );
+        }
         let urlToCrawl;
         try {
             urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false }));
-            if (urlToCrawl.protocol !== 'http:' && urlToCrawl.protocol !== 'https:') {
-                throw new ParamValidationError({
-                    message: `Invalid protocol ${urlToCrawl.protocol}`,
-                    path: 'url'
-                });
-            }
         } catch (err) {
             throw new ParamValidationError({
                 message: `${err}`,
+                path: 'url'
+            });
+        }
+        if (urlToCrawl.protocol !== 'http:' && urlToCrawl.protocol !== 'https:') {
+            throw new ParamValidationError({
+                message: `Invalid protocol ${urlToCrawl.protocol}`,
                 path: 'url'
             });
         }
