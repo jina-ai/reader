@@ -74,7 +74,7 @@ export class CrawlerHost extends RPCHost {
         return turnDownService;
     }
 
-    async formatSnapshot(mode: string | 'markdown' | 'full-markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
+    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
     }, nominalUrl?: URL) {
         if (mode === 'screenshot') {
@@ -112,8 +112,8 @@ export class CrawlerHost extends RPCHost {
             };
         }
 
-        const toBeTurnedToMd = mode === 'full-markdown' ? snapshot.html : snapshot.parsed?.content;
-        let turnDownService = mode === 'markdown' ? this.getTurndown('without any rule') : this.getTurndown();
+        const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
+        let turnDownService = mode === 'markdown' ?  this.getTurndown() : this.getTurndown('without any rule');
         for (const plugin of this.turnDownPlugins) {
             turnDownService = turnDownService.use(plugin);
         }
@@ -198,7 +198,7 @@ export class CrawlerHost extends RPCHost {
                     mixins.push(`Published Time: ${this.publishedTime}`);
                 }
 
-                if (mode === 'full-markdown') {
+                if (mode === 'markdown') {
                     return this.content;
                 }
 
@@ -253,14 +253,12 @@ ${this.content}
                         schema: { type: 'string' }
                     },
                     'X-Respond-With': {
-                        description: `Specifies the form factor of the crawled data you prefer. \n\n` +
+                        description: `Specifies the (non-default) form factor of the crawled data you prefer. \n\n` +
                             `Supported formats:\n` +
                             `- markdown\n` +
-                            `- full-markdown\n` +
                             `- html\n` +
                             `- text\n` +
-                            `- screenshot\n\n` +
-                            `Defaults to: markdown`
+                            `- screenshot\n`
                         ,
                         in: 'header',
                         schema: { type: 'string' }
@@ -322,7 +320,7 @@ ${this.content}
             });
         }
 
-        const customMode = ctx.req.get('x-respond-with') || 'markdown';
+        const customMode = ctx.req.get('x-respond-with') || 'default';
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
