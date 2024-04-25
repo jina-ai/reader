@@ -22,10 +22,13 @@ export class Crawled extends FirestoreRecord {
     urlPathDigest!: string;
 
     @Prop()
-    snapshot!: PageSnapshot & { screenshot: never; };
+    snapshot?: PageSnapshot & { screenshot: never; };
 
     @Prop()
     screenshotAvailable?: boolean;
+
+    @Prop()
+    snapshotAvailable?: boolean;
 
     @Prop()
     createdAt!: Date;

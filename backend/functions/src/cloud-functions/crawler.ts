@@ -13,7 +13,7 @@ import normalizeUrl from "@esm2cjs/normalize-url";
 import { AltTextService } from '../services/alt-text';
 import TurndownService from 'turndown';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
-import { CookieParam } from 'puppeteer';
+import type { CookieParam } from 'puppeteer';
 import { Crawled } from '../db/crawled';
 import { tidyMarkdown } from '../utils/markdown';
 import { cleanAttribute } from '../utils/misc';
@@ -408,28 +408,44 @@ ${this.content}
 
         const cache = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
-        if (cache) {
-            const age = Date.now() - cache.createdAt.valueOf();
-            const stale = cache.createdAt.valueOf() > (Date.now() - this.cacheValidMs);
-            this.logger.info(`${stale ? 'Only stale ' : ''}Cache exists for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
-                url: urlToCrawl, digest, age, stale
-            });
-
-            const r = cache.snapshot;
-
-            return {
-                isFresh: !stale,
-                ...cache,
-                snapshot: {
-                    ...r,
-                    screenshot: undefined,
-                    screenshotUrl: cache.screenshotAvailable ?
-                        await this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs) : undefined,
-                } as PageSnapshot & { screenshotUrl?: string; }
-            };
+        if (!cache) {
+            return undefined;
         }
 
-        return undefined;
+        const age = Date.now() - cache.createdAt.valueOf();
+        const stale = cache.createdAt.valueOf() < (Date.now() - this.cacheValidMs);
+        this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
+            url: urlToCrawl, digest, age, stale
+        });
+
+        let snapshot: PageSnapshot | undefined;
+        let screenshotUrl: string | undefined;
+        const preparations = [
+            this.firebaseObjectStorage.downloadFile(`snapshots/${cache._id}`).then((r) => {
+                snapshot = JSON.parse(r.toString('utf-8'));
+            }),
+            cache.screenshotAvailable ?
+                this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs).then((r) => {
+                    screenshotUrl = r;
+                }) :
+                Promise.resolve(undefined)
+        ];
+        try {
+            await Promise.all(preparations);
+        } catch (_err) {
+            // Swallow cache errors.
+            return undefined;
+        }
+
+        return {
+            isFresh: !stale,
+            ...cache,
+            snapshot: {
+                ...snapshot,
+                screenshot: undefined,
+                screenshotUrl,
+            } as PageSnapshot & { screenshotUrl?: string; }
+        };
     }
 
     async setToCache(urlToCrawl: URL, snapshot: PageSnapshot) {
@@ -444,10 +460,24 @@ ${this.content}
             createdAt: nowDate,
             expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs),
             urlPathDigest: digest,
-            snapshot: {
-                ...snapshot,
-                screenshot: null
-            },
+        });
+
+        const savingOfSnapshot = this.firebaseObjectStorage.saveFile(`snapshots/${cache._id}`,
+            Buffer.from(
+                JSON.stringify({
+                    ...snapshot,
+                    screenshot: undefined
+                }),
+                'utf-8'
+            ),
+            {
+                metadata: {
+                    contentType: 'application/json',
+                }
+            }
+        ).then((r) => {
+            cache.snapshotAvailable = true;
+            return r;
         });
 
         if (snapshot.screenshot) {
@@ -458,6 +488,7 @@ ${this.content}
             });
             cache.screenshotAvailable = true;
         }
+        await savingOfSnapshot;
         const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
             this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err: marshalErrorLike(err) });
 
