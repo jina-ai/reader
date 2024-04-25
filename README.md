@@ -65,10 +65,10 @@ As you have already seen above, one can control the behavior of the Reader API u
 - You can ask the Reader API to forward cookies settings via the `x-set-cookie` header.
   - Note that requests with cookies will not be cached.
 - You can bypass `readability` filtering via the `x-respond-with` header, specifically:
+  - `x-respond-with: markdown` returns markdown *without* going through `reability`
   - `x-respond-with: html` returns `documentElement.outerHTML`
   - `x-respond-with: text` returns `document.body.innerText`
-  - `x-respond-with: screenshot` returns or redirects to the URL of the webpage's screenshot
-  - The default behavior is equivalent to `x-respond-with: markdown`
+  - `x-respond-with: screenshot` returns the URL of the webpage's screenshot
 - You can specify a proxy server via the `x-proxy-url` header.
 - You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
 
