@@ -202,6 +202,7 @@ ${this.content}
         tags: ['Crawler'],
         httpMethod: ['get', 'post'],
         returnType: [String, OutputServerEventStream],
+        exposeRoot: true,
     })
     @CloudHTTPv2({
         runtime: {
