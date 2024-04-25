@@ -7,7 +7,7 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 - Live demo: https://jina.ai/reader
 - Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://r.jina.ai/https://x.com/elonmusk and see yourself.
 
-> Feel free to use https://r.jina.ai/* in production. It is free, stable and scalable. We are maintaining it actively as one of the core products of Jina AI.
+> Feel free to use Reader API in production. It is free, stable and scalable. We are maintaining it actively as one of the core products of Jina AI.
 
 <img width="973" alt="image" src="https://github.com/jina-ai/reader/assets/2041322/2067c7a2-c12e-4465-b107-9a16ca178d41">
 
@@ -19,21 +19,19 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 
 ## Usage
 
-### Standard mode
-
 Simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
 
-https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence
+[https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence](https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence)
 
-### Streaming Mode
+### Streaming mode
 
-Streaming mode is useful when you find that the standard mode provides an incomplete result. This is because streaming mode will wait a bit longer until the page is fully rendered. Use the accept-header to toggle the streaming mode:
+Streaming mode is useful when you find that the standard mode provides an incomplete result. This is because the Reader will wait a bit longer until the page is *stablely* rendered. Use the accept-header to toggle the streaming mode:
 
 ```bash
 curl -H "Accept: text/event-stream" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
 
-The data comes in a stream; each subsequent chunk contains more complete information. **The last chunk should provide the most complete and final result.**
+The data comes in a stream; each subsequent chunk contains more complete information. **The last chunk should provide the most complete and final result.** If you come from LLMs, please note that it is a different behavior than the LLMs' text-generation streaming.
 
 For example, compare these two curl commands below. You can see streaming one gives you complete information at last, whereas standard mode does not. This is because the content loading on this particular site is triggered by some js *after* the page is fully loaded, and standard mode returns the page "too soon".
 ```bash
@@ -58,13 +56,6 @@ Your LLM:                 LLM(streamContent1)  |                     |
 
 Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`, each subsequent chunk contains more complete information.
 
-### JSON mode (super early beta)
-
-This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
-```bash
-curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
-```
-
 ### Using request headers
 
 As you have already seen above, one can control the behavior of the Reader API using request headers. Here is a complete list of supported headers.
@@ -79,7 +70,12 @@ As you have already seen above, one can control the behavior of the Reader API u
 - You can specify a proxy server via the `x-proxy-url` header.
 - You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
 
- 
+### JSON mode (super early beta)
+
+This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
+```bash
+curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
+```
 
 ## Install
 
