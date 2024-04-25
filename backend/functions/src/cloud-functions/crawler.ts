@@ -58,7 +58,23 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
+    getTurndown(noRules?: boolean | string) {
+        const turnDownService = new TurndownService();
+        if (!noRules) {
+            turnDownService.addRule('remove-irrelevant', {
+                filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea'],
+                replacement: () => ''
+            });
+            turnDownService.addRule('title-as-h1', {
+                filter: ['title'],
+                replacement: (innerText) => `${innerText}\n===============\n`
+            });
+        }
+
+        return turnDownService;
+    }
+
+    async formatSnapshot(mode: string | 'markdown' | 'full-markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
     }, nominalUrl?: URL) {
         if (mode === 'screenshot') {
@@ -96,8 +112,8 @@ export class CrawlerHost extends RPCHost {
             };
         }
 
-        const toBeTurnedToMd = snapshot.parsed?.content;
-        let turnDownService = new TurndownService();
+        const toBeTurnedToMd = mode === 'full-markdown' ? snapshot.html : snapshot.parsed?.content;
+        let turnDownService = mode === 'markdown' ? this.getTurndown('without any rule') : this.getTurndown();
         for (const plugin of this.turnDownPlugins) {
             turnDownService = turnDownService.use(plugin);
         }
@@ -129,7 +145,7 @@ export class CrawlerHost extends RPCHost {
                 if (mapped) {
                     return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
                 }
-                return `![Image ${imgIdx}: ${alt}](${src})`;
+                return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
             }
         });
 
@@ -139,7 +155,7 @@ export class CrawlerHost extends RPCHost {
                 contentText = turnDownService.turndown(toBeTurnedToMd).trim();
             } catch (err) {
                 this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                const vanillaTurnDownService = new TurndownService();
+                const vanillaTurnDownService = this.getTurndown();
                 try {
                     contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
                 } catch (err2) {
@@ -148,12 +164,15 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
-        if (!contentText || (contentText.startsWith('<') && contentText.endsWith('>'))) {
+        if (
+            !contentText || (contentText.startsWith('<') && contentText.endsWith('>'))
+            && toBeTurnedToMd !== snapshot.html
+        ) {
             try {
                 contentText = turnDownService.turndown(snapshot.html);
             } catch (err) {
                 this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                const vanillaTurnDownService = new TurndownService();
+                const vanillaTurnDownService = this.getTurndown();
                 try {
                     contentText = vanillaTurnDownService.turndown(snapshot.html);
                 } catch (err2) {
@@ -177,6 +196,10 @@ export class CrawlerHost extends RPCHost {
                 const mixins = [];
                 if (this.publishedTime) {
                     mixins.push(`Published Time: ${this.publishedTime}`);
+                }
+
+                if (mode === 'full-markdown') {
+                    return this.content;
                 }
 
                 return `Title: ${this.title}
@@ -233,6 +256,7 @@ ${this.content}
                         description: `Specifies the form factor of the crawled data you prefer. \n\n` +
                             `Supported formats:\n` +
                             `- markdown\n` +
+                            `- full-markdown\n` +
                             `- html\n` +
                             `- text\n` +
                             `- screenshot\n\n` +
