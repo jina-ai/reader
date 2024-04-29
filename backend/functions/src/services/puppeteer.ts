@@ -175,8 +175,8 @@ function giveSnapshot() {
     const r = {
         title: document.title,
         href: document.location.href,
-        html: document.documentElement.outerHTML,
-        text: document.body.innerText,
+        html: document.documentElement?.outerHTML,
+        text: document.body?.innerText,
         parsed: parsed,
         imgs: [],
     };
