@@ -6,6 +6,7 @@ import {
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { CloudHTTPv2, Ctx, FirebaseStorageBucketControl, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { RateLimitControl } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
@@ -36,6 +37,7 @@ export class CrawlerHost extends RPCHost {
         protected puppeteerControl: PuppeteerControl,
         protected altTextService: AltTextService,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
+        protected rateLimitControl: RateLimitControl,
     ) {
         super(...arguments);
 
@@ -113,7 +115,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
-        let turnDownService = mode === 'markdown' ?  this.getTurndown() : this.getTurndown('without any rule');
+        let turnDownService = mode === 'markdown' ? this.getTurndown() : this.getTurndown('without any rule');
         for (const plugin of this.turnDownPlugins) {
             turnDownService = turnDownService.use(plugin);
         }
@@ -295,6 +297,13 @@ ${this.content}
             res: Response,
         },
     ) {
+        if (ctx.req.ip) {
+            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'], [
+                // 100 requests per minute
+                new Date(Date.now() - 60 * 1000), 100
+            ]);
+        }
+
         const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
             return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
