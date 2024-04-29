@@ -82,6 +82,7 @@ export class PuppeteerControl extends AsyncService {
             return page;
         },
         destroy: async (page) => {
+            await page.removeExposedFunction('reportSnapshot');
             await page.browserContext().close();
         },
         validate: async (page) => {
@@ -198,6 +199,9 @@ function giveSnapshot() {
         await page.evaluateOnNewDocument(`
 let aftershot = undefined;
 const handlePageLoad = () => {
+    if (window.haltSnapshot) {
+        return;
+    }
     if (document.readyState !== 'complete') {
         return;
     }
