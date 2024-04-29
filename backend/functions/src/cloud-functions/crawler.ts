@@ -219,7 +219,7 @@ ${this.content}
         name: 'crawl2',
         runtime: {
             memory: '4GiB',
-            timeoutSeconds: 540,
+            timeoutSeconds: 300,
             concurrency: 4,
         },
         tags: ['Crawler'],
@@ -229,10 +229,10 @@ ${this.content}
     })
     @CloudHTTPv2({
         runtime: {
-            memory: '8GiB',
-            timeoutSeconds: 540,
-            concurrency: 21,
-            maxInstances: 476,
+            memory: '4GiB',
+            timeoutSeconds: 300,
+            concurrency: 16,
+            maxInstances: 625,
         },
         openapi: {
             operation: {
