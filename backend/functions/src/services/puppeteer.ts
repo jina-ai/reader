@@ -193,7 +193,9 @@ function giveSnapshot() {
     return r;
 }
 `));
-        preparations.push(page.evaluateOnNewDocument(`
+        await Promise.all(preparations);
+
+        await page.evaluateOnNewDocument(`
 let aftershot = undefined;
 const handlePageLoad = () => {
     if (document.readyState !== 'complete') {
@@ -215,8 +217,7 @@ const handlePageLoad = () => {
 };
 document.addEventListener('readystatechange', handlePageLoad);
 document.addEventListener('load', handlePageLoad);
-`));
-        await Promise.all(preparations);
+`);
 
         // TODO: further setup the page;
 
