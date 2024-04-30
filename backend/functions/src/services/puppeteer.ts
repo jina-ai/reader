@@ -82,6 +82,7 @@ export class PuppeteerControl extends AsyncService {
             return page;
         },
         destroy: async (page) => {
+            await page.removeExposedFunction('reportSnapshot');
             await page.browserContext().close();
         },
         validate: async (page) => {
@@ -174,8 +175,8 @@ function giveSnapshot() {
     const r = {
         title: document.title,
         href: document.location.href,
-        html: document.documentElement.outerHTML,
-        text: document.body.innerText,
+        html: document.documentElement?.outerHTML,
+        text: document.body?.innerText,
         parsed: parsed,
         imgs: [],
     };
@@ -193,9 +194,14 @@ function giveSnapshot() {
     return r;
 }
 `));
-        preparations.push(page.evaluateOnNewDocument(`
+        await Promise.all(preparations);
+
+        await page.evaluateOnNewDocument(`
 let aftershot = undefined;
 const handlePageLoad = () => {
+    if (window.haltSnapshot) {
+        return;
+    }
     if (document.readyState !== 'complete') {
         return;
     }
@@ -215,8 +221,7 @@ const handlePageLoad = () => {
 };
 document.addEventListener('readystatechange', handlePageLoad);
 document.addEventListener('load', handlePageLoad);
-`));
-        await Promise.all(preparations);
+`);
 
         // TODO: further setup the page;
 
