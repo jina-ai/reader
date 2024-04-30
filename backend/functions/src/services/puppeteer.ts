@@ -2,7 +2,7 @@ import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
 import genericPool from 'generic-pool';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, Page } from 'puppeteer';
@@ -82,8 +82,16 @@ export class PuppeteerControl extends AsyncService {
             return page;
         },
         destroy: async (page) => {
-            await page.removeExposedFunction('reportSnapshot');
-            await page.browserContext().close();
+            await Promise.race([
+                (async () => {
+                    const ctx = page.browserContext();
+                    await page.removeExposedFunction('reportSnapshot');
+                    await page.close();
+                    await ctx.close();
+                })(), delay(5000)
+            ]).catch((err) => {
+                this.logger.error(`Failed to destroy page`, { err: marshalErrorLike(err) });
+            });
         },
         validate: async (page) => {
             return page.browser().connected && !page.isClosed();
@@ -95,13 +103,20 @@ export class PuppeteerControl extends AsyncService {
         testOnBorrow: true,
         testOnReturn: true,
         autostart: false,
+        priorityRange: 3
     });
+
+    private __healthCheckInterval?: NodeJS.Timeout;
 
     constructor(protected globalLogger: Logger) {
         super(...arguments);
     }
 
     override async init() {
+        if (this.__healthCheckInterval) {
+            clearInterval(this.__healthCheckInterval);
+            this.__healthCheckInterval = undefined;
+        }
         await this.dependencyReady();
         this.logger.info(`PuppeteerControl initializing with pool size ${this.pagePool.max}`, { poolSize: this.pagePool.max });
         this.pagePool.start();
@@ -110,7 +125,7 @@ export class PuppeteerControl extends AsyncService {
             if (this.browser.connected) {
                 await this.browser.close();
             } else {
-                this.browser.process()?.kill();
+                this.browser.process()?.kill('SIGKILL');
             }
         }
         this.browser = await puppeteer.launch({
@@ -130,6 +145,27 @@ export class PuppeteerControl extends AsyncService {
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}`);
 
         this.emit('ready');
+
+        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
+    }
+
+    @maxConcurrency(1)
+    async healthCheck() {
+        const healthyPage = await Promise.race([this.pagePool.acquire(3), delay(60_000).then(() => null)]).catch((err) => {
+            this.logger.error(`Health check failed`, { err: marshalErrorLike(err) });
+            return null;
+        });
+
+        if (healthyPage) {
+            this.pagePool.release(healthyPage);
+            return;
+        }
+
+        this.logger.warn(`Health check failed, trying to clean up.`);
+        await this.pagePool.clear();
+        this.browser.process()?.kill('SIGKILL');
+        Reflect.deleteProperty(this, 'browser');
+        this.emit('crippled');
     }
 
     async newPage() {
