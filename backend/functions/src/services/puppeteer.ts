@@ -151,21 +151,24 @@ export class PuppeteerControl extends AsyncService {
 
     @maxConcurrency(1)
     async healthCheck() {
-        const healthyPage = await Promise.race([this.pagePool.acquire(3), delay(60_000).then(() => null)]).catch((err) => {
-            this.logger.error(`Health check failed`, { err: marshalErrorLike(err) });
+        this.pagePool.max += 1;
+        const healthyPage = await this.pagePool.acquire(3).catch((err) => {
+            this.logger.warn(`Health check failed`, { err: marshalErrorLike(err) });
             return null;
         });
+        this.pagePool.max -= 1;
 
         if (healthyPage) {
             this.pagePool.release(healthyPage);
             return;
         }
 
-        this.logger.warn(`Health check failed, trying to clean up.`);
+        this.logger.warn(`Trying to clean up...`);
         await this.pagePool.clear();
         this.browser.process()?.kill('SIGKILL');
         Reflect.deleteProperty(this, 'browser');
         this.emit('crippled');
+        this.logger.warn(`Browser killed`);
     }
 
     async newPage() {
