@@ -10,6 +10,7 @@ import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
+import { ServiceCrashedError } from '../shared/lib/errors';
 
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -85,7 +86,6 @@ export class PuppeteerControl extends AsyncService {
             await Promise.race([
                 (async () => {
                     const ctx = page.browserContext();
-                    await page.removeExposedFunction('reportSnapshot');
                     await page.close();
                     await ctx.close();
                 })(), delay(5000)
@@ -110,6 +110,7 @@ export class PuppeteerControl extends AsyncService {
 
     constructor(protected globalLogger: Logger) {
         super(...arguments);
+        this.setMaxListeners(2 * this.pagePool.max + 1);
     }
 
     override async init() {
@@ -141,12 +142,13 @@ export class PuppeteerControl extends AsyncService {
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
             this.emit('crippled');
+            process.nextTick(()=> this.serviceReady());
         });
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}`);
 
         this.emit('ready');
 
-        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
+        // this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
     }
 
     @maxConcurrency(1)
@@ -235,6 +237,8 @@ function giveSnapshot() {
 `));
         await Promise.all(preparations);
 
+        await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+
         await page.evaluateOnNewDocument(`
 let aftershot = undefined;
 const handlePageLoad = () => {
@@ -262,8 +266,6 @@ document.addEventListener('readystatechange', handlePageLoad);
 document.addEventListener('load', handlePageLoad);
 `);
 
-        // TODO: further setup the page;
-
         return page;
     }
 
@@ -272,7 +274,6 @@ document.addEventListener('load', handlePageLoad);
         const url = parsedUrl.toString();
 
         this.logger.info(`Scraping ${url}`, { url });
-
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
 
@@ -285,6 +286,11 @@ document.addEventListener('load', handlePageLoad);
         }
 
         let nextSnapshotDeferred = Defer();
+        const crippleListener = () => nextSnapshotDeferred.reject(new ServiceCrashedError({ message: `Browser crashed, try again` }));
+        this.once('crippled', crippleListener);
+        nextSnapshotDeferred.promise.finally(() => {
+            this.off('crippled', crippleListener);
+        });
         let finalized = false;
         const hdl = (s: any) => {
             if (snapshot === s) {
@@ -293,6 +299,10 @@ document.addEventListener('load', handlePageLoad);
             snapshot = s;
             nextSnapshotDeferred.resolve(s);
             nextSnapshotDeferred = Defer();
+            this.once('crippled', crippleListener);
+            nextSnapshotDeferred.promise.finally(() => {
+                this.off('crippled', crippleListener);
+            });
         };
         page.on('snapshot', hdl);
 
