@@ -148,7 +148,7 @@ export class PuppeteerControl extends AsyncService {
 
         this.emit('ready');
 
-        // this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
+        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
     }
 
     @maxConcurrency(1)
