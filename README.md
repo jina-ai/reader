@@ -14,6 +14,7 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 
 ## Updates
 
+- **2024-05-03**: We finally resolved a DDoS attack since April 29th. Now our API is much more reliable and scalable than ever!
 - **2024-04-24**: You now have more fine-grained control over Reader API [using headers](#using-request-headers), e.g. forwarding cookies, using HTTP proxy.
 - **2024-04-15**: Reader now supports image reading! It captions all images at the specified URL and adds `Image [idx]: [caption]` as an alt tag (if they initially lack one). This enables downstream LLMs to interact with the images in reasoning, summarizing etc. [See example here](https://x.com/JinaAI_/status/1780094402071023926).
 
