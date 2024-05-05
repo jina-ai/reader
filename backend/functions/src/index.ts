@@ -27,3 +27,7 @@ process.on('uncaughtException', (err) => {
     console.error('Uncaught exception, process quit.');
     throw err;
 });
+
+if (!process.env.FUNCTIONS_EMULATOR) {
+    registry.walk_around_firebase_stall = true;
+}
