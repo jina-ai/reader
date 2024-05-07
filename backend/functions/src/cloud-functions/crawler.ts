@@ -307,14 +307,15 @@ ${this.content}
         const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
             const latestUser: JinaUserBrief | undefined = uid ? await auth.getBrief('NO-CACHE') : undefined;
+            const authMixin = latestUser ? `
+[Authenticated as] ${latestUser.full_name}
+[Balance left] ${latestUser.wallet.total_balance}
+` : '';
 
             return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
 [Homepage] https://jina.ai/reader
 [Source code] https://github.com/jina-ai/reader
-
-[Authenticated as] ${latestUser?.full_name || 'anonymous'}
-[Balance left] ${latestUser?.wallet.total_balance || 'n/a'}
-`,
+${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
