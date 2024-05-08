@@ -291,6 +291,11 @@ ${this.content}
                         in: 'header',
                         schema: { type: 'string' }
                     },
+                    'X-With-Generated-Alt': {
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
                 }
             }
         },
