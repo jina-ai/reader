@@ -308,7 +308,7 @@ ${this.content}
         if (!noSlashURL) {
             const latestUser: JinaUserBrief | undefined = uid ? await auth.getBrief('NO-CACHE') : undefined;
             const authMixin = latestUser ? `
-[Authenticated as] ${latestUser.full_name}
+[Authenticated as] ${latestUser.user_id} (${latestUser.full_name})
 [Balance left] ${latestUser.wallet.total_balance}
 ` : '';
 
@@ -335,7 +335,7 @@ ${authMixin}`,
 
             rpcReflect.finally(() => {
                 if (chargeAmount) {
-                    auth.reportUsage(chargeAmount).catch((err) => {
+                    auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
                 }
