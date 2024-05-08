@@ -368,6 +368,7 @@ document.addEventListener('load', handlePageLoad);
                     this.logger.warn(`Failed to destroy page`, { err: marshalErrorLike(err) });
                 });
             });
+            nextSnapshotDeferred.resolve();
         }
     }
 
