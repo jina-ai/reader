@@ -5,7 +5,7 @@ import {
     AssertionFailureError, ParamValidationError,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import { RateLimitControl } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -19,6 +19,9 @@ import { Crawled } from '../db/crawled';
 import { tidyMarkdown } from '../utils/markdown';
 import { cleanAttribute } from '../utils/misc';
 import { randomUUID } from 'crypto';
+import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
+
+import { countGPTToken as estimateToken } from '../shared/utils/openai';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -310,23 +313,55 @@ ${this.content}
             req: Request,
             res: Response,
         },
+        auth: JinaEmbeddingsAuthDTO
     ) {
-        if (ctx.req.ip) {
-            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'], [
-                // 100 requests per minute
-                new Date(Date.now() - 60 * 1000), 100
-            ]);
-        }
-
+        const uid = await auth.solveUID();
+        let chargeAmount = 0;
         const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
+            const latestUser = uid ? await auth.assertUser() : undefined;
+            const authMixin = latestUser ? `
+[Authenticated as] ${latestUser.user_id} (${latestUser.full_name})
+[Balance left] ${latestUser.wallet.total_balance}
+` : '';
+
             return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
 [Homepage] https://jina.ai/reader
 [Source code] https://github.com/jina-ai/reader
-`,
+${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
+
+        if (uid) {
+            const user = await auth.assertUser();
+            if (!(user.wallet.total_balance > 0)) {
+                throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
+            }
+
+            await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
+                [
+                    // 1000 requests per minute
+                    new Date(Date.now() - 60 * 1000), 1000
+                ]
+            );
+
+            rpcReflect.finally(() => {
+                if (chargeAmount) {
+                    auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
+                        this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
+                    });
+                }
+            });
+        } else if (ctx.req.ip) {
+            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
+                [
+                    // 100 requests per minute
+                    new Date(Date.now() - 60 * 1000), 100
+                ]
+            );
+        }
+
         let urlToCrawl;
         try {
             urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false }));
@@ -380,7 +415,7 @@ ${this.content}
                     }
 
                     const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
-
+                    chargeAmount = this.getChargeAmount(formatted);
                     sseStream.write({
                         event: 'data',
                         data: formatted,
@@ -408,6 +443,7 @@ ${this.content}
                 }
 
                 const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+                chargeAmount = this.getChargeAmount(formatted);
 
                 return formatted;
             }
@@ -416,7 +452,10 @@ ${this.content}
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            return await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+            const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+            chargeAmount = this.getChargeAmount(formatted);
+
+            return formatted;
         }
 
         for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
@@ -426,6 +465,7 @@ ${this.content}
             }
 
             const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+            chargeAmount = this.getChargeAmount(formatted);
             if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
                 return assignTransferProtocolMeta(`${formatted}`,
@@ -441,6 +481,7 @@ ${this.content}
         }
 
         const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+        chargeAmount = this.getChargeAmount(formatted);
         if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
             return assignTransferProtocolMeta(`${formatted}`,
@@ -577,6 +618,23 @@ ${this.content}
             }
             throw err;
         }
+    }
+
+    getChargeAmount(formatted: { [k: string]: any; }) {
+        const textContent = formatted?.content || formatted?.text || formatted?.html;
+
+        if (typeof textContent === 'string') {
+            return estimateToken(textContent);
+        }
+
+        const imageContent = formatted.screenshotUrl || formatted?.screenshot;
+
+        if (imageContent) {
+            // OpenAI image token count for 1024x1024 image
+            return 765;
+        }
+
+        return undefined;
     }
 
 }
