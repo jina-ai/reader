@@ -72,6 +72,7 @@ As you have already seen above, one can control the behavior of the Reader API u
   - `x-respond-with: screenshot` returns the URL of the webpage's screenshot
 - You can specify a proxy server via the `x-proxy-url` header.
 - You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
+- You can enable alt-text generation feature via the `x-with-generated-alt` header.
 
 ### JSON mode (super early beta)
 

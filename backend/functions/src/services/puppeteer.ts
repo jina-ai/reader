@@ -193,17 +193,26 @@ export class PuppeteerControl extends AsyncService {
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
         preparations.push(page.evaluateOnNewDocument(`
 function briefImgs(elem) {
-    const imageTags = Array.from((elem || document).querySelectorAll('img[src]'));
+    const imageTags = Array.from((elem || document).querySelectorAll('img[src],img[data-src]'));
 
-    return imageTags.map((x)=> ({
-        src: x.src,
-        loaded: x.complete,
-        width: x.width,
-        height: x.height,
-        naturalWidth: x.naturalWidth,
-        naturalHeight: x.naturalHeight,
-        alt: x.alt || x.title,
-    }));
+    return imageTags.map((x)=> {
+        let linkPreferredSrc = x.src;
+        if (linkPreferredSrc.startsWith('data:')) {
+            if (typeof x.dataset?.src === 'string' && !x.dataset.src.startsWith('data:')) {
+                linkPreferredSrc = x.dataset.src;
+            }
+        }
+
+        return {
+            src: linkPreferredSrc,
+            loaded: x.complete,
+            width: x.width,
+            height: x.height,
+            naturalWidth: x.naturalWidth,
+            naturalHeight: x.naturalHeight,
+            alt: x.alt || x.title,
+        };
+    });
 }
 function giveSnapshot() {
     let parsed;

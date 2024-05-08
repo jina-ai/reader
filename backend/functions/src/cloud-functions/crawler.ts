@@ -5,7 +5,7 @@ import {
     AssertionFailureError, ParamValidationError,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import { RateLimitControl } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -41,6 +41,7 @@ export class CrawlerHost extends RPCHost {
         protected altTextService: AltTextService,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected rateLimitControl: RateLimitControl,
+        protected threadLocal: AsyncContext,
     ) {
         super(...arguments);
 
@@ -123,8 +124,8 @@ export class CrawlerHost extends RPCHost {
             turnDownService = turnDownService.use(plugin);
         }
         const urlToAltMap: { [k: string]: string | undefined; } = {};
-        if (snapshot.imgs?.length) {
-            const tasks = (snapshot.imgs || []).map(async (x) => {
+        if (snapshot.imgs?.length && this.threadLocal.get('withGeneratedAlt')) {
+            const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
                 const r = await this.altTextService.getAltText(x).catch((err: any) => {
                     this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
                     return undefined;
@@ -140,7 +141,15 @@ export class CrawlerHost extends RPCHost {
         turnDownService.addRule('img-generated-alt', {
             filter: 'img',
             replacement: (_content, node) => {
-                const src = (node.getAttribute('src') || '').trim();
+                let linkPreferredSrc = (node.getAttribute('src') || '').trim();
+                if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
+                    const dataSrc = (node.getAttribute('data-src') || '').trim();
+                    if (dataSrc && !dataSrc.startsWith('data:')) {
+                        linkPreferredSrc = dataSrc;
+                    }
+                }
+
+                const src = linkPreferredSrc;
                 const alt = cleanAttribute(node.getAttribute('alt'));
                 if (!src) {
                     return '';
@@ -285,6 +294,11 @@ ${this.content}
                         in: 'header',
                         schema: { type: 'string' }
                     },
+                    'X-With-Generated-Alt': {
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
                 }
             }
         },
@@ -365,6 +379,7 @@ ${authMixin}`,
         }
 
         const customMode = ctx.req.get('x-respond-with') || 'default';
+        const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
@@ -381,6 +396,7 @@ ${authMixin}`,
                 domain: urlToCrawl.hostname,
             });
         }
+        this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
 
         const crawlOpts: ScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
