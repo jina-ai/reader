@@ -12,7 +12,7 @@ const md5Hasher = new HashManager('md5', 'hex');
 @singleton()
 export class AltTextService extends AsyncService {
 
-    nonsenseAlts = 'image,img,photo,picture,pic,alt'.split(',');
+    altsToIgnore = 'image,img,photo,picture,pic,alt,figure,fig'.split(',');
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     constructor(
@@ -49,7 +49,7 @@ export class AltTextService extends AsyncService {
         if (!imgBrief.src) {
             return undefined;
         }
-        if (imgBrief.alt && !this.nonsenseAlts.includes(imgBrief.alt.trim().toLowerCase())) {
+        if (imgBrief.alt && !this.altsToIgnore.includes(imgBrief.alt.trim().toLowerCase())) {
             return imgBrief.alt;
         }
         const digest = md5Hasher.hash(imgBrief.src);

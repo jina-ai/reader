@@ -122,7 +122,7 @@ export class CrawlerHost extends RPCHost {
         }
         const urlToAltMap: { [k: string]: string | undefined; } = {};
         if (snapshot.imgs?.length && this.threadLocal.get('withGeneratedAlt')) {
-            const tasks = (snapshot.imgs || []).map(async (x) => {
+            const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
                 const r = await this.altTextService.getAltText(x).catch((err: any) => {
                     this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
                     return undefined;
