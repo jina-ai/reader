@@ -22,7 +22,6 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { JinaUserBrief } from '../shared/3rd-party/jina-embeddings';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -306,7 +305,7 @@ ${this.content}
         let chargeAmount = 0;
         const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
-            const latestUser: JinaUserBrief | undefined = uid ? await auth.getBrief('NO-CACHE') : undefined;
+            const latestUser = uid ? await auth.assertUser() : undefined;
             const authMixin = latestUser ? `
 [Authenticated as] ${latestUser.user_id} (${latestUser.full_name})
 [Balance left] ${latestUser.wallet.total_balance}
