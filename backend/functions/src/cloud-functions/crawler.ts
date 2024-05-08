@@ -336,7 +336,7 @@ ${authMixin}`,
             rpcReflect.finally(() => {
                 if (chargeAmount) {
                     auth.reportUsage(chargeAmount).catch((err) => {
-                        this.logger.warn(``);
+                        this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
                 }
             });
