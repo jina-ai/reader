@@ -16,7 +16,6 @@ import TurndownService from 'turndown';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import type { CookieParam } from 'puppeteer';
 import { Crawled } from '../db/crawled';
-import { tidyMarkdown } from '../utils/markdown';
 import { cleanAttribute } from '../utils/misc';
 import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
@@ -198,7 +197,7 @@ export class CrawlerHost extends RPCHost {
             contentText = snapshot.text;
         }
 
-        const cleanText = tidyMarkdown(contentText || '').trim();
+        const cleanText = (contentText || '').trim();
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
