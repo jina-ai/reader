@@ -5,7 +5,7 @@ import {
     AssertionFailureError, ParamValidationError,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { CloudHTTPv2, Ctx, FirebaseStorageBucketControl, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import { RateLimitControl } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -16,9 +16,11 @@ import TurndownService from 'turndown';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import type { CookieParam } from 'puppeteer';
 import { Crawled } from '../db/crawled';
-import { tidyMarkdown } from '../utils/markdown';
 import { cleanAttribute } from '../utils/misc';
 import { randomUUID } from 'crypto';
+import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
+
+import { countGPTToken as estimateToken } from '../shared/utils/openai';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -38,6 +40,7 @@ export class CrawlerHost extends RPCHost {
         protected altTextService: AltTextService,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected rateLimitControl: RateLimitControl,
+        protected threadLocal: AsyncContext,
     ) {
         super(...arguments);
 
@@ -72,6 +75,38 @@ export class CrawlerHost extends RPCHost {
                 replacement: (innerText) => `${innerText}\n===============\n`
             });
         }
+        turnDownService.addRule('improved-paragraph', {
+            filter: 'p',
+            replacement: (innerText) => {
+                const trimmed = innerText.trim();
+                if (!trimmed) {
+                    return '';
+                }
+
+                return `${trimmed.replace(/\n{3,}/g, '\n\n')}\n\n`;
+            }
+        });
+        turnDownService.addRule('improved-inline-link', {
+            filter: function (node, options) {
+                return (
+                    options.linkStyle === 'inlined' &&
+                    node.nodeName === 'A' &&
+                    node.getAttribute('href')
+                );
+            },
+
+            replacement: function (content, node) {
+                let href = node.getAttribute('href');
+                if (href) href = href.replace(/([()])/g, '\\$1');
+                let title = cleanAttribute(node.getAttribute('title'));
+                if (title) title = ' "' + title.replace(/"/g, '\\"') + '"';
+
+                const fixedContent = content.replace(/\s+/g, ' ').trim();
+                const fixedHref = href.replace(/\s+/g, '').trim();
+
+                return `[${fixedContent}](${fixedHref}${title || ''})`;
+            }
+        });
 
         return turnDownService;
     }
@@ -120,8 +155,8 @@ export class CrawlerHost extends RPCHost {
             turnDownService = turnDownService.use(plugin);
         }
         const urlToAltMap: { [k: string]: string | undefined; } = {};
-        if (snapshot.imgs?.length) {
-            const tasks = (snapshot.imgs || []).map(async (x) => {
+        if (snapshot.imgs?.length && this.threadLocal.get('withGeneratedAlt')) {
+            const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
                 const r = await this.altTextService.getAltText(x).catch((err: any) => {
                     this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
                     return undefined;
@@ -137,7 +172,15 @@ export class CrawlerHost extends RPCHost {
         turnDownService.addRule('img-generated-alt', {
             filter: 'img',
             replacement: (_content, node) => {
-                const src = (node.getAttribute('src') || '').trim();
+                let linkPreferredSrc = (node.getAttribute('src') || '').trim();
+                if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
+                    const dataSrc = (node.getAttribute('data-src') || '').trim();
+                    if (dataSrc && !dataSrc.startsWith('data:')) {
+                        linkPreferredSrc = dataSrc;
+                    }
+                }
+
+                const src = linkPreferredSrc;
                 const alt = cleanAttribute(node.getAttribute('alt'));
                 if (!src) {
                     return '';
@@ -186,7 +229,7 @@ export class CrawlerHost extends RPCHost {
             contentText = snapshot.text;
         }
 
-        const cleanText = tidyMarkdown(contentText || '').trim();
+        const cleanText = (contentText || '').trim();
 
         const formatted = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
@@ -282,6 +325,11 @@ ${this.content}
                         in: 'header',
                         schema: { type: 'string' }
                     },
+                    'X-With-Generated-Alt': {
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
                 }
             }
         },
@@ -296,23 +344,55 @@ ${this.content}
             req: Request,
             res: Response,
         },
+        auth: JinaEmbeddingsAuthDTO
     ) {
-        if (ctx.req.ip) {
-            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'], [
-                // 100 requests per minute
-                new Date(Date.now() - 60 * 1000), 100
-            ]);
-        }
-
+        const uid = await auth.solveUID();
+        let chargeAmount = 0;
         const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
+            const latestUser = uid ? await auth.assertUser() : undefined;
+            const authMixin = latestUser ? `
+[Authenticated as] ${latestUser.user_id} (${latestUser.full_name})
+[Balance left] ${latestUser.wallet.total_balance}
+` : '';
+
             return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
 [Homepage] https://jina.ai/reader
 [Source code] https://github.com/jina-ai/reader
-`,
+${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
+
+        if (uid) {
+            const user = await auth.assertUser();
+            if (!(user.wallet.total_balance > 0)) {
+                throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
+            }
+
+            await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
+                [
+                    // 1000 requests per minute
+                    new Date(Date.now() - 60 * 1000), 1000
+                ]
+            );
+
+            rpcReflect.finally(() => {
+                if (chargeAmount) {
+                    auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
+                        this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
+                    });
+                }
+            });
+        } else if (ctx.req.ip) {
+            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
+                [
+                    // 100 requests per minute
+                    new Date(Date.now() - 60 * 1000), 100
+                ]
+            );
+        }
+
         let urlToCrawl;
         try {
             urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false }));
@@ -330,6 +410,7 @@ ${this.content}
         }
 
         const customMode = ctx.req.get('x-respond-with') || 'default';
+        const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
@@ -346,6 +427,7 @@ ${this.content}
                 domain: urlToCrawl.hostname,
             });
         }
+        this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
 
         const crawlOpts: ScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
@@ -364,7 +446,7 @@ ${this.content}
                     }
 
                     const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
-
+                    chargeAmount = this.getChargeAmount(formatted);
                     sseStream.write({
                         event: 'data',
                         data: formatted,
@@ -392,6 +474,7 @@ ${this.content}
                 }
 
                 const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+                chargeAmount = this.getChargeAmount(formatted);
 
                 return formatted;
             }
@@ -400,7 +483,10 @@ ${this.content}
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            return await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+            const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+            chargeAmount = this.getChargeAmount(formatted);
+
+            return formatted;
         }
 
         for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
@@ -410,6 +496,7 @@ ${this.content}
             }
 
             const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+            chargeAmount = this.getChargeAmount(formatted);
             if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
                 return assignTransferProtocolMeta(`${formatted}`,
@@ -425,6 +512,7 @@ ${this.content}
         }
 
         const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+        chargeAmount = this.getChargeAmount(formatted);
         if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
             return assignTransferProtocolMeta(`${formatted}`,
@@ -561,6 +649,23 @@ ${this.content}
             }
             throw err;
         }
+    }
+
+    getChargeAmount(formatted: { [k: string]: any; }) {
+        const textContent = formatted?.content || formatted?.text || formatted?.html;
+
+        if (typeof textContent === 'string') {
+            return estimateToken(textContent);
+        }
+
+        const imageContent = formatted.screenshotUrl || formatted?.screenshot;
+
+        if (imageContent) {
+            // OpenAI image token count for 1024x1024 image
+            return 765;
+        }
+
+        return undefined;
     }
 
 }

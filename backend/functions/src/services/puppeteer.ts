@@ -2,7 +2,7 @@ import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
 import genericPool from 'generic-pool';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, Page } from 'puppeteer';
@@ -10,6 +10,7 @@ import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
+import { ServiceCrashedError } from '../shared/lib/errors';
 
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -82,8 +83,15 @@ export class PuppeteerControl extends AsyncService {
             return page;
         },
         destroy: async (page) => {
-            await page.removeExposedFunction('reportSnapshot');
-            await page.browserContext().close();
+            await Promise.race([
+                (async () => {
+                    const ctx = page.browserContext();
+                    await page.close();
+                    await ctx.close();
+                })(), delay(5000)
+            ]).catch((err) => {
+                this.logger.error(`Failed to destroy page`, { err: marshalErrorLike(err) });
+            });
         },
         validate: async (page) => {
             return page.browser().connected && !page.isClosed();
@@ -95,13 +103,21 @@ export class PuppeteerControl extends AsyncService {
         testOnBorrow: true,
         testOnReturn: true,
         autostart: false,
+        priorityRange: 3
     });
+
+    private __healthCheckInterval?: NodeJS.Timeout;
 
     constructor(protected globalLogger: Logger) {
         super(...arguments);
+        this.setMaxListeners(2 * this.pagePool.max + 1);
     }
 
     override async init() {
+        if (this.__healthCheckInterval) {
+            clearInterval(this.__healthCheckInterval);
+            this.__healthCheckInterval = undefined;
+        }
         await this.dependencyReady();
         this.logger.info(`PuppeteerControl initializing with pool size ${this.pagePool.max}`, { poolSize: this.pagePool.max });
         this.pagePool.start();
@@ -110,7 +126,7 @@ export class PuppeteerControl extends AsyncService {
             if (this.browser.connected) {
                 await this.browser.close();
             } else {
-                this.browser.process()?.kill();
+                this.browser.process()?.kill('SIGKILL');
             }
         }
         this.browser = await puppeteer.launch({
@@ -126,10 +142,35 @@ export class PuppeteerControl extends AsyncService {
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
             this.emit('crippled');
+            process.nextTick(()=> this.serviceReady());
         });
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}`);
 
         this.emit('ready');
+
+        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
+    }
+
+    @maxConcurrency(1)
+    async healthCheck() {
+        this.pagePool.max += 1;
+        const healthyPage = await this.pagePool.acquire(3).catch((err) => {
+            this.logger.warn(`Health check failed`, { err: marshalErrorLike(err) });
+            return null;
+        });
+        this.pagePool.max -= 1;
+
+        if (healthyPage) {
+            this.pagePool.release(healthyPage);
+            return;
+        }
+
+        this.logger.warn(`Trying to clean up...`);
+        await this.pagePool.clear();
+        this.browser.process()?.kill('SIGKILL');
+        Reflect.deleteProperty(this, 'browser');
+        this.emit('crippled');
+        this.logger.warn(`Browser killed`);
     }
 
     async newPage() {
@@ -152,17 +193,26 @@ export class PuppeteerControl extends AsyncService {
         preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
         preparations.push(page.evaluateOnNewDocument(`
 function briefImgs(elem) {
-    const imageTags = Array.from((elem || document).querySelectorAll('img[src]'));
+    const imageTags = Array.from((elem || document).querySelectorAll('img[src],img[data-src]'));
 
-    return imageTags.map((x)=> ({
-        src: x.src,
-        loaded: x.complete,
-        width: x.width,
-        height: x.height,
-        naturalWidth: x.naturalWidth,
-        naturalHeight: x.naturalHeight,
-        alt: x.alt || x.title,
-    }));
+    return imageTags.map((x)=> {
+        let linkPreferredSrc = x.src;
+        if (linkPreferredSrc.startsWith('data:')) {
+            if (typeof x.dataset?.src === 'string' && !x.dataset.src.startsWith('data:')) {
+                linkPreferredSrc = x.dataset.src;
+            }
+        }
+
+        return {
+            src: linkPreferredSrc,
+            loaded: x.complete,
+            width: x.width,
+            height: x.height,
+            naturalWidth: x.naturalWidth,
+            naturalHeight: x.naturalHeight,
+            alt: x.alt || x.title,
+        };
+    });
 }
 function giveSnapshot() {
     let parsed;
@@ -196,6 +246,8 @@ function giveSnapshot() {
 `));
         await Promise.all(preparations);
 
+        await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+
         await page.evaluateOnNewDocument(`
 let aftershot = undefined;
 const handlePageLoad = () => {
@@ -223,8 +275,6 @@ document.addEventListener('readystatechange', handlePageLoad);
 document.addEventListener('load', handlePageLoad);
 `);
 
-        // TODO: further setup the page;
-
         return page;
     }
 
@@ -233,7 +283,6 @@ document.addEventListener('load', handlePageLoad);
         const url = parsedUrl.toString();
 
         this.logger.info(`Scraping ${url}`, { url });
-
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
 
@@ -246,6 +295,11 @@ document.addEventListener('load', handlePageLoad);
         }
 
         let nextSnapshotDeferred = Defer();
+        const crippleListener = () => nextSnapshotDeferred.reject(new ServiceCrashedError({ message: `Browser crashed, try again` }));
+        this.once('crippled', crippleListener);
+        nextSnapshotDeferred.promise.finally(() => {
+            this.off('crippled', crippleListener);
+        });
         let finalized = false;
         const hdl = (s: any) => {
             if (snapshot === s) {
@@ -254,6 +308,10 @@ document.addEventListener('load', handlePageLoad);
             snapshot = s;
             nextSnapshotDeferred.resolve(s);
             nextSnapshotDeferred = Defer();
+            this.once('crippled', crippleListener);
+            nextSnapshotDeferred.promise.finally(() => {
+                this.off('crippled', crippleListener);
+            });
         };
         page.on('snapshot', hdl);
 
@@ -310,6 +368,7 @@ document.addEventListener('load', handlePageLoad);
                     this.logger.warn(`Failed to destroy page`, { err: marshalErrorLike(err) });
                 });
             });
+            nextSnapshotDeferred.resolve();
         }
     }
 
