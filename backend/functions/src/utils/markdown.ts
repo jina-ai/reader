@@ -1,9 +1,6 @@
 export function tidyMarkdown(markdown: string): string {
     const lines = markdown.split('\n');
     const processedLines = lines.map((line) => {
-        // Remove leading spaces from each line
-        line = line.replace(/^[ \t]+/, '');
-
         // Handle complex broken links with text and optional images
         line = line.replace(/\[\s*([^\]\n!]*?)\s*(?:!\[([^\]]*)\]\((.*?)\))?\s*\]\s*\(\s*([^)\n]+)\s*\)/g, (match, text, alt, imgUrl, linkUrl) => {
             text = text.replace(/\s+/g, ' ').trim();
