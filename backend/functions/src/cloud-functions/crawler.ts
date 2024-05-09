@@ -75,6 +75,38 @@ export class CrawlerHost extends RPCHost {
                 replacement: (innerText) => `${innerText}\n===============\n`
             });
         }
+        turnDownService.addRule('improved-paragraph', {
+            filter: 'p',
+            replacement: (innerText) => {
+                const trimmed = innerText.trim();
+                if (!trimmed) {
+                    return '';
+                }
+
+                return `${trimmed.replace(/\n{3,}/g, '\n\n')}\n\n`;
+            }
+        });
+        turnDownService.addRule('improved-inline-link', {
+            filter: function (node, options) {
+                return (
+                    options.linkStyle === 'inlined' &&
+                    node.nodeName === 'A' &&
+                    node.getAttribute('href')
+                );
+            },
+
+            replacement: function (content, node) {
+                let href = node.getAttribute('href');
+                if (href) href = href.replace(/([()])/g, '\\$1');
+                let title = cleanAttribute(node.getAttribute('title'));
+                if (title) title = ' "' + title.replace(/"/g, '\\"') + '"';
+
+                const fixedContent = content.replace(/\s+/g, ' ').trim();
+                const fixedHref = href.replace(/\s+/g, '').trim();
+
+                return `[${fixedContent}](${fixedHref}${title || ''})`;
+            }
+        });
 
         return turnDownService;
     }
