@@ -627,13 +627,13 @@ ${authMixin}`,
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts: ScrappingOptions, noCache: boolean = false) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ScrappingOptions, noCache: boolean = false) {
         let cache;
-        if (!noCache && !crawlOpts.cookies?.length) {
+        if (!noCache && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl);
         }
 
-        if (cache?.isFresh && (!crawlOpts.favorScreenshot || (crawlOpts.favorScreenshot && cache?.screenshotAvailable))) {
+        if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
             yield cache.snapshot;
 
             return;

@@ -278,7 +278,7 @@ document.addEventListener('load', handlePageLoad);
         return page;
     }
 
-    async *scrap(parsedUrl: URL, options: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
+    async *scrap(parsedUrl: URL, options?: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
         // parsedUrl.search = '';
         const url = parsedUrl.toString();
 
@@ -287,10 +287,10 @@ document.addEventListener('load', handlePageLoad);
         let screenshot: Buffer | undefined;
 
         const page = await this.pagePool.acquire();
-        if (options.proxyUrl) {
+        if (options?.proxyUrl) {
             await page.useProxy(options.proxyUrl);
         }
-        if (options.cookies) {
+        if (options?.cookies) {
             await page.setCookie(...options.cookies);
         }
 
@@ -353,7 +353,7 @@ document.addEventListener('load', handlePageLoad);
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
-                if (options.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
+                if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
                     screenshot = await page.screenshot();
                     lastHTML = snapshot.html;
                 }

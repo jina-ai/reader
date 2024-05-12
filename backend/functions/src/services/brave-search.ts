@@ -58,7 +58,9 @@ export class BraveSearchService extends AsyncService {
             extraHeaders['User-Agent'] = this.threadLocal.get('userAgent');
         }
 
-        return this.braveSearchHTTP.webSearch(query, { headers: extraHeaders as Record<string, string> });
+        const r = await this.braveSearchHTTP.webSearch(query, { headers: extraHeaders as Record<string, string> });
+
+        return r.parsed;
     }
 
 }
