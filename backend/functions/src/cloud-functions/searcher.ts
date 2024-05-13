@@ -53,8 +53,8 @@ export class SearcherHost extends RPCHost {
         runtime: {
             memory: '8GiB',
             timeoutSeconds: 300,
-            concurrency: 22,
-            maxInstances: 455,
+            concurrency: 5,
+            maxInstances: 200,
         },
         openapi: {
             operation: {
