@@ -274,9 +274,10 @@ ${this.content}
     })
     @CloudHTTPv2({
         runtime: {
-            memory: '8GiB',
+            memory: '4GiB',
+            cpu: 2,
             timeoutSeconds: 300,
-            concurrency: 22,
+            concurrency: 11,
             maxInstances: 455,
         },
         openapi: {
