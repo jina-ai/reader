@@ -2,7 +2,7 @@ import {
     assignTransferProtocolMeta, marshalErrorLike,
     RPCHost, RPCReflection,
     HashManager,
-    AssertionFailureError, ParamValidationError,
+    AssertionFailureError, ParamValidationError, Defer,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
@@ -666,6 +666,50 @@ ${authMixin}`,
         }
 
         return undefined;
+    }
+
+
+    async *scrapMany(urls: URL[], options?: ScrappingOptions, noCache = false) {
+        const iterators = urls.map((url) => this.cachedScrap(url, options, noCache));
+
+        const results: (PageSnapshot | undefined)[] = [];
+        results.length = iterators.length;
+
+        let nextDeferred = Defer();
+        let concluded = false;
+
+        const handler = async (it: AsyncGenerator<PageSnapshot | undefined>, idx: number) => {
+            for await (const x of it) {
+                results[idx] = x;
+
+                if (x) {
+                    nextDeferred.resolve();
+                    nextDeferred = Defer();
+                }
+
+            }
+        };
+
+        Promise.all(
+            iterators.map((it, idx) => handler(it, idx))
+        ).finally(() => {
+            concluded = true;
+            nextDeferred.resolve();
+        });
+
+        yield results;
+
+        try {
+            while (!concluded) {
+                await nextDeferred.promise;
+
+                yield results;
+            }
+        } finally {
+            for (const x of iterators) {
+                x.return();
+            }
+        }
     }
 
 }

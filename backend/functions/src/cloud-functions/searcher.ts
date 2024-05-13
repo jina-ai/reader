@@ -1,15 +1,13 @@
 import {
     assignTransferProtocolMeta, marshalErrorLike,
     RPCHost, RPCReflection,
-    HashManager,
     AssertionFailureError,
-    Defer,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import { RateLimitControl } from '../shared/services/rate-limit';
 import _ from 'lodash';
-import { PageSnapshot, ScrappingOptions } from '../services/puppeteer';
+import { ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { BraveSearchService } from '../services/brave-search';
@@ -18,8 +16,6 @@ import { CookieParam } from 'puppeteer';
 
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 
-
-const md5Hasher = new HashManager('md5', 'hex');
 
 @singleton()
 export class SearcherHost extends RPCHost {
@@ -166,6 +162,7 @@ ${authMixin}`,
                 }
             });
         } else if (ctx.req.ip) {
+            this.threadLocal.set('ip', ctx.req.ip);
             await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
                 [
                     // 100 requests per minute
@@ -204,27 +201,28 @@ ${authMixin}`,
         });
 
         const urls = r.web.results.map((x) => new URL(x.url));
-        this.scrapMany(urls);
+        const it = this.fetchSearchResults(customMode, urls, crawlOpts, noCache);
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.scrapMany(urls, crawlOpts, noCache)) {
+                for await (const scrapped of it) {
                     if (!scrapped) {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
-                    chargeAmount = this.getChargeAmount(formatted);
+                    chargeAmount = this.getChargeAmount(scrapped);
                     sseStream.write({
                         event: 'data',
-                        data: formatted,
+                        data: scrapped,
                     });
                 }
             } catch (err: any) {
-                this.logger.error(`Failed to crawl ${urlToCrawl}`, { err: marshalErrorLike(err) });
+                this.logger.error(`Failed to collect search result for query ${searchQuery}`,
+                    { err: marshalErrorLike(err) }
+                );
                 sseStream.write({
                     event: 'error',
                     data: marshalErrorLike(err),
@@ -238,120 +236,56 @@ ${authMixin}`,
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.fetchSearchResults(customMode, urls, crawlOpts, noCache)) {
+            for await (const scrapped of it) {
                 lastScrapped = scrapped;
 
-                if (_.every(scrapped, (x) => (x as any).content || (x as any).screenShotUrl || (x as any).screenshot)) {
-                    chargeAmount = _.sum(
-                        scrapped.map((x) => this.crawler.getChargeAmount(x) || 0)
-                    );
-
-                    return scrapped;
+                if (!this.qualified(scrapped)) {
+                    continue;
                 }
 
-                chargeAmount = _.sum(
-                    scrapped.map((x) => this.crawler.getChargeAmount(x) || 0)
-                );
+                chargeAmount = this.getChargeAmount(scrapped);
 
                 return scrapped;
             }
 
             if (!lastScrapped) {
-                throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
+                throw new AssertionFailureError(`No content available for query ${searchQuery}`);
             }
 
-            const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
-            chargeAmount = this.getChargeAmount(formatted);
+            chargeAmount = this.getChargeAmount(lastScrapped);
 
-            return formatted;
+            return lastScrapped;
         }
 
-        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
+        for await (const scrapped of it) {
             lastScrapped = scrapped;
-            if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
+
+            if (!this.qualified(scrapped)) {
                 continue;
             }
+            chargeAmount = this.getChargeAmount(scrapped);
 
-            const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
-            chargeAmount = this.getChargeAmount(formatted);
-            if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
-
-                return assignTransferProtocolMeta(`${formatted}`,
-                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-                );
-            }
-
-            return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
+            return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
 
         if (!lastScrapped) {
-            throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
+            throw new AssertionFailureError(`No content available for query ${searchQuery}`);
         }
 
-        const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
-        chargeAmount = this.getChargeAmount(formatted);
-        if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+        chargeAmount = this.getChargeAmount(lastScrapped);
 
-            return assignTransferProtocolMeta(`${formatted}`,
-                { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-            );
-        }
-
-        return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
-    }
-
-    async *scrapMany(urls: URL[], options?: ScrappingOptions, noCache = false) {
-        const iterators = urls.map((url) => this.crawler.cachedScrap(url, options, noCache));
-
-        const results: (PageSnapshot | undefined)[] = [];
-        results.length = iterators.length;
-
-        let nextDeferred = Defer();
-        let concluded = false;
-
-        const handler = async (it: AsyncGenerator<PageSnapshot | undefined>, idx: number) => {
-            for await (const x of it) {
-                results[idx] = x;
-
-                if (x) {
-                    nextDeferred.resolve();
-                    nextDeferred = Defer();
-                }
-
-            }
-        };
-
-        Promise.all(
-            iterators.map((it, idx) => handler(it, idx))
-        ).finally(() => {
-            concluded = true;
-            nextDeferred.resolve();
-        });
-
-        yield results;
-
-        try {
-            while (!concluded) {
-                await nextDeferred.promise;
-
-                yield results;
-            }
-        } finally {
-            for (const x of iterators) {
-                x.return();
-            }
-        }
+        return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
     }
 
     async *fetchSearchResults(mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
         urls: URL[], options?: ScrappingOptions, noCache = false) {
-        for await (const scrapped of this.scrapMany(urls, options, noCache)) {
+        for await (const scrapped of this.crawler.scrapMany(urls, options, noCache)) {
             const mapped = scrapped.map((x, i) => {
                 if (!x) {
                     return {
                         url: urls[i].toString(),
 
-                        toString() {
+                        toString(): string {
                             return `No content available for ${urls[i]}`;
                         }
                     };
@@ -359,7 +293,31 @@ ${authMixin}`,
                 return this.crawler.formatSnapshot(mode, x, urls[i]);
             });
 
-            yield await Promise.all(mapped);
+            const resultArray = await Promise.all(mapped);
+            resultArray.toString = function () {
+                return this.map((x) => x.toString()).join('\n\n');
+            };
+
+            yield resultArray;
         }
+    }
+
+    getChargeAmount(formatted: any[]) {
+        return _.sum(
+            formatted.map((x) => this.crawler.getChargeAmount(x) || 0)
+        );
+    }
+
+    qualified(scrapped: any[]) {
+        return _.every(scrapped, (x) =>
+            (x as any)?.title &&
+            (
+                (x as any).content ||
+                (x as any).screenShotUrl ||
+                (x as any).screenshot ||
+                (x as any).text ||
+                (x as any).html
+            )
+        );
     }
 }

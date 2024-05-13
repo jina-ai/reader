@@ -110,7 +110,7 @@ export class GeoIPService extends AsyncService {
                 name: x.names?.[lang] || x.names?.en,
             })),
             coordinates: r.location ? [
-                r.location.longitude, r.location.latitude, r.location.accuracy_radius
+                r.location.latitude, r.location.longitude, r.location.accuracy_radius
             ] : undefined,
             timezone: r.location?.time_zone,
         });
