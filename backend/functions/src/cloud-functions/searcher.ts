@@ -315,7 +315,7 @@ ${this.content}
                 }
             }
             resultArray.toString = function () {
-                return this.map((x) => x.toString()).join('\n\n');
+                return this.map((x, i) => x ? x.toString() : `[${i + 1}] No content available for ${urls[i]}`).join('\n\n');
             };
 
             yield resultArray;

@@ -687,8 +687,7 @@ ${authMixin}`,
     async *scrapMany(urls: URL[], options?: ScrappingOptions, noCache = false) {
         const iterators = urls.map((url) => this.cachedScrap(url, options, noCache));
 
-        const results: (PageSnapshot | undefined)[] = [];
-        results.length = iterators.length;
+        const results: (PageSnapshot | undefined)[] = iterators.map((_x)=> undefined);
 
         let nextDeferred = Defer();
         let concluded = false;
