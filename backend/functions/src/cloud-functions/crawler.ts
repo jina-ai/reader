@@ -274,9 +274,10 @@ ${this.content}
     })
     @CloudHTTPv2({
         runtime: {
-            memory: '8GiB',
+            memory: '4GiB',
+            cpu: 2,
             timeoutSeconds: 300,
-            concurrency: 22,
+            concurrency: 11,
             maxInstances: 455,
         },
         openapi: {
@@ -363,14 +364,13 @@ ${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
-
         if (uid) {
             const user = await auth.assertUser();
             if (!(user.wallet.total_balance > 0)) {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
                 [
                     // 1000 requests per minute
                     new Date(Date.now() - 60 * 1000), 1000
@@ -382,15 +382,26 @@ ${authMixin}`,
                     auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
+                    apiRoll._ref?.set({
+                        chargeAmount,
+                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
                 }
             });
         } else if (ctx.req.ip) {
-            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
                 [
                     // 100 requests per minute
                     new Date(Date.now() - 60 * 1000), 100
                 ]
             );
+
+            rpcReflect.finally(() => {
+                if (chargeAmount) {
+                    apiRoll._ref?.set({
+                        chargeAmount,
+                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
+                }
+            });
         }
 
         let urlToCrawl;
@@ -652,6 +663,10 @@ ${authMixin}`,
     }
 
     getChargeAmount(formatted: { [k: string]: any; }) {
+        if (!formatted) {
+            return undefined;
+        }
+
         const textContent = formatted?.content || formatted?.text || formatted?.html;
 
         if (typeof textContent === 'string') {
