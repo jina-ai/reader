@@ -76,3 +76,4 @@ build/
 
 *.local
 .secret.*
+licensed/

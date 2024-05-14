@@ -2,7 +2,7 @@
   "name": "reader",
   "scripts": {
     "lint": "eslint --ext .js,.ts .",
-    "build": "tsc -p .",
+    "build": "node ./integrity-check.cjs && tsc -p .",
     "build:watch": "tsc --watch",
     "build:clean": "rm -rf ./build",
     "shell": "npm run build && firebase functions:shell",
@@ -44,6 +44,7 @@
     "htmlparser2": "^9.0.0",
     "jose": "^5.1.0",
     "langdetect": "^0.2.1",
+    "maxmind": "^4.3.18",
     "minio": "^7.1.3",
     "openai": "^4.20.0",
     "puppeteer": "^22.7.1",

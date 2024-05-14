@@ -2,7 +2,7 @@ import {
     assignTransferProtocolMeta, marshalErrorLike,
     RPCHost, RPCReflection,
     HashManager,
-    AssertionFailureError, ParamValidationError,
+    AssertionFailureError, ParamValidationError, Defer,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
@@ -33,6 +33,12 @@ export class CrawlerHost extends RPCHost {
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
     cacheValidMs = 1000 * 300;
     urlValidMs = 1000 * 3600 * 4;
+
+    indexText = `[Usage1] https://r.jina.ai/YOUR_URL
+[Usage2] https://s.jina.ai/YOUR_SEARCH_QUERY
+[Homepage] https://jina.ai/reader
+[Source code] https://github.com/jina-ai/reader
+`;
 
     constructor(
         protected globalLogger: Logger,
@@ -357,10 +363,7 @@ ${this.content}
 [Balance left] ${latestUser.wallet.total_balance}
 ` : '';
 
-            return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
-[Homepage] https://jina.ai/reader
-[Source code] https://github.com/jina-ai/reader
-${authMixin}`,
+            return assignTransferProtocolMeta(`${this.indexText}${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
@@ -638,13 +641,13 @@ ${authMixin}`,
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts: ScrappingOptions, noCache: boolean = false) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ScrappingOptions, noCache: boolean = false) {
         let cache;
-        if (!noCache && !crawlOpts.cookies?.length) {
+        if (!noCache && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl);
         }
 
-        if (cache?.isFresh && (!crawlOpts.favorScreenshot || (crawlOpts.favorScreenshot && cache?.screenshotAvailable))) {
+        if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
             yield cache.snapshot;
 
             return;
@@ -681,6 +684,49 @@ ${authMixin}`,
         }
 
         return undefined;
+    }
+
+
+    async *scrapMany(urls: URL[], options?: ScrappingOptions, noCache = false) {
+        const iterators = urls.map((url) => this.cachedScrap(url, options, noCache));
+
+        const results: (PageSnapshot | undefined)[] = iterators.map((_x)=> undefined);
+
+        let nextDeferred = Defer();
+        let concluded = false;
+
+        const handler = async (it: AsyncGenerator<PageSnapshot | undefined>, idx: number) => {
+            for await (const x of it) {
+                results[idx] = x;
+
+                if (x) {
+                    nextDeferred.resolve();
+                    nextDeferred = Defer();
+                }
+
+            }
+        };
+
+        Promise.all(
+            iterators.map((it, idx) => handler(it, idx))
+        ).finally(() => {
+            concluded = true;
+            nextDeferred.resolve();
+        });
+
+        yield results;
+
+        try {
+            while (!concluded) {
+                await nextDeferred.promise;
+
+                yield results;
+            }
+        } finally {
+            for (const x of iterators) {
+                x.return();
+            }
+        }
     }
 
 }
