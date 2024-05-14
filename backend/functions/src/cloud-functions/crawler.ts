@@ -375,8 +375,8 @@ ${this.content}
 
             const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
                 [
-                    // 1000 requests per minute
-                    new Date(Date.now() - 60 * 1000), 1000
+                    // 200 requests per minute
+                    new Date(Date.now() - 60 * 1000), 200
                 ]
             );
 
@@ -393,8 +393,8 @@ ${this.content}
         } else if (ctx.req.ip) {
             const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
                 [
-                    // 100 requests per minute
-                    new Date(Date.now() - 60 * 1000), 100
+                    // 20 requests per minute
+                    new Date(Date.now() - 60 * 1000), 20
                 ]
             );
 

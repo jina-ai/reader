@@ -153,8 +153,8 @@ export class SearcherHost extends RPCHost {
 
             await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
                 [
-                    // 1000 requests per minute
-                    new Date(Date.now() - 60 * 1000), 1000
+                    // 40 requests per minute
+                    new Date(Date.now() - 60 * 1000), 40
                 ]
             );
 
@@ -169,8 +169,8 @@ export class SearcherHost extends RPCHost {
             this.threadLocal.set('ip', ctx.req.ip);
             await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
                 [
-                    // 100 requests per minute
-                    new Date(Date.now() - 60 * 1000), 100
+                    // 5 requests per minute
+                    new Date(Date.now() - 60 * 1000), 5
                 ]
             );
         }
