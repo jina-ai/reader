@@ -2,6 +2,7 @@ import {
     assignTransferProtocolMeta, marshalErrorLike,
     RPCHost, RPCReflection,
     AssertionFailureError,
+    objHashMd5B64Of,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
@@ -15,11 +16,17 @@ import { CrawlerHost } from './crawler';
 import { CookieParam } from 'puppeteer';
 
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
+import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
+import { SearchResult } from '../db/searched';
+import { WebSearchApiResponse } from '../shared/3rd-party/brave-types';
 
 
 @singleton()
 export class SearcherHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
+
+    cacheRetentionMs = 1000 * 3600 * 24 * 7;
+    cacheValidMs = 1000 * 3600;
 
     constructor(
         protected globalLogger: Logger,
@@ -133,10 +140,7 @@ export class SearcherHost extends RPCHost {
 [Balance left] ${latestUser.wallet.total_balance}
 ` : '';
 
-            return assignTransferProtocolMeta(`[Usage] https://s.jina.ai/YOUR_URL
-[Homepage] https://jina.ai/reader
-[Source code] https://github.com/jina-ai/reader
-${authMixin}`,
+            return assignTransferProtocolMeta(`${this.crawler.indexText}${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
@@ -195,7 +199,7 @@ ${authMixin}`,
         };
 
         const searchQuery = noSlashPath;
-        const r = await this.braveSearchService.webSearch({
+        const r = await this.cachedWebSearch({
             q: searchQuery,
             count: 5
         });
@@ -279,16 +283,19 @@ ${authMixin}`,
 
     async *fetchSearchResults(mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
         urls: URL[], options?: ScrappingOptions, noCache = false) {
+
         for await (const scrapped of this.crawler.scrapMany(urls, options, noCache)) {
             const mapped = scrapped.map((x, i) => {
                 if (!x) {
-                    return {
-                        url: urls[i].toString(),
-
-                        toString(): string {
+                    const p = {
+                        toString() {
                             return `[${i + 1}] No content available for ${urls[i]}`;
                         }
                     };
+                    const r = Object.create(p);
+                    r.url = urls[i].toString();
+
+                    return r;
                 }
                 return this.crawler.formatSnapshot(mode, x, urls[i]);
             });
@@ -315,7 +322,7 @@ ${this.content}
                 }
             }
             resultArray.toString = function () {
-                return this.map((x, i) => x ? x.toString() : `[${i + 1}] No content available for ${urls[i]}`).join('\n\n');
+                return this.map((x, i) => x ? x.toString() : `[${i + 1}] No content available for ${urls[i]}`).join('\n\n').trimEnd() + '\n';
             };
 
             yield resultArray;
@@ -339,5 +346,44 @@ ${this.content}
                 (x as any).html
             )
         );
+    }
+
+    async cachedWebSearch(query: WebSearchQueryParams, noCache: boolean = false) {
+        const queryDigest = objHashMd5B64Of(query);
+        let cache;
+        if (!noCache) {
+            cache = (await SearchResult.fromFirestoreQuery(
+                SearchResult.COLLECTION.where('queryDigest', '==', queryDigest)
+                    .orderBy('createdAt', 'desc')
+                    .limit(1)
+            ))[0];
+            if (cache) {
+                const age = Date.now() - cache.createdAt.valueOf();
+                const stale = cache.createdAt.valueOf() < (Date.now() - this.cacheValidMs);
+                this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for search query "${query.q}", normalized digest: ${queryDigest}, ${age}ms old`, {
+                    query, digest: queryDigest, age, stale
+                });
+
+                if (!stale) {
+                    return cache.response as WebSearchApiResponse;
+                }
+            }
+        }
+
+        const r = await this.braveSearchService.webSearch(query);
+
+        const nowDate = new Date();
+        const record = SearchResult.from({
+            query,
+            queryDigest,
+            response: r,
+            createdAt: nowDate,
+            expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
+        });
+        SearchResult.save(record).catch((err) => {
+            this.logger.warn(`Failed to cache search result`, { err });
+        });
+
+        return r;
     }
 }

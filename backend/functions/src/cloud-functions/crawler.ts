@@ -34,6 +34,12 @@ export class CrawlerHost extends RPCHost {
     cacheValidMs = 1000 * 300;
     urlValidMs = 1000 * 3600 * 4;
 
+    indexText = `[Usage1] https://r.jina.ai/YOUR_URL
+[Usage2] https://s.jina.ai/YOUR_SEARCH_QUERY
+[Homepage] https://jina.ai/reader
+[Source code] https://github.com/jina-ai/reader
+`;
+
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
@@ -357,10 +363,7 @@ ${this.content}
 [Balance left] ${latestUser.wallet.total_balance}
 ` : '';
 
-            return assignTransferProtocolMeta(`[Usage] https://r.jina.ai/YOUR_URL
-[Homepage] https://jina.ai/reader
-[Source code] https://github.com/jina-ai/reader
-${authMixin}`,
+            return assignTransferProtocolMeta(`${this.indexText}${authMixin}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
