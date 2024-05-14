@@ -380,7 +380,7 @@ ${this.content}
             createdAt: nowDate,
             expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
         });
-        SearchResult.save(record).catch((err) => {
+        SearchResult.save(record.degradeForFireStore()).catch((err) => {
             this.logger.warn(`Failed to cache search result`, { err });
         });
 
