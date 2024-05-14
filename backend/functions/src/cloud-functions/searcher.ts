@@ -286,7 +286,7 @@ ${authMixin}`,
                         url: urls[i].toString(),
 
                         toString(): string {
-                            return `No content available for ${urls[i]}`;
+                            return `[${i + 1}] No content available for ${urls[i]}`;
                         }
                     };
                 }
@@ -294,6 +294,26 @@ ${authMixin}`,
             });
 
             const resultArray = await Promise.all(mapped);
+            for (const [i, result] of resultArray.entries()) {
+                if (result && typeof result === 'object' && Object.hasOwn(result, 'toString')) {
+                    result.toString = function (this: any) {
+                        const mixins = [];
+                        if (this.publishedTime) {
+                            mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
+                        }
+
+                        if (mode === 'markdown') {
+                            return `[${i + 1}]\n${this.content}`;
+                        }
+
+                        return `[${i + 1}] Title: ${this.title}
+[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
+[${i + 1}] Markdown Content:
+${this.content}
+        `;
+                    };
+                }
+            }
             resultArray.toString = function () {
                 return this.map((x) => x.toString()).join('\n\n');
             };

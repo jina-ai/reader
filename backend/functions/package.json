@@ -2,7 +2,7 @@
   "name": "reader",
   "scripts": {
     "lint": "eslint --ext .js,.ts .",
-    "build": "tsc -p .",
+    "build": "node ./integrity-check.cjs && tsc -p .",
     "build:watch": "tsc --watch",
     "build:clean": "rm -rf ./build",
     "shell": "npm run build && firebase functions:shell",
