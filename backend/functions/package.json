@@ -43,6 +43,7 @@
     "generic-pool": "^3.9.0",
     "htmlparser2": "^9.0.0",
     "jose": "^5.1.0",
+    "jsdom": "^24.0.0",
     "langdetect": "^0.2.1",
     "maxmind": "^4.3.18",
     "minio": "^7.1.3",

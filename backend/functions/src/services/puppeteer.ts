@@ -4,6 +4,7 @@ import { container, singleton } from 'tsyringe';
 import genericPool from 'generic-pool';
 import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency } from 'civkit';
 import { Logger } from '../shared/services/logger';
+import { JSDOM } from 'jsdom';
 
 import type { Browser, CookieParam, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
@@ -11,7 +12,7 @@ import puppeteer from 'puppeteer-extra';
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
 import { ServiceCrashedError } from '../shared/lib/errors';
-
+import { Readability } from '@mozilla/readability';
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
@@ -52,6 +53,7 @@ export interface ScrappingOptions {
     proxyUrl?: string;
     cookies?: CookieParam[];
     favorScreenshot?: boolean;
+    waitForSelector?: string;
 }
 
 
@@ -142,7 +144,7 @@ export class PuppeteerControl extends AsyncService {
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
             this.emit('crippled');
-            process.nextTick(()=> this.serviceReady());
+            process.nextTick(() => this.serviceReady());
         });
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}`);
 
@@ -344,6 +346,18 @@ document.addEventListener('load', handlePageLoad);
                     { ...options, url: parsedUrl }
                 );
             });
+        if (options?.waitForSelector) {
+            page.waitForSelector(options.waitForSelector)
+                .then(async () => {
+                    snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                    screenshot = await page.screenshot();
+                    finalized = true;
+                    nextSnapshotDeferred.resolve(snapshot);
+                })
+                .catch((err) => {
+                    this.logger.warn(`Failed to wait for selector ${options.waitForSelector}`, { err: marshalErrorLike(err) });
+                });
+        }
 
         try {
             let lastHTML = snapshot?.html;
@@ -393,6 +407,49 @@ document.addEventListener('load', handlePageLoad);
         this.logger.info(`Salvation completed.`);
 
         return true;
+    }
+
+    narrowSnapshot(snapshot: PageSnapshot | undefined, targetSelect?: string): PageSnapshot | undefined {
+        if (!targetSelect) {
+            return snapshot;
+        }
+        if (!snapshot?.html) {
+            return snapshot;
+        }
+
+        const jsdom = new JSDOM(snapshot.html, { url: snapshot.href });
+        const elem = jsdom.window.document.querySelector(targetSelect);
+
+        if (!elem) {
+            return snapshot;
+        }
+
+        const selectedJsDom = new JSDOM(elem.outerHTML, { url: snapshot.href });
+        let parsed;
+        try {
+            parsed = new Readability(selectedJsDom.window.document).parse();
+        } catch (err: any) {
+            this.logger.warn(`Failed to parse selected element`, { err: marshalErrorLike(err) });
+        }
+
+        // No innerText in jsdom
+        // https://github.com/jsdom/jsdom/issues/1245
+        const textContent = elem.textContent;
+        const cleanedText = textContent?.split('\n').map((x: any) => x.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n');
+
+        const imageTags = Array.from(elem.querySelectorAll('img[src],img[data-src]')).map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src')]).flat().filter(Boolean);
+
+        const imageSet = new Set(imageTags);
+
+        const r = {
+            ...snapshot,
+            parsed,
+            html: elem.outerHTML,
+            text: cleanedText,
+            imgs: snapshot.imgs?.filter((x) => imageSet.has(x.src)) || [],
+        } as PageSnapshot;
+
+        return r;
     }
 }
 

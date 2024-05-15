@@ -59,7 +59,11 @@ As you have already seen above, one can control the behavior of the Reader API u
   - `x-respond-with: text` returns `document.body.innerText`
   - `x-respond-with: screenshot` returns the URL of the webpage's screenshot
 - You can specify a proxy server via the `x-proxy-url` header.
-- You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
+- You can customize cache tolerance via the `x-cache-tolerance` header (integer in seconds).
+- You can bypass the cached page (lifetime 3600s) via the `x-no-cache: true` header (equivalent of `x-cache-tolerance: 0`).
+- If you already know the HTML structure of your target page, you may specify `x-target-selector` or `x-wait-for-selector` to direct the Reader API to focus on a specific part of the page.
+  - By setting `x-target-selector` header to a CSS selector, the Reader API return the content within the matched element, instead of the full HTML. Setting this header is useful when the automatic content extraction fails to capture the desired content and you can manually select the correct target.
+  - By setting `x-wait-for-selector` header to a CSS selector, the Reader API will wait until the matched element is rendered before returning the content. If you already specified `x-wait-for-selector`, this header can be omitted if you plan to wait for the same element.
 
 
 ### Streaming mode

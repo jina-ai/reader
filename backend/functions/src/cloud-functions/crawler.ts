@@ -24,6 +24,10 @@ import { countGPTToken as estimateToken } from '../shared/utils/openai';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
+export interface ExtraScrappingOptions extends ScrappingOptions {
+    targetSelector?: string;
+}
+
 @singleton()
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
@@ -31,7 +35,7 @@ export class CrawlerHost extends RPCHost {
     turnDownPlugins = [require('turndown-plugin-gfm').tables];
 
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
-    cacheValidMs = 1000 * 300;
+    cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
 
     indexText = `[Usage1] https://r.jina.ai/YOUR_URL
@@ -299,8 +303,13 @@ ${this.content}
                         in: 'header',
                         schema: { type: 'string' }
                     },
+                    'X-Cache-Tolerance': {
+                        description: `Sets internal cache tolerance in seconds if this header is specified with a integer.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
                     'X-No-Cache': {
-                        description: `Ignores internal cache if this header is specified with a value.`,
+                        description: `Ignores internal cache if this header is specified with a value.\n\nEquivalent to X-Cache-Tolerance: 0`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -311,6 +320,20 @@ ${this.content}
                             `- html\n` +
                             `- text\n` +
                             `- screenshot\n`
+                        ,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-Wait-For-Selector': {
+                        description: `Specifies a CSS selector to wait for the appearance of such an element before returning. \n\n` +
+                            'Example: `X-Wait-For-Selector: .content-block`\n'
+                        ,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-Target-Selector': {
+                        description: `Specifies a CSS selector for return target instead of the full html. \n\n` +
+                            'Implies `X-Wait-For-Selector: (same selector)`'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
@@ -426,7 +449,15 @@ ${this.content}
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
-        const cacheTolerance = noCache ? 0 : this.cacheValidMs;
+        let cacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
+        if (isNaN(cacheTolerance)) {
+            cacheTolerance = this.cacheValidMs;
+            if (noCache) {
+                cacheTolerance = 0;
+            }
+        }
+        const targetSelector = ctx.req.get('x-target-selector') || undefined;
+        const waitForSelector = ctx.req.get('x-wait-for-selector') || targetSelector;
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
         if (Array.isArray(setCookieHeaders)) {
@@ -444,10 +475,12 @@ ${this.content}
         }
         this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
 
-        const crawlOpts: ScrappingOptions = {
+        const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
             cookies,
-            favorScreenshot: customMode === 'screenshot'
+            favorScreenshot: customMode === 'screenshot',
+            waitForSelector,
+            targetSelector,
         };
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -484,7 +517,7 @@ ${this.content}
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
                 lastScrapped = scrapped;
-                if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
+                if (waitForSelector || !scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                     continue;
                 }
 
@@ -506,7 +539,7 @@ ${this.content}
 
         for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
             lastScrapped = scrapped;
-            if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
+            if (waitForSelector || !scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                 continue;
             }
 
@@ -642,24 +675,32 @@ ${this.content}
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
         let cache;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
         if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
-            yield cache.snapshot;
+            yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts?.targetSelector);
 
             return;
         }
 
         try {
+            if (crawlOpts?.targetSelector) {
+                for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
+                    yield this.puppeteerControl.narrowSnapshot(x, crawlOpts.targetSelector);
+                }
+
+                return;
+            }
+
             yield* this.puppeteerControl.scrap(urlToCrawl, crawlOpts);
         } catch (err: any) {
             if (cache) {
                 this.logger.warn(`Failed to scrap ${urlToCrawl}, but a stale cache is available. Falling back to cache`, { err: marshalErrorLike(err) });
-                yield cache.snapshot;
+                yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts?.targetSelector);
                 return;
             }
             throw err;

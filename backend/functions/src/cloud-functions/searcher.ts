@@ -181,7 +181,13 @@ export class SearcherHost extends RPCHost {
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
-        const pageCacheTolerance = noCache ? 0 : this.pageCacheToleranceMs;
+        let pageCacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
+        if (isNaN(pageCacheTolerance)) {
+            pageCacheTolerance = this.pageCacheToleranceMs;
+            if (noCache) {
+                pageCacheTolerance = 0;
+            }
+        }
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
         if (Array.isArray(setCookieHeaders)) {
