@@ -2,18 +2,22 @@
 
 Your LLMs deserve better input.
 
-Reader converts any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
+Reader can do two things:
+1. It converts any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
+2. It searches the web for a given query by simply using `https://s.jina.ai/your+query`. This allows your LLMs to access the latest world knowledge from the web.
 
-- Live demo: https://jina.ai/reader
-- Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://r.jina.ai/https://x.com/elonmusk and see yourself.
+- Live demo: https://jina.ai/reader#demo
+- Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://s.jina.ai/Who%20will%20win%202024%20US%20presidential%20election%3F and see yourself.
 
 > Feel free to use Reader API in production. It is free, stable and scalable. We are maintaining it actively as one of the core products of Jina AI.
 
 <img width="973" alt="image" src="https://github.com/jina-ai/reader/assets/2041322/2067c7a2-c12e-4465-b107-9a16ca178d41">
+<img width="973" alt="image" src="https://github.com/jina-ai/reader/assets/2041322/675ac203-f246-41c2-b094-76318240159f">
 
 
 ## Updates
 
+- **2024-05-15**: We introduced a new endpoint `s.jina.ai` that searches on the web and return top-5 results, each in a LLM-friendly format. [Read more about this new feature here](https://jina.ai/news/jina-reader-for-search-grounding-to-improve-factuality-of-llms).
 - **2024-05-08**: Image capion is off by default for better latency. To turn it on, set `x-with-generated-alt: true` in the request header.
 - **2024-05-03**: We finally resolved a DDoS attack since April 29th. Now our API is much more reliable and scalable than ever!
 - **2024-04-24**: You now have more fine-grained control over Reader API [using headers](#using-request-headers), e.g. forwarding cookies, using HTTP proxy.
@@ -21,11 +25,40 @@ Reader converts any URL to an **LLM-friendly** input with a simple prefix `https
 
 ## Usage
 
+### Using `r.jina.ai` for single URL fetching
 Simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL `https://en.wikipedia.org/wiki/Artificial_intelligence` to an LLM-friendly input, use the following URL:
 
 [https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence](https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence)
 
 All images in that page that lack `alt` tag are auto-captioned by a VLM (vision langauge model) and formatted as `!(Image [idx]: [VLM_caption])[img_URL]`. This should give your downstream text-only LLM *just enough* hints to include those images into reasoning, selecting, and summarization. 
+
+### Using `s.jina.ai` for web search
+Simply prepend `https://s.jina.ai/` to your search query. Note that if you are using this in the code, make sure to encode your search query first, e.g. if your query is `Who will win 2024 US presidential election?` then your url should look like:
+
+[https://s.jina.ai/Who%20will%20win%202024%20US%20presidential%20election%3F](https://s.jina.ai/Who%20will%20win%202024%20US%20presidential%20election%3F)
+
+Behind the scenes, Reader searches the web, fetches the top 5 results, visits each URL, and applies `r.jina.ai` to it. This is different from many `web search function-calling` in agent/RAG frameworks, which often return only the title, URL, and description provided by the search engine API. If you want to read one result more deeply, you have to fetch the content yourself from that URL. With Reader, `http://s.jina.ai` automatically fetches the content from the top 5 search result URLs for you (reusing the tech stack behind `http://r.jina.ai`). This means you don't have to handle browser rendering, blocking, or any issues related to JavaScript and CSS yourself.
+
+### [Interactive Code Snippet Builder](https://jina.ai/reader#apiform)
+
+<a href="https://jina.ai/reader#apiform"><img width="973" alt="image" src="https://github.com/jina-ai/reader/assets/2041322/a490fd3a-1c4c-4a3f-a95a-c481c2a8cc8f"></a>
+
+
+### Using request headers
+
+As you have already seen above, one can control the behavior of the Reader API using request headers. Here is a complete list of supported headers.
+
+- You can enable the image caption feature via the `x-with-generated-alt: true` header.
+- You can ask the Reader API to forward cookies settings via the `x-set-cookie` header.
+  - Note that requests with cookies will not be cached.
+- You can bypass `readability` filtering via the `x-respond-with` header, specifically:
+  - `x-respond-with: markdown` returns markdown *without* going through `reability`
+  - `x-respond-with: html` returns `documentElement.outerHTML`
+  - `x-respond-with: text` returns `document.body.innerText`
+  - `x-respond-with: screenshot` returns the URL of the webpage's screenshot
+- You can specify a proxy server via the `x-proxy-url` header.
+- You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
+
 
 ### Streaming mode
 
@@ -59,22 +92,6 @@ Your LLM:                 LLM(streamContent1)  |                     |
 ```
 
 Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`, each subsequent chunk contains more complete information.
-
-### Using request headers
-
-As you have already seen above, one can control the behavior of the Reader API using request headers. Here is a complete list of supported headers.
-
-- You can enable the image caption feature via the `x-with-generated-alt: true` header.
-- You can ask the Reader API to forward cookies settings via the `x-set-cookie` header.
-  - Note that requests with cookies will not be cached.
-- You can bypass `readability` filtering via the `x-respond-with` header, specifically:
-  - `x-respond-with: markdown` returns markdown *without* going through `reability`
-  - `x-respond-with: html` returns `documentElement.outerHTML`
-  - `x-respond-with: text` returns `document.body.innerText`
-  - `x-respond-with: screenshot` returns the URL of the webpage's screenshot
-- You can specify a proxy server via the `x-proxy-url` header.
-- You can bypass the cached page (lifetime 300s) via the `x-no-cache` header.
-
 
 ### JSON mode (super early beta)
 
