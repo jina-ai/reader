@@ -190,7 +190,12 @@ export class CrawlerHost extends RPCHost {
                     }
                 }
 
-                const src = linkPreferredSrc;
+                let src;
+                try {
+                    src = new URL(linkPreferredSrc, nominalUrl).toString();
+                } catch (_err) {
+                    void 0;
+                }
                 const alt = cleanAttribute(node.getAttribute('alt'));
                 if (!src) {
                     return '';

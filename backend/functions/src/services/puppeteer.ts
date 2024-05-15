@@ -206,7 +206,7 @@ function briefImgs(elem) {
         }
 
         return {
-            src: linkPreferredSrc,
+            src: new URL(linkPreferredSrc, document.location.href).toString(),
             loaded: x.complete,
             width: x.width,
             height: x.height,
@@ -437,7 +437,17 @@ document.addEventListener('load', handlePageLoad);
         const textContent = elem.textContent;
         const cleanedText = textContent?.split('\n').map((x: any) => x.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n');
 
-        const imageTags = Array.from(elem.querySelectorAll('img[src],img[data-src]')).map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src')]).flat().filter(Boolean);
+        const imageTags = Array.from(elem.querySelectorAll('img[src],img[data-src]'))
+            .map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src')])
+            .flat()
+            .map((x) => {
+                try {
+                    return new URL(x, snapshot.href).toString();
+                } catch (err) {
+                    return null;
+                }
+            })
+            .filter(Boolean);
 
         const imageSet = new Set(imageTags);
 
