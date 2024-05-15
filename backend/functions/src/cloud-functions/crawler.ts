@@ -423,7 +423,7 @@ ${this.content}
             });
         }
 
-        const customMode = ctx.req.get('x-respond-with') || 'default';
+        const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         const cacheTolerance = noCache ? 0 : this.cacheValidMs;
