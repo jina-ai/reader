@@ -212,7 +212,7 @@ export class SearcherHost extends RPCHost {
         const r = await this.cachedWebSearch({
             q: searchQuery,
             count: 5
-        });
+        }, noCache);
 
         const it = this.fetchSearchResults(customMode, r.web.results, crawlOpts, pageCacheTolerance);
 
