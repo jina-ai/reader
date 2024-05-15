@@ -241,53 +241,85 @@ export class SearcherHost extends RPCHost {
             return sseStream;
         }
 
-        const t0 = Date.now();
-
-        let lastScrapped;
+        let lastScrapped: any[] | undefined;
+        let earlyReturn = false;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+            const earlyReturnTimer = setTimeout(() => {
+                if (!lastScrapped) {
+                    return;
+                }
+                chargeAmount = this.getChargeAmount(lastScrapped);
+                rpcReflect.return(lastScrapped);
+                earlyReturn = true;
+            }, this.reasonableDelayMs);
+
             for await (const scrapped of it) {
                 lastScrapped = scrapped;
 
-                if (!this.qualified(scrapped) && ((Date.now() - t0) < this.reasonableDelayMs)) {
+                if (!this.qualified(scrapped)) {
                     continue;
                 }
-
+                clearTimeout(earlyReturnTimer);
                 chargeAmount = this.getChargeAmount(scrapped);
 
                 return scrapped;
             }
 
+            clearTimeout(earlyReturnTimer);
+
             if (!lastScrapped) {
                 throw new AssertionFailureError(`No content available for query ${searchQuery}`);
             }
 
-            chargeAmount = this.getChargeAmount(lastScrapped);
+            if (!earlyReturn) {
+                chargeAmount = this.getChargeAmount(lastScrapped);
+            }
 
             return lastScrapped;
         }
 
+        const earlyReturnTimer = setTimeout(() => {
+            if (!lastScrapped) {
+                return;
+            }
+            chargeAmount = this.getChargeAmount(lastScrapped);
+            rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
+            earlyReturn = true;
+        }, this.reasonableDelayMs);
+
         for await (const scrapped of it) {
             lastScrapped = scrapped;
 
-            if (!this.qualified(scrapped) && ((Date.now() - t0) < this.reasonableDelayMs)) {
+            if (!this.qualified(scrapped)) {
                 continue;
             }
+
+            clearTimeout(earlyReturnTimer);
             chargeAmount = this.getChargeAmount(scrapped);
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
 
+        clearTimeout(earlyReturnTimer);
+
         if (!lastScrapped) {
             throw new AssertionFailureError(`No content available for query ${searchQuery}`);
         }
 
-        chargeAmount = this.getChargeAmount(lastScrapped);
+        if (!earlyReturn) {
+            chargeAmount = this.getChargeAmount(lastScrapped);
+        }
+
 
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
     }
 
-    async *fetchSearchResults(mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
-        searchResults: WebSearchResult[], options?: ScrappingOptions, pageCacheTolerance?: number) {
+    async *fetchSearchResults(
+        mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
+        searchResults: WebSearchResult[],
+        options?: ScrappingOptions,
+        pageCacheTolerance?: number
+    ) {
         const urls = searchResults.map((x) => new URL(x.url));
         for await (const scrapped of this.crawler.scrapMany(urls, options, pageCacheTolerance)) {
             const mapped = scrapped.map((x, i) => {
@@ -321,10 +353,6 @@ export class SearcherHost extends RPCHost {
                         const mixins = [];
                         if (this.publishedTime) {
                             mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
-                        }
-
-                        if (mode === 'markdown') {
-                            return `[${i + 1}]\n${this.content}`;
                         }
 
                         return `[${i + 1}] Title: ${this.title}
