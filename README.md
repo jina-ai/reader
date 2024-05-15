@@ -41,6 +41,8 @@ Behind the scenes, Reader searches the web, fetches the top 5 results, visits ea
 
 ### [Interactive Code Snippet Builder](https://jina.ai/reader#apiform)
 
+We highly recommend using the code builder to explore different parameter combinations of the Reader API.
+
 <a href="https://jina.ai/reader#apiform"><img width="973" alt="image" src="https://github.com/jina-ai/reader/assets/2041322/a490fd3a-1c4c-4a3f-a95a-c481c2a8cc8f"></a>
 
 
@@ -93,12 +95,14 @@ Your LLM:                 LLM(streamContent1)  |                     |
 
 Note that in terms of completeness: `... > streamContent3 > streamContent2 > streamContent1`, each subsequent chunk contains more complete information.
 
-### JSON mode (super early beta)
+### JSON mode
 
 This is still very early and the result is not really a "useful" JSON. It contains three fields `url`, `title` and `content` only. Nonetheless, you can use accept-header to control the output format:
 ```bash
 curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
 ```
+
+JSON mode is probably more useful in `s.jina.ai` than `r.jina.ai`. For `s.jina.ai` with JSON mode, it returns 5 results in a list, each in the structure of `{'title', 'content', 'url'}`.
 
 ## Install
 
