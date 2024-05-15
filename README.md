@@ -3,8 +3,8 @@
 Your LLMs deserve better input.
 
 Reader can do two things:
-1. It converts any URL to an **LLM-friendly** input with a simple prefix `https://r.jina.ai/`. Get improved output for your agent and RAG systems at no cost.
-2. It searches the web for a given query by simply using `https://s.jina.ai/your+query`. This allows your LLMs to access the latest world knowledge from the web.
+1. It converts any URL to an **LLM-friendly** input with `https://r.jina.ai/https://your.url`. Get improved output for your agent and RAG systems at no cost.
+2. It searches the web for a given query with `https://s.jina.ai/your+query`. This allows your LLMs to access the latest world knowledge from the web.
 
 - Live demo: https://jina.ai/reader#demo
 - Or just visit these URLs https://r.jina.ai/https://github.com/jina-ai/reader, https://s.jina.ai/Who%20will%20win%202024%20US%20presidential%20election%3F and see yourself.
