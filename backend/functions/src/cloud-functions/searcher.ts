@@ -18,7 +18,7 @@ import { CookieParam } from 'puppeteer';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
 import { SearchResult } from '../db/searched';
-import { WebSearchApiResponse } from '../shared/3rd-party/brave-types';
+import { WebSearchApiResponse, SearchResult as WebSearchResult } from '../shared/3rd-party/brave-types';
 
 
 @singleton()
@@ -27,6 +27,9 @@ export class SearcherHost extends RPCHost {
 
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
     cacheValidMs = 1000 * 3600;
+    pageCacheToleranceMs = 1000 * 3600 * 24;
+
+    reasonableDelayMs = 10_000;
 
     constructor(
         protected globalLogger: Logger,
@@ -178,6 +181,7 @@ export class SearcherHost extends RPCHost {
         const customMode = ctx.req.get('x-respond-with') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
+        const pageCacheTolerance = noCache ? 0 : this.pageCacheToleranceMs;
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
         if (Array.isArray(setCookieHeaders)) {
@@ -204,8 +208,7 @@ export class SearcherHost extends RPCHost {
             count: 5
         });
 
-        const urls = r.web.results.map((x) => new URL(x.url));
-        const it = this.fetchSearchResults(customMode, urls, crawlOpts, noCache);
+        const it = this.fetchSearchResults(customMode, r.web.results, crawlOpts, pageCacheTolerance);
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -238,12 +241,14 @@ export class SearcherHost extends RPCHost {
             return sseStream;
         }
 
+        const t0 = Date.now();
+
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             for await (const scrapped of it) {
                 lastScrapped = scrapped;
 
-                if (!this.qualified(scrapped)) {
+                if (!this.qualified(scrapped) && ((Date.now() - t0) < this.reasonableDelayMs)) {
                     continue;
                 }
 
@@ -264,7 +269,7 @@ export class SearcherHost extends RPCHost {
         for await (const scrapped of it) {
             lastScrapped = scrapped;
 
-            if (!this.qualified(scrapped)) {
+            if (!this.qualified(scrapped) && ((Date.now() - t0) < this.reasonableDelayMs)) {
                 continue;
             }
             chargeAmount = this.getChargeAmount(scrapped);
@@ -282,18 +287,27 @@ export class SearcherHost extends RPCHost {
     }
 
     async *fetchSearchResults(mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
-        urls: URL[], options?: ScrappingOptions, noCache = false) {
-
-        for await (const scrapped of this.crawler.scrapMany(urls, options, noCache)) {
+        searchResults: WebSearchResult[], options?: ScrappingOptions, pageCacheTolerance?: number) {
+        const urls = searchResults.map((x) => new URL(x.url));
+        for await (const scrapped of this.crawler.scrapMany(urls, options, pageCacheTolerance)) {
             const mapped = scrapped.map((x, i) => {
-                if (!x) {
+                const upstreamSearchResult = searchResults[i];
+                if (!x || (!x.parsed && mode !== 'markdown')) {
                     const p = {
-                        toString() {
-                            return `[${i + 1}] No content available for ${urls[i]}`;
+                        toString(this: any) {
+                            if (this.title && this.description) {
+                                return `[${i + 1}] Title: ${this.title}
+[${i + 1}] URL Source: ${this.url}
+[${i + 1}] Description: ${this.description}
+`;
+                            }
+                            return `[${i + 1}] No content available for ${this.url}`;
                         }
                     };
                     const r = Object.create(p);
-                    r.url = urls[i].toString();
+                    r.url = upstreamSearchResult.url;
+                    r.title = upstreamSearchResult.title;
+                    r.description = upstreamSearchResult.description;
 
                     return r;
                 }
@@ -317,7 +331,7 @@ export class SearcherHost extends RPCHost {
 [${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
-        `;
+`;
                     };
                 }
             }

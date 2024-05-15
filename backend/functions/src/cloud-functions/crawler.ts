@@ -426,6 +426,7 @@ ${this.content}
         const customMode = ctx.req.get('x-respond-with') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
+        const cacheTolerance = noCache ? 0 : this.cacheValidMs;
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
         if (Array.isArray(setCookieHeaders)) {
@@ -454,7 +455,7 @@ ${this.content}
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
+                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
                     if (!scrapped) {
                         continue;
                     }
@@ -481,7 +482,7 @@ ${this.content}
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
+            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
                 lastScrapped = scrapped;
                 if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                     continue;
@@ -503,7 +504,7 @@ ${this.content}
             return formatted;
         }
 
-        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, noCache)) {
+        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
             lastScrapped = scrapped;
             if (!scrapped?.parsed?.content || !(scrapped.title?.trim())) {
                 continue;
@@ -546,7 +547,7 @@ ${this.content}
         return digest;
     }
 
-    async queryCache(urlToCrawl: URL) {
+    async queryCache(urlToCrawl: URL, cacheTolerance: number) {
         const digest = this.getUrlDigest(urlToCrawl);
 
         const cache = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
@@ -556,9 +557,9 @@ ${this.content}
         }
 
         const age = Date.now() - cache.createdAt.valueOf();
-        const stale = cache.createdAt.valueOf() < (Date.now() - this.cacheValidMs);
-        this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old`, {
-            url: urlToCrawl, digest, age, stale
+        const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
+        this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
+            url: urlToCrawl, digest, age, stale, cacheTolerance
         });
 
         let snapshot: PageSnapshot | undefined;
@@ -641,10 +642,10 @@ ${this.content}
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ScrappingOptions, noCache: boolean = false) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
         let cache;
-        if (!noCache && !crawlOpts?.cookies?.length) {
-            cache = await this.queryCache(urlToCrawl);
+        if (cacheTolerance && !crawlOpts?.cookies?.length) {
+            cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
         if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
@@ -687,10 +688,10 @@ ${this.content}
     }
 
 
-    async *scrapMany(urls: URL[], options?: ScrappingOptions, noCache = false) {
-        const iterators = urls.map((url) => this.cachedScrap(url, options, noCache));
+    async *scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
+        const iterators = urls.map((url) => this.cachedScrap(url, options, cacheTolerance));
 
-        const results: (PageSnapshot | undefined)[] = iterators.map((_x)=> undefined);
+        const results: (PageSnapshot | undefined)[] = iterators.map((_x) => undefined);
 
         let nextDeferred = Defer();
         let concluded = false;
