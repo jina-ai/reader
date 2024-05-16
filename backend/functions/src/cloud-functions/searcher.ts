@@ -169,9 +169,7 @@ export class SearcherHost extends RPCHost {
                     auth.reportUsage(chargeAmount, 'reader-search').catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
-                    apiRoll._ref?.set({
-                        chargeAmount,
-                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
+                    apiRoll.chargeAmount = chargeAmount;
                 }
             });
         } else if (ctx.req.ip) {
@@ -184,9 +182,7 @@ export class SearcherHost extends RPCHost {
             );
             rpcReflect.finally(() => {
                 if (chargeAmount) {
-                    apiRoll._ref?.set({
-                        chargeAmount,
-                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
+                    apiRoll.chargeAmount = chargeAmount;
                 }
             });
         }
@@ -415,7 +411,7 @@ ${this.content}
         return resultArray;
     }
 
-    getChargeAmount(formatted: any[]) {
+    getChargeAmount(formatted: FormattedPage[]) {
         return _.sum(
             formatted.map((x) => this.crawler.getChargeAmount(x) || 0)
         );

@@ -425,9 +425,7 @@ ${this.content}
                     auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
-                    apiRoll._ref?.set({
-                        chargeAmount,
-                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
+                    apiRoll.chargeAmount = chargeAmount;
                 }
             });
         } else if (ctx.req.ip) {
@@ -724,7 +722,7 @@ ${this.content}
         }
     }
 
-    getChargeAmount(formatted: { [k: string]: any; }) {
+    getChargeAmount(formatted: FormattedPage) {
         if (!formatted) {
             return undefined;
         }
@@ -735,7 +733,7 @@ ${this.content}
             return estimateToken(textContent);
         }
 
-        const imageContent = formatted.screenshotUrl || formatted?.screenshot;
+        const imageContent = formatted.screenshotUrl || (formatted as any)?.screenshot;
 
         if (imageContent) {
             // OpenAI image token count for 1024x1024 image
