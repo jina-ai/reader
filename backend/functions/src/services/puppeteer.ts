@@ -99,7 +99,7 @@ export class PuppeteerControl extends AsyncService {
             return page.browser().connected && !page.isClosed();
         }
     }, {
-        max: Math.max(1 + Math.floor(os.totalmem() / (384 * 1024 * 1024)), 16),
+        max: Math.max(1 + Math.floor(os.totalmem() / (256 * 1024 * 1024)), 16),
         min: 1,
         acquireTimeoutMillis: 60_000,
         testOnBorrow: true,

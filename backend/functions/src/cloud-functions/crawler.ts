@@ -28,6 +28,18 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     targetSelector?: string;
 }
 
+export interface FormattedPage {
+    title?: string;
+    url?: string;
+    content?: string;
+    publishedTime?: string;
+    html?: string;
+    text?: string;
+    screenshotUrl?: string;
+
+    toString: () => string;
+}
+
 @singleton()
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
@@ -123,7 +135,7 @@ export class CrawlerHost extends RPCHost {
 
     async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
-    }, nominalUrl?: URL) {
+    }, nominalUrl?: URL){
         if (mode === 'screenshot') {
             if (snapshot.screenshot && !snapshot.screenshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
@@ -140,7 +152,7 @@ export class CrawlerHost extends RPCHost {
                 toString() {
                     return this.screenshotUrl;
                 }
-            };
+            } as FormattedPage;
         }
         if (mode === 'html') {
             return {
@@ -148,7 +160,7 @@ export class CrawlerHost extends RPCHost {
                 toString() {
                     return this.html;
                 }
-            };
+            } as FormattedPage;
         }
         if (mode === 'text') {
             return {
@@ -156,7 +168,7 @@ export class CrawlerHost extends RPCHost {
                 toString() {
                     return this.text;
                 }
-            };
+            } as FormattedPage;
         }
 
         const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
@@ -272,7 +284,7 @@ ${this.content}
             }
         };
 
-        return formatted;
+        return formatted as FormattedPage;
     }
 
     @CloudHTTPv2({

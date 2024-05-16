@@ -12,7 +12,7 @@ import { ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { BraveSearchService } from '../services/brave-search';
-import { CrawlerHost } from './crawler';
+import { CrawlerHost, FormattedPage } from './crawler';
 import { CookieParam } from 'puppeteer';
 
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
@@ -30,6 +30,8 @@ export class SearcherHost extends RPCHost {
     pageCacheToleranceMs = 1000 * 3600 * 24;
 
     reasonableDelayMs = 10_000;
+
+    targetResultCount = 5;
 
     constructor(
         protected globalLogger: Logger,
@@ -63,7 +65,7 @@ export class SearcherHost extends RPCHost {
         runtime: {
             memory: '8GiB',
             timeoutSeconds: 300,
-            concurrency: 8,
+            concurrency: 4,
             maxInstances: 200,
         },
         openapi: {
@@ -154,7 +156,7 @@ export class SearcherHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
                 [
                     // 40 requests per minute
                     new Date(Date.now() - 60 * 1000), 40
@@ -163,19 +165,29 @@ export class SearcherHost extends RPCHost {
 
             rpcReflect.finally(() => {
                 if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
+                    auth.reportUsage(chargeAmount, 'reader-search').catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
+                    apiRoll._ref?.set({
+                        chargeAmount,
+                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
                 }
             });
         } else if (ctx.req.ip) {
             this.threadLocal.set('ip', ctx.req.ip);
-            await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
                 [
                     // 5 requests per minute
                     new Date(Date.now() - 60 * 1000), 5
                 ]
             );
+            rpcReflect.finally(() => {
+                if (chargeAmount) {
+                    apiRoll._ref?.set({
+                        chargeAmount,
+                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
+                }
+            });
         }
 
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
@@ -211,7 +223,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = noSlashPath;
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            count: 5
+            count: 10
         }, noCache);
 
         const it = this.fetchSearchResults(customMode, r.web.results, crawlOpts, pageCacheTolerance);
@@ -262,7 +274,7 @@ export class SearcherHost extends RPCHost {
             for await (const scrapped of it) {
                 lastScrapped = scrapped;
 
-                if (!this.qualified(scrapped)) {
+                if (!this.searchResultsQualified(scrapped)) {
                     continue;
                 }
                 clearTimeout(earlyReturnTimer);
@@ -296,7 +308,7 @@ export class SearcherHost extends RPCHost {
         for await (const scrapped of it) {
             lastScrapped = scrapped;
 
-            if (!this.qualified(scrapped)) {
+            if (!this.searchResultsQualified(scrapped)) {
                 continue;
             }
 
@@ -331,50 +343,68 @@ export class SearcherHost extends RPCHost {
             const mapped = scrapped.map((x, i) => {
                 const upstreamSearchResult = searchResults[i];
                 if (!x || (!x.parsed && mode !== 'markdown')) {
-                    const p = {
-                        toString(this: any) {
-                            if (this.title && this.description) {
-                                return `[${i + 1}] Title: ${this.title}
-[${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}
-`;
-                            }
-                            return `[${i + 1}] No content available for ${this.url}`;
-                        }
+                    return {
+                        url: upstreamSearchResult.url,
+                        title: upstreamSearchResult.title,
+                        description: upstreamSearchResult.description,
                     };
-                    const r = Object.create(p);
-                    r.url = upstreamSearchResult.url;
-                    r.title = upstreamSearchResult.title;
-                    r.description = upstreamSearchResult.description;
-
-                    return r;
                 }
                 return this.crawler.formatSnapshot(mode, x, urls[i]);
             });
 
-            const resultArray = await Promise.all(mapped);
-            for (const [i, result] of resultArray.entries()) {
-                if (result && typeof result === 'object' && Object.hasOwn(result, 'toString')) {
-                    result.toString = function (this: any) {
-                        const mixins = [];
-                        if (this.publishedTime) {
-                            mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
+            const resultArray = await Promise.all(mapped) as FormattedPage[];
+
+            yield this.reOrganizeSearchResults(resultArray);
+        }
+    }
+
+    reOrganizeSearchResults(searchResults: FormattedPage[]) {
+        const [qualifiedPages, unqualifiedPages] = _.partition(searchResults, (x) => this.pageQualified(x));
+        const acceptSet = new Set(qualifiedPages);
+
+        const n = this.targetResultCount - qualifiedPages.length;
+        for (const x of unqualifiedPages.slice(0, n >= 0 ? n : 0)) {
+            acceptSet.add(x);
+        }
+
+        const filtered = searchResults.filter((x) => acceptSet.has(x)).slice(0, this.targetResultCount);
+        filtered.toString = searchResults.toString;
+
+        const resultArray = filtered.map((x, i) => {
+
+            return {
+                ...x,
+                toString(this: any) {
+                    if (this.description) {
+                        if (this.title) {
+                            return `[${i + 1}] Title: ${this.title}
+[${i + 1}] URL Source: ${this.url}
+[${i + 1}] Description: ${this.description}
+`;
                         }
 
-                        return `[${i + 1}] Title: ${this.title}
+                        return `[${i + 1}] No content available for ${this.url}`;
+                    }
+
+                    const mixins = [];
+                    if (this.publishedTime) {
+                        mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
+                    }
+
+                    return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
 `;
-                    };
                 }
-            }
-            resultArray.toString = function () {
-                return this.map((x, i) => x ? x.toString() : `[${i + 1}] No content available for ${urls[i]}`).join('\n\n').trimEnd() + '\n';
             };
+        });
 
-            yield resultArray;
-        }
+        resultArray.toString = function () {
+            return this.map((x, i) => x ? x.toString() : `[${i + 1}] No content available for ${this[i].url}`).join('\n\n').trimEnd() + '\n';
+        };
+
+        return resultArray;
     }
 
     getChargeAmount(formatted: any[]) {
@@ -383,17 +413,16 @@ ${this.content}
         );
     }
 
-    qualified(scrapped: any[]) {
-        return _.every(scrapped, (x) =>
-            (x as any)?.title &&
-            (
-                (x as any).content ||
-                (x as any).screenShotUrl ||
-                (x as any).screenshot ||
-                (x as any).text ||
-                (x as any).html
-            )
-        );
+    pageQualified(formattedPage: FormattedPage) {
+        return formattedPage.title &&
+            formattedPage.content ||
+            formattedPage.screenshotUrl ||
+            formattedPage.text ||
+            formattedPage.html;
+    }
+
+    searchResultsQualified(results: FormattedPage[]) {
+        return _.every(results, (x) => this.pageQualified(x)) && results.length >= this.targetResultCount;
     }
 
     async cachedWebSearch(query: WebSearchQueryParams, noCache: boolean = false) {
