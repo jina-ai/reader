@@ -226,7 +226,11 @@ export class SearcherHost extends RPCHost {
             count: 10
         }, noCache);
 
-        const it = this.fetchSearchResults(customMode, r.web.results, crawlOpts, pageCacheTolerance);
+        if (!r.web?.results.length) {
+            throw new AssertionFailureError(`No search results available for query ${searchQuery}`);
+        }
+
+        const it = this.fetchSearchResults(customMode, r.web?.results, crawlOpts, pageCacheTolerance);
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -334,10 +338,13 @@ export class SearcherHost extends RPCHost {
 
     async *fetchSearchResults(
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
-        searchResults: WebSearchResult[],
+        searchResults?: WebSearchResult[],
         options?: ScrappingOptions,
         pageCacheTolerance?: number
     ) {
+        if (!searchResults) {
+            return;
+        }
         const urls = searchResults.map((x) => new URL(x.url));
         for await (const scrapped of this.crawler.scrapMany(urls, options, pageCacheTolerance)) {
             const mapped = scrapped.map((x, i) => {
