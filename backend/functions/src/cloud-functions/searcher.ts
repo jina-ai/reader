@@ -451,20 +451,31 @@ ${this.content}
             }
         }
 
-        const r = await this.braveSearchService.webSearch(query);
+        try {
+            const r = await this.braveSearchService.webSearch(query);
 
-        const nowDate = new Date();
-        const record = SearchResult.from({
-            query,
-            queryDigest,
-            response: r,
-            createdAt: nowDate,
-            expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
-        });
-        SearchResult.save(record.degradeForFireStore()).catch((err) => {
-            this.logger.warn(`Failed to cache search result`, { err });
-        });
+            const nowDate = new Date();
+            const record = SearchResult.from({
+                query,
+                queryDigest,
+                response: r,
+                createdAt: nowDate,
+                expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
+            });
+            SearchResult.save(record.degradeForFireStore()).catch((err) => {
+                this.logger.warn(`Failed to cache search result`, { err });
+            });
 
-        return r;
+            return r;
+        } catch (err: any) {
+            if (cache) {
+                this.logger.warn(`Failed to fetch search result, but a stale cache is available. falling back to stale cache`, { err: marshalErrorLike(err) });
+
+                return cache.response as WebSearchApiResponse;
+            }
+
+            throw err;
+        }
+
     }
 }

@@ -1,4 +1,4 @@
-import { AsyncService, DownstreamServiceFailureError } from 'civkit';
+import { AsyncService, DownstreamServiceFailureError, marshalErrorLike } from 'civkit';
 import { singleton } from 'tsyringe';
 import { Logger } from '../shared/services/logger';
 import { SecretExposer } from '../shared/services/secrets';
@@ -62,8 +62,10 @@ export class BraveSearchService extends AsyncService {
             const r = await this.braveSearchHTTP.webSearch(query, { headers: extraHeaders as Record<string, string> });
 
             return r.parsed;
-        } catch (err) {
-            throw new DownstreamServiceFailureError({ message: `Search failed`, cause: err });
+        } catch (err: any) {
+            this.logger.error(`Web search failed: ${err?.message}`, { err: marshalErrorLike(err) });
+
+            throw new DownstreamServiceFailureError({ message: `Search failed` });
         }
 
     }
