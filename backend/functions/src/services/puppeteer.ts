@@ -246,9 +246,32 @@ function giveSnapshot() {
     return r;
 }
 `));
+        preparations.push(page.setRequestInterception(true));
+
         await Promise.all(preparations);
 
         await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
+
+        page.on('request', (req) => {
+            const requestUrl = req.url();
+            if (!requestUrl.startsWith("http:") && !requestUrl.startsWith("https:") && requestUrl !== 'about:blank') {
+                return req.abort('blockedbyclient', 1000);
+            }
+            const parsedUrl = new URL(requestUrl);
+
+            if (
+                parsedUrl.hostname === 'localhost' ||
+                parsedUrl.hostname.startsWith('127.')
+            ) {
+                return req.abort('blockedbyclient', 1000);
+            }
+
+            const continueArgs = req.continueRequestOverrides
+                ? [req.continueRequestOverrides(), 0] as const
+                : [];
+
+            return req.continue(continueArgs[0], continueArgs[1]);
+        });
 
         await page.evaluateOnNewDocument(`
 let aftershot = undefined;
