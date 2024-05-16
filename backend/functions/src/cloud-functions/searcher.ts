@@ -156,7 +156,7 @@ export class SearcherHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['SEARCH'],
                 [
                     // 40 requests per minute
                     new Date(Date.now() - 60 * 1000), 40
@@ -175,7 +175,7 @@ export class SearcherHost extends RPCHost {
             });
         } else if (ctx.req.ip) {
             this.threadLocal.set('ip', ctx.req.ip);
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['SEARCH'],
                 [
                     // 5 requests per minute
                     new Date(Date.now() - 60 * 1000), 5
