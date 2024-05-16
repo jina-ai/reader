@@ -30,12 +30,14 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
 
 export interface FormattedPage {
     title?: string;
+    description?: string;
     url?: string;
     content?: string;
     publishedTime?: string;
     html?: string;
     text?: string;
     screenshotUrl?: string;
+    screenshot?: Buffer;
 
     toString: () => string;
 }
@@ -727,13 +729,13 @@ ${this.content}
             return undefined;
         }
 
-        const textContent = formatted?.content || formatted?.text || formatted?.html;
+        const textContent = formatted?.content || formatted?.description  || formatted?.text || formatted?.html;
 
         if (typeof textContent === 'string') {
             return estimateToken(textContent);
         }
 
-        const imageContent = formatted.screenshotUrl || (formatted as any)?.screenshot;
+        const imageContent = formatted.screenshotUrl || formatted.screenshot;
 
         if (imageContent) {
             // OpenAI image token count for 1024x1024 image
