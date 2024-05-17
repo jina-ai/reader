@@ -58,8 +58,13 @@ export class BraveSearchService extends AsyncService {
             extraHeaders['User-Agent'] = this.threadLocal.get('userAgent');
         }
 
+        const encoded = { ...query };
+        if (encoded.q) {
+            encoded.q = (Buffer.from(encoded.q).toString('ascii') === encoded.q) ? encoded.q : encodeURIComponent(encoded.q);
+        }
+
         try {
-            const r = await this.braveSearchHTTP.webSearch(query, { headers: extraHeaders as Record<string, string> });
+            const r = await this.braveSearchHTTP.webSearch(encoded, { headers: extraHeaders as Record<string, string> });
 
             return r.parsed;
         } catch (err: any) {
