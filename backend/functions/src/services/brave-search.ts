@@ -37,7 +37,7 @@ export class BraveSearchService extends AsyncService {
             const geoip = await this.geoipControl.lookupCity(ip, GEOIP_SUPPORTED_LANGUAGES.EN);
 
             if (geoip?.city) {
-                extraHeaders['X-Loc-City'] = geoip.city;
+                extraHeaders['X-Loc-City'] = encodeURIComponent(geoip.city);
             }
             if (geoip?.country) {
                 extraHeaders['X-Loc-Country'] = geoip.country.code;
@@ -50,8 +50,8 @@ export class BraveSearchService extends AsyncService {
                 extraHeaders['X-Loc-Long'] = `${geoip.coordinates[1]}`;
             }
             if (geoip?.subdivisions?.length) {
-                extraHeaders['X-Loc-State'] = geoip.subdivisions[0].code;
-                extraHeaders['X-Loc-State-Name'] = geoip.subdivisions[0].name;
+                extraHeaders['X-Loc-State'] = encodeURIComponent(`${geoip.subdivisions[0].code}`);
+                extraHeaders['X-Loc-State-Name'] = encodeURIComponent(`${geoip.subdivisions[0].name}`);
             }
         }
         if (this.threadLocal.get('userAgent')) {
