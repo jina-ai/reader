@@ -48,6 +48,10 @@ export interface PageSnapshot {
     imgs?: ImgBrief[];
 }
 
+export interface ExtendedSnapshot extends PageSnapshot {
+    links: { [k: string]: string; };
+}
+
 export interface ScrappingOptions {
     proxyUrl?: string;
     cookies?: CookieParam[];
@@ -530,6 +534,33 @@ document.addEventListener('load', handlePageLoad);
         } as PageSnapshot;
 
         return r;
+    }
+
+    getExtendSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
+        const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
+        try {
+            const jsdom = new JSDOM(snapshot.html, { url: snapshot.href });
+            const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
+                .map((x: any) => [x.getAttribute('href'), x.textContent.replace(/\s+/g, ' ').trim()])
+                .map(([href, text]) => {
+                    try {
+                        return [new URL(href, snapshot.href).toString(), text] as const;
+                    } catch (err) {
+                        return undefined;
+                    }
+                })
+                .filter(Boolean)
+                .reduce((acc, pair) => {
+                    acc[pair![0]] = pair![1];
+                    return acc;
+                }, {} as { [k: string]: string; });
+
+            extendedSnapshot.links = links;
+        } catch (_err) {
+            void 0;
+        }
+
+        return extendedSnapshot;
     }
 }
 

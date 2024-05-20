@@ -189,6 +189,8 @@ export class SearcherHost extends RPCHost {
 
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
+        const withLinksSummary = Boolean(ctx.req.get('x-with-links-summary'));
+        const withImagesSummary = Boolean(ctx.req.get('x-with-images-summary'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         let pageCacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
         if (isNaN(pageCacheTolerance)) {
@@ -211,6 +213,9 @@ export class SearcherHost extends RPCHost {
             });
         }
         this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
+        this.threadLocal.set('withLinksSummary', withLinksSummary);
+        this.threadLocal.set('withImagesSummary', withImagesSummary);
+
         const crawlOpts: ScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
             cookies,
@@ -395,11 +400,33 @@ export class SearcherHost extends RPCHost {
                         mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
                     }
 
+                    const suffixMixins = [];
+                    if (this.images) {
+                        const imageSummaryChunks = ['Images:'];
+                        let i = 0;
+                        for (const [k, v] of Object.entries(this.images)) {
+                            i++;
+                            if (v) {
+                                imageSummaryChunks.push(`- ![Image ${i}: ${v}](${k})`);
+                            } else {
+                                imageSummaryChunks.push(`- ![Image ${i}](${k})`);
+                            }
+                        }
+                        suffixMixins.push(imageSummaryChunks.join('\n'));
+                    }
+                    if (this.links) {
+                        const linkSummaryChunks = ['Links/Buttons:'];
+                        for (const [k, v] of Object.entries(this.links)) {
+                            linkSummaryChunks.push(`- [${v}](${k})`);
+                        }
+                        suffixMixins.push(linkSummaryChunks.join('\n'));
+                    }
+
                     return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
-`;
+${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 }
             };
         });

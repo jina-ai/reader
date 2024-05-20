@@ -38,6 +38,8 @@ export interface FormattedPage {
     text?: string;
     screenshotUrl?: string;
     screenshot?: Buffer;
+    links?: { [k: string]: string; };
+    images?: { [k: string]: string; };
 
     toString: () => string;
 }
@@ -137,7 +139,7 @@ export class CrawlerHost extends RPCHost {
 
     async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
-    }, nominalUrl?: URL){
+    }, nominalUrl?: URL) {
         if (mode === 'screenshot') {
             if (snapshot.screenshot && !snapshot.screenshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
@@ -193,6 +195,7 @@ export class CrawlerHost extends RPCHost {
             await Promise.all(tasks);
         }
         let imgIdx = 0;
+        const imageSummary = {} as { [k: string]: string; };
         turnDownService.addRule('img-generated-alt', {
             filter: 'img',
             replacement: (_content, node) => {
@@ -217,8 +220,13 @@ export class CrawlerHost extends RPCHost {
                 const mapped = urlToAltMap[src];
                 imgIdx++;
                 if (mapped) {
+                    imageSummary[src] = mapped || alt;
+
                     return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
                 }
+
+                imageSummary[src] = alt || '';
+
                 return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
             }
         });
@@ -260,20 +268,41 @@ export class CrawlerHost extends RPCHost {
 
         const cleanText = (contentText || '').trim();
 
-        const formatted = {
+        const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
             url: nominalUrl?.toString() || snapshot.href?.trim(),
             content: cleanText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,
 
             toString() {
+                if (mode === 'markdown') {
+                    return this.content as string;
+                }
+
                 const mixins = [];
                 if (this.publishedTime) {
                     mixins.push(`Published Time: ${this.publishedTime}`);
                 }
-
-                if (mode === 'markdown') {
-                    return this.content;
+                const suffixMixins = [];
+                if (this.images) {
+                    const imageSummaryChunks = ['Images:'];
+                    let i = 0;
+                    for (const [k, v] of Object.entries(this.images)) {
+                        i++;
+                        if (v) {
+                            imageSummaryChunks.push(`- ![Image ${i}: ${v}](${k})`);
+                        } else {
+                            imageSummaryChunks.push(`- ![Image ${i}](${k})`);
+                        }
+                    }
+                    suffixMixins.push(imageSummaryChunks.join('\n'));
+                }
+                if (this.links) {
+                    const linkSummaryChunks = ['Links/Buttons:'];
+                    for (const [k, v] of Object.entries(this.links)) {
+                        linkSummaryChunks.push(`- [${v}](${k})`);
+                    }
+                    suffixMixins.push(linkSummaryChunks.join('\n'));
                 }
 
                 return `Title: ${this.title}
@@ -282,9 +311,16 @@ URL Source: ${this.url}
 ${mixins.length ? `\n${mixins.join('\n\n')}\n` : ''}
 Markdown Content:
 ${this.content}
-`;
+${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
         };
+
+        if (this.threadLocal.get('withLinksSummary')) {
+            formatted.links = this.puppeteerControl.getExtendSnapshot(snapshot).links;
+        }
+        if (this.threadLocal.get('withImagesSummary')) {
+            formatted.images = imageSummary;
+        }
 
         return formatted as FormattedPage;
     }
@@ -465,6 +501,8 @@ ${this.content}
 
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
+        const withLinksSummary = Boolean(ctx.req.get('x-with-links-summary'));
+        const withImagesSummary = Boolean(ctx.req.get('x-with-images-summary'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         let cacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
         if (isNaN(cacheTolerance)) {
@@ -491,6 +529,8 @@ ${this.content}
             });
         }
         this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
+        this.threadLocal.set('withLinksSummary', withLinksSummary);
+        this.threadLocal.set('withImagesSummary', withImagesSummary);
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
@@ -729,7 +769,7 @@ ${this.content}
             return undefined;
         }
 
-        const textContent = formatted?.content || formatted?.description  || formatted?.text || formatted?.html;
+        const textContent = formatted?.content || formatted?.description || formatted?.text || formatted?.html;
 
         if (typeof textContent === 'string') {
             return estimateToken(textContent);
