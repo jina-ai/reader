@@ -116,7 +116,18 @@ export class SearcherHost extends RPCHost {
                         schema: { type: 'string' }
                     },
                     'X-With-Generated-Alt': {
-                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.\n\n` +
+                            `Note: Does not work when \`X-Respond-With\` is specified`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-Images-Summary': {
+                        description: `Enable dedicated summary section for images on the page.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-links-Summary': {
+                        description: `Enable dedicated summary section for hyper links on the page.`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -189,6 +200,8 @@ export class SearcherHost extends RPCHost {
 
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
+        const withLinksSummary = Boolean(ctx.req.get('x-with-links-summary'));
+        const withImagesSummary = Boolean(ctx.req.get('x-with-images-summary'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         let pageCacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
         if (isNaN(pageCacheTolerance)) {
@@ -211,6 +224,9 @@ export class SearcherHost extends RPCHost {
             });
         }
         this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
+        this.threadLocal.set('withLinksSummary', withLinksSummary);
+        this.threadLocal.set('withImagesSummary', withImagesSummary);
+
         const crawlOpts: ScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
             cookies,
@@ -395,11 +411,33 @@ export class SearcherHost extends RPCHost {
                         mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
                     }
 
+                    const suffixMixins = [];
+                    if (this.images) {
+                        const imageSummaryChunks = [`[${i + 1}] Images:`];
+                        for (const [k, v] of Object.entries(this.images)) {
+                            imageSummaryChunks.push(`- ![${k}](${v})`);
+                        }
+                        if (imageSummaryChunks.length === 1) {
+                            imageSummaryChunks.push('This page does not seem to contain any images.');
+                        }
+                        suffixMixins.push(imageSummaryChunks.join('\n'));
+                    }
+                    if (this.links) {
+                        const linkSummaryChunks = [`[${i + 1}] Links/Buttons:`];
+                        for (const [k, v] of Object.entries(this.links)) {
+                            linkSummaryChunks.push(`- [${k}](${v})`);
+                        }
+                        if (linkSummaryChunks.length === 1) {
+                            linkSummaryChunks.push('This page does not seem to contain any buttons/links.');
+                        }
+                        suffixMixins.push(linkSummaryChunks.join('\n'));
+                    }
+
                     return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
-`;
+${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
                 }
             };
         });

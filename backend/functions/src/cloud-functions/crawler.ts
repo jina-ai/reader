@@ -38,6 +38,8 @@ export interface FormattedPage {
     text?: string;
     screenshotUrl?: string;
     screenshot?: Buffer;
+    links?: { [k: string]: string; };
+    images?: { [k: string]: string; };
 
     toString: () => string;
 }
@@ -135,9 +137,43 @@ export class CrawlerHost extends RPCHost {
         return turnDownService;
     }
 
+    getGeneralSnapshotMixins(snapshot: PageSnapshot) {
+        const inferred = this.puppeteerControl.inferSnapshot(snapshot);
+        const mixin: any = {};
+        if (this.threadLocal.get('withImagesSummary')) {
+            const imageSummary = {} as { [k: string]: string; };
+            const imageIdxTrack = new Map<string, number[]>();
+
+            let imgIdx = 0;
+
+            for (const img of inferred.imgs) {
+                const imgSerial = ++imgIdx;
+                const idxArr = imageIdxTrack.has(img.src) ? imageIdxTrack.get(img.src)! : [];
+                idxArr.push(imgSerial);
+                imageIdxTrack.set(img.src, idxArr);
+                imageSummary[img.src] = img.alt || '';
+            }
+
+            mixin.images =
+                _(imageSummary)
+                    .toPairs()
+                    .map(
+                        ([url, alt], i) => {
+                            return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
+                        }
+                    ).fromPairs()
+                    .value();
+        }
+        if (this.threadLocal.get('withLinksSummary')) {
+            mixin.links = _.invert(inferred.links || {});
+        }
+
+        return mixin;
+    }
+
     async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
-    }, nominalUrl?: URL){
+    }, nominalUrl?: URL) {
         if (mode === 'screenshot') {
             if (snapshot.screenshot && !snapshot.screenshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
@@ -150,6 +186,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             return {
+                ...this.getGeneralSnapshotMixins(snapshot),
                 screenshotUrl: snapshot.screenshotUrl,
                 toString() {
                     return this.screenshotUrl;
@@ -158,6 +195,7 @@ export class CrawlerHost extends RPCHost {
         }
         if (mode === 'html') {
             return {
+                ...this.getGeneralSnapshotMixins(snapshot),
                 html: snapshot.html,
                 toString() {
                     return this.html;
@@ -166,6 +204,7 @@ export class CrawlerHost extends RPCHost {
         }
         if (mode === 'text') {
             return {
+                ...this.getGeneralSnapshotMixins(snapshot),
                 text: snapshot.text,
                 toString() {
                     return this.text;
@@ -193,6 +232,8 @@ export class CrawlerHost extends RPCHost {
             await Promise.all(tasks);
         }
         let imgIdx = 0;
+        const imageSummary = {} as { [k: string]: string; };
+        const imageIdxTrack = new Map<string, number[]>();
         turnDownService.addRule('img-generated-alt', {
             filter: 'img',
             replacement: (_content, node) => {
@@ -215,10 +256,19 @@ export class CrawlerHost extends RPCHost {
                     return '';
                 }
                 const mapped = urlToAltMap[src];
-                imgIdx++;
+                const imgSerial = ++imgIdx;
+                const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
+                idxArr.push(imgSerial);
+                imageIdxTrack.set(src, idxArr);
+
                 if (mapped) {
+                    imageSummary[src] = mapped || alt;
+
                     return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
                 }
+
+                imageSummary[src] = alt || '';
+
                 return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
             }
         });
@@ -260,20 +310,41 @@ export class CrawlerHost extends RPCHost {
 
         const cleanText = (contentText || '').trim();
 
-        const formatted = {
+        const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
             url: nominalUrl?.toString() || snapshot.href?.trim(),
             content: cleanText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,
 
             toString() {
+                if (mode === 'markdown') {
+                    return this.content as string;
+                }
+
                 const mixins = [];
                 if (this.publishedTime) {
                     mixins.push(`Published Time: ${this.publishedTime}`);
                 }
-
-                if (mode === 'markdown') {
-                    return this.content;
+                const suffixMixins = [];
+                if (this.images) {
+                    const imageSummaryChunks = ['Images:'];
+                    for (const [k, v] of Object.entries(this.images)) {
+                        imageSummaryChunks.push(`- ![${k}](${v})`);
+                    }
+                    if (imageSummaryChunks.length === 1) {
+                        imageSummaryChunks.push('This page does not seem to contain any images.');
+                    }
+                    suffixMixins.push(imageSummaryChunks.join('\n'));
+                }
+                if (this.links) {
+                    const linkSummaryChunks = ['Links/Buttons:'];
+                    for (const [k, v] of Object.entries(this.links)) {
+                        linkSummaryChunks.push(`- [${k}](${v})`);
+                    }
+                    if (linkSummaryChunks.length === 1) {
+                        linkSummaryChunks.push('This page does not seem to contain any buttons/links.');
+                    }
+                    suffixMixins.push(linkSummaryChunks.join('\n'));
                 }
 
                 return `Title: ${this.title}
@@ -282,9 +353,24 @@ URL Source: ${this.url}
 ${mixins.length ? `\n${mixins.join('\n\n')}\n` : ''}
 Markdown Content:
 ${this.content}
-`;
+${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
         };
+
+        if (this.threadLocal.get('withImagesSummary')) {
+            formatted.images =
+                _(imageSummary)
+                    .toPairs()
+                    .map(
+                        ([url, alt], i) => {
+                            return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
+                        }
+                    ).fromPairs()
+                    .value();
+        }
+        if (this.threadLocal.get('withLinksSummary')) {
+            formatted.links = _.invert(this.puppeteerControl.inferSnapshot(snapshot).links || {});
+        }
 
         return formatted as FormattedPage;
     }
@@ -313,9 +399,9 @@ ${this.content}
             operation: {
                 parameters: {
                     'Accept': {
-                        description: `Specifies your preference for the response format. \n\n` +
-                            `Supported formats:\n` +
-                            `- text/event-stream\n` +
+                        description: `Specifies your preference for the response format.\n\n` +
+                            `Supported formats: \n` +
+                            `- text/event - stream\n` +
                             `- application/json  or  text/json\n` +
                             `- text/plain`
                         ,
@@ -333,8 +419,8 @@ ${this.content}
                         schema: { type: 'string' }
                     },
                     'X-Respond-With': {
-                        description: `Specifies the (non-default) form factor of the crawled data you prefer. \n\n` +
-                            `Supported formats:\n` +
+                        description: `Specifies the (non-default) form factor of the crawled data you prefer.\n\n` +
+                            `Supported formats: \n` +
                             `- markdown\n` +
                             `- html\n` +
                             `- text\n` +
@@ -344,22 +430,22 @@ ${this.content}
                         schema: { type: 'string' }
                     },
                     'X-Wait-For-Selector': {
-                        description: `Specifies a CSS selector to wait for the appearance of such an element before returning. \n\n` +
+                        description: `Specifies a CSS selector to wait for the appearance of such an element before returning.\n\n` +
                             'Example: `X-Wait-For-Selector: .content-block`\n'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Target-Selector': {
-                        description: `Specifies a CSS selector for return target instead of the full html. \n\n` +
+                        description: `Specifies a CSS selector for return target instead of the full html.\n\n` +
                             'Implies `X-Wait-For-Selector: (same selector)`'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Proxy-Url': {
-                        description: `Specifies your custom proxy if you prefer to use one. \n\n` +
-                            `Supported protocols:\n` +
+                        description: `Specifies your custom proxy if you prefer to use one.\n\n` +
+                            `Supported protocols: \n` +
                             `- http\n` +
                             `- https\n` +
                             `- socks4\n` +
@@ -375,7 +461,18 @@ ${this.content}
                         schema: { type: 'string' }
                     },
                     'X-With-Generated-Alt': {
-                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.\n\n` +
+                            `Note: Does not work when \`X-Respond-With\` is specified`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-Images-Summary': {
+                        description: `Enable dedicated summary section for images on the page.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-links-Summary': {
+                        description: `Enable dedicated summary section for hyper links on the page.`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -465,6 +562,8 @@ ${this.content}
 
         const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
         const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
+        const withLinksSummary = Boolean(ctx.req.get('x-with-links-summary'));
+        const withImagesSummary = Boolean(ctx.req.get('x-with-images-summary'));
         const noCache = Boolean(ctx.req.get('x-no-cache'));
         let cacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
         if (isNaN(cacheTolerance)) {
@@ -491,6 +590,8 @@ ${this.content}
             });
         }
         this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
+        this.threadLocal.set('withLinksSummary', withLinksSummary);
+        this.threadLocal.set('withImagesSummary', withImagesSummary);
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: ctx.req.get('x-proxy-url'),
@@ -729,7 +830,7 @@ ${this.content}
             return undefined;
         }
 
-        const textContent = formatted?.content || formatted?.description  || formatted?.text || formatted?.html;
+        const textContent = formatted?.content || formatted?.description || formatted?.text || formatted?.html;
 
         if (typeof textContent === 'string') {
             return estimateToken(textContent);
