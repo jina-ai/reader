@@ -401,8 +401,8 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     'Accept': {
                         description: `Specifies your preference for the response format.\n\n` +
                             `Supported formats: \n` +
-                            `- text/event - stream\n` +
-                            `- application/json  or  text/json\n` +
+                            `- text/event-stream\n` +
+                            `- application/json or text/json\n` +
                             `- text/plain`
                         ,
                         in: 'header',
