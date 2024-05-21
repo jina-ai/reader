@@ -321,14 +321,15 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         };
 
         if (this.threadLocal.get('withImagesSummary')) {
-            formatted.images = _.fromPairs(
-                _.toPairs(imageSummary)
+            formatted.images =
+                _(imageSummary)
+                    .toPairs()
                     .map(
                         ([url, alt], i) => {
                             return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
                         }
-                    )
-            );
+                    ).fromPairs()
+                    .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
             formatted.links = _.invert(this.puppeteerControl.getExtendSnapshot(snapshot).links || {});
