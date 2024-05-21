@@ -294,12 +294,18 @@ export class CrawlerHost extends RPCHost {
                     for (const [k, v] of Object.entries(this.images)) {
                         imageSummaryChunks.push(`- ![${k}](${v})`);
                     }
+                    if (imageSummaryChunks.length === 1) {
+                        imageSummaryChunks.push('(none)');
+                    }
                     suffixMixins.push(imageSummaryChunks.join('\n'));
                 }
                 if (this.links) {
                     const linkSummaryChunks = ['Links/Buttons:'];
                     for (const [k, v] of Object.entries(this.links)) {
                         linkSummaryChunks.push(`- [${k}](${v})`);
+                    }
+                    if (linkSummaryChunks.length === 1) {
+                        linkSummaryChunks.push('(none)');
                     }
                     suffixMixins.push(linkSummaryChunks.join('\n'));
                 }
