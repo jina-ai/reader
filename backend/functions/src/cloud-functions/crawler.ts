@@ -364,9 +364,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     'Accept': {
                         description: `Specifies your preference for the response format.\n\n` +
                             `Supported formats: \n` +
-                            `- text / event - stream\n` +
-                            `- application / json  or  text / json\n` +
-                            `- text / plain`
+                            `- text/event - stream\n` +
+                            `- application/json  or  text/json\n` +
+                            `- text/plain`
                         ,
                         in: 'header',
                         schema: { type: 'string' }
@@ -377,12 +377,12 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                         schema: { type: 'string' }
                     },
                     'X-No-Cache': {
-                        description: `Ignores internal cache if this header is specified with a value.\n\nEquivalent to X - Cache - Tolerance: 0`,
+                        description: `Ignores internal cache if this header is specified with a value.\n\nEquivalent to X-Cache-Tolerance: 0`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Respond-With': {
-                        description: `Specifies the(non -default ) form factor of the crawled data you prefer.\n\n` +
+                        description: `Specifies the (non-default) form factor of the crawled data you prefer.\n\n` +
                             `Supported formats: \n` +
                             `- markdown\n` +
                             `- html\n` +
@@ -394,14 +394,14 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     },
                     'X-Wait-For-Selector': {
                         description: `Specifies a CSS selector to wait for the appearance of such an element before returning.\n\n` +
-                            'Example: `X - Wait - For - Selector: .content - block`\n'
+                            'Example: `X-Wait-For-Selector: .content-block`\n'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Target-Selector': {
                         description: `Specifies a CSS selector for return target instead of the full html.\n\n` +
-                            'Implies `X - Wait - For - Selector: (same selector)`'
+                            'Implies `X-Wait-For-Selector: (same selector)`'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
