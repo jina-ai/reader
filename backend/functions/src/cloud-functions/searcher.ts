@@ -116,7 +116,8 @@ export class SearcherHost extends RPCHost {
                         schema: { type: 'string' }
                     },
                     'X-With-Generated-Alt': {
-                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.\n\n` +
+                            `Note: Does not work when \`X-Respond-With\` is specified`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -417,7 +418,7 @@ export class SearcherHost extends RPCHost {
                             imageSummaryChunks.push(`- ![${k}](${v})`);
                         }
                         if (imageSummaryChunks.length === 1) {
-                            imageSummaryChunks.push('(none)');
+                            imageSummaryChunks.push('This page does not seem to contain any images.');
                         }
                         suffixMixins.push(imageSummaryChunks.join('\n'));
                     }
@@ -427,7 +428,7 @@ export class SearcherHost extends RPCHost {
                             linkSummaryChunks.push(`- [${k}](${v})`);
                         }
                         if (linkSummaryChunks.length === 1) {
-                            linkSummaryChunks.push('(none)');
+                            linkSummaryChunks.push('This page does not seem to contain any buttons/links.');
                         }
                         suffixMixins.push(linkSummaryChunks.join('\n'));
                     }

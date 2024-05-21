@@ -137,6 +137,40 @@ export class CrawlerHost extends RPCHost {
         return turnDownService;
     }
 
+    getGeneralSnapshotMixins(snapshot: PageSnapshot) {
+        const inferred = this.puppeteerControl.inferSnapshot(snapshot);
+        const mixin: any = {};
+        if (this.threadLocal.get('withImagesSummary')) {
+            const imageSummary = {} as { [k: string]: string; };
+            const imageIdxTrack = new Map<string, number[]>();
+
+            let imgIdx = 0;
+
+            for (const img of inferred.imgs) {
+                const imgSerial = ++imgIdx;
+                const idxArr = imageIdxTrack.has(img.src) ? imageIdxTrack.get(img.src)! : [];
+                idxArr.push(imgSerial);
+                imageIdxTrack.set(img.src, idxArr);
+                imageSummary[img.src] = img.alt || '';
+            }
+
+            mixin.images =
+                _(imageSummary)
+                    .toPairs()
+                    .map(
+                        ([url, alt], i) => {
+                            return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
+                        }
+                    ).fromPairs()
+                    .value();
+        }
+        if (this.threadLocal.get('withLinksSummary')) {
+            mixin.links = _.invert(inferred.links || {});
+        }
+
+        return mixin;
+    }
+
     async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
     }, nominalUrl?: URL) {
@@ -152,6 +186,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             return {
+                ...this.getGeneralSnapshotMixins(snapshot),
                 screenshotUrl: snapshot.screenshotUrl,
                 toString() {
                     return this.screenshotUrl;
@@ -160,6 +195,7 @@ export class CrawlerHost extends RPCHost {
         }
         if (mode === 'html') {
             return {
+                ...this.getGeneralSnapshotMixins(snapshot),
                 html: snapshot.html,
                 toString() {
                     return this.html;
@@ -168,6 +204,7 @@ export class CrawlerHost extends RPCHost {
         }
         if (mode === 'text') {
             return {
+                ...this.getGeneralSnapshotMixins(snapshot),
                 text: snapshot.text,
                 toString() {
                     return this.text;
@@ -295,7 +332,7 @@ export class CrawlerHost extends RPCHost {
                         imageSummaryChunks.push(`- ![${k}](${v})`);
                     }
                     if (imageSummaryChunks.length === 1) {
-                        imageSummaryChunks.push('(none)');
+                        imageSummaryChunks.push('This page does not seem to contain any images.');
                     }
                     suffixMixins.push(imageSummaryChunks.join('\n'));
                 }
@@ -305,7 +342,7 @@ export class CrawlerHost extends RPCHost {
                         linkSummaryChunks.push(`- [${k}](${v})`);
                     }
                     if (linkSummaryChunks.length === 1) {
-                        linkSummaryChunks.push('(none)');
+                        linkSummaryChunks.push('This page does not seem to contain any buttons/links.');
                     }
                     suffixMixins.push(linkSummaryChunks.join('\n'));
                 }
@@ -332,7 +369,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            formatted.links = _.invert(this.puppeteerControl.getExtendSnapshot(snapshot).links || {});
+            formatted.links = _.invert(this.puppeteerControl.inferSnapshot(snapshot).links || {});
         }
 
         return formatted as FormattedPage;
@@ -424,7 +461,8 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                         schema: { type: 'string' }
                     },
                     'X-With-Generated-Alt': {
-                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        description: `Enable automatic alt-text generating for images without an meaningful alt-text.\n\n` +
+                        `Note: Does not work when \`X-Respond-With\` is specified`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -755,7 +793,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return r;
     }
 
-    async * cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
         let cache;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);

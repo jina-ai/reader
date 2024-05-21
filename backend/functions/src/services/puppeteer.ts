@@ -17,11 +17,11 @@ const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Rea
 
 export interface ImgBrief {
     src: string;
-    loaded: boolean;
-    width: number;
-    height: number;
-    naturalWidth: number;
-    naturalHeight: number;
+    loaded?: boolean;
+    width?: number;
+    height?: number;
+    naturalWidth?: number;
+    naturalHeight?: number;
     alt?: string;
 }
 
@@ -50,6 +50,7 @@ export interface PageSnapshot {
 
 export interface ExtendedSnapshot extends PageSnapshot {
     links: { [url: string]: string; };
+    imgs: ImgBrief[];
 }
 
 export interface ScrappingOptions {
@@ -535,7 +536,7 @@ document.addEventListener('load', handlePageLoad);
         return r;
     }
 
-    getExtendSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
+    inferSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {
             const jsdom = new JSDOM(snapshot.html, { url: snapshot.href });
@@ -562,6 +563,26 @@ document.addEventListener('load', handlePageLoad);
                 }, {} as { [k: string]: string; });
 
             extendedSnapshot.links = links;
+
+            const imgs = Array.from(jsdom.window.document.querySelectorAll('img[src],img[data-src]'))
+                .map((x: any) => {
+                    let linkPreferredSrc = x.getAttribute('src') || '';
+                    if (linkPreferredSrc.startsWith('data:')) {
+                        const dataSrc = x.getAttribute('data-src') || '';
+                        if (dataSrc && !dataSrc.startsWith('data:')) {
+                            linkPreferredSrc = dataSrc;
+                        }
+                    }
+
+                    return {
+                        src: new URL(linkPreferredSrc, snapshot.href).toString(),
+                        width: parseInt(x.getAttribute('width') || '0'),
+                        height: parseInt(x.getAttribute('height') || '0'),
+                        alt: x.getAttribute('alt') || x.getAttribute('title'),
+                    };
+                });
+
+            extendedSnapshot.imgs = imgs as any;
         } catch (_err) {
             void 0;
         }
