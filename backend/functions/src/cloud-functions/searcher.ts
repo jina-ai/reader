@@ -413,7 +413,7 @@ export class SearcherHost extends RPCHost {
 
                     const suffixMixins = [];
                     if (this.images) {
-                        const imageSummaryChunks = ['Images:'];
+                        const imageSummaryChunks = [`[${i + 1}] Images:`];
                         for (const [k, v] of Object.entries(this.images)) {
                             imageSummaryChunks.push(`- ![${k}](${v})`);
                         }
@@ -423,7 +423,7 @@ export class SearcherHost extends RPCHost {
                         suffixMixins.push(imageSummaryChunks.join('\n'));
                     }
                     if (this.links) {
-                        const linkSummaryChunks = ['Links/Buttons:'];
+                        const linkSummaryChunks = [`[${i + 1}] Links/Buttons:`];
                         for (const [k, v] of Object.entries(this.links)) {
                             linkSummaryChunks.push(`- [${k}](${v})`);
                         }
@@ -437,7 +437,7 @@ export class SearcherHost extends RPCHost {
 [${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
-${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
+${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
                 }
             };
         });

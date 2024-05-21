@@ -3,7 +3,7 @@ import fs from 'fs';
 import { container, singleton } from 'tsyringe';
 import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency } from 'civkit';
 import { Logger } from '../shared/services/logger';
-import { JSDOM } from 'jsdom';
+import { JSDOM, VirtualConsole } from 'jsdom';
 
 import type { Browser, CookieParam, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
@@ -14,6 +14,10 @@ import { ServiceCrashedError } from '../shared/lib/errors';
 import { Readability } from '@mozilla/readability';
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
+
+
+const virtualConsole = new VirtualConsole();
+virtualConsole.on('error', () => void 0);
 
 export interface ImgBrief {
     src: string;
@@ -491,14 +495,14 @@ document.addEventListener('load', handlePageLoad);
             return snapshot;
         }
 
-        const jsdom = new JSDOM(snapshot.html, { url: snapshot.href });
+        const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
         const elem = jsdom.window.document.querySelector(targetSelect);
 
         if (!elem) {
             return snapshot;
         }
 
-        const selectedJsDom = new JSDOM(elem.outerHTML, { url: snapshot.href });
+        const selectedJsDom = new JSDOM(elem.outerHTML, { url: snapshot.href, virtualConsole });
         let parsed;
         try {
             parsed = new Readability(selectedJsDom.window.document).parse();
@@ -539,7 +543,7 @@ document.addEventListener('load', handlePageLoad);
     inferSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {
-            const jsdom = new JSDOM(snapshot.html, { url: snapshot.href });
+            const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
             const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
                 .map((x: any) => [x.getAttribute('href'), x.textContent.replace(/\s+/g, ' ').trim()])
                 .map(([href, text]) => {
