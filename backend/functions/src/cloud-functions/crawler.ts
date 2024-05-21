@@ -462,7 +462,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     },
                     'X-With-Generated-Alt': {
                         description: `Enable automatic alt-text generating for images without an meaningful alt-text.\n\n` +
-                        `Note: Does not work when \`X-Respond-With\` is specified`,
+                            `Note: Does not work when \`X-Respond-With\` is specified`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -847,7 +847,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     }
 
 
-    async * scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
+    async *scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
         const iterators = urls.map((url) => this.cachedScrap(url, options, cacheTolerance));
 
         const results: (PageSnapshot | undefined)[] = iterators.map((_x) => undefined);
