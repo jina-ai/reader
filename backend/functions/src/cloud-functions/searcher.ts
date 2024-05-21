@@ -120,6 +120,16 @@ export class SearcherHost extends RPCHost {
                         in: 'header',
                         schema: { type: 'string' }
                     },
+                    'X-With-Images-Summary': {
+                        description: `Enable dedicated summary section for images on the page.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-links-Summary': {
+                        description: `Enable dedicated summary section for hyper links on the page.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
                 }
             }
         },
@@ -403,21 +413,15 @@ export class SearcherHost extends RPCHost {
                     const suffixMixins = [];
                     if (this.images) {
                         const imageSummaryChunks = ['Images:'];
-                        let i = 0;
                         for (const [k, v] of Object.entries(this.images)) {
-                            i++;
-                            if (v) {
-                                imageSummaryChunks.push(`- ![Image ${i}: ${v}](${k})`);
-                            } else {
-                                imageSummaryChunks.push(`- ![Image ${i}](${k})`);
-                            }
+                            imageSummaryChunks.push(`- ![${k}](${v})`);
                         }
                         suffixMixins.push(imageSummaryChunks.join('\n'));
                     }
                     if (this.links) {
                         const linkSummaryChunks = ['Links/Buttons:'];
                         for (const [k, v] of Object.entries(this.links)) {
-                            linkSummaryChunks.push(`- [${v}](${k})`);
+                            linkSummaryChunks.push(`- [${k}](${v})`);
                         }
                         suffixMixins.push(linkSummaryChunks.join('\n'));
                     }

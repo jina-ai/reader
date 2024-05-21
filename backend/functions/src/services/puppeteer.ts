@@ -49,7 +49,7 @@ export interface PageSnapshot {
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
-    links: { [k: string]: string; };
+    links: { [url: string]: string; };
 }
 
 export interface ScrappingOptions {
@@ -104,7 +104,6 @@ export class PuppeteerControl extends AsyncService {
 
     briefPages() {
         this.logger.info(`Status: ${this.livePages.size} pages alive: ${Array.from(this.livePages).map((x) => this.snMap.get(x)).sort().join(', ')}; ${this.__loadedPage.length} idle pages: ${this.__loadedPage.map((x) => this.snMap.get(x)).sort().join(', ')}`);
-        this.logger.info(``);
     }
 
     override async init() {
@@ -308,7 +307,7 @@ document.addEventListener('load', handlePageLoad);
     }
 
     async getNextPage() {
-        let thePage;
+        let thePage: Page | undefined;
         if (this.__loadedPage.length) {
             thePage = this.__loadedPage.shift();
             if (this.__loadedPage.length <= 1) {
@@ -325,8 +324,8 @@ document.addEventListener('load', handlePageLoad);
         }
 
         const timer = setTimeout(() => {
-            this.logger.warn(`Page is not allowed to live past 5 minutes, ditching page ${this.snMap.get(thePage)}...`);
-            this.ditchPage(thePage);
+            this.logger.warn(`Page is not allowed to live past 5 minutes, ditching page ${this.snMap.get(thePage!)}...`);
+            this.ditchPage(thePage!);
         }, 300 * 1000);
 
         this.finalizerMap.set(thePage, timer);
@@ -543,8 +542,15 @@ document.addEventListener('load', handlePageLoad);
             const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
                 .map((x: any) => [x.getAttribute('href'), x.textContent.replace(/\s+/g, ' ').trim()])
                 .map(([href, text]) => {
+                    if (!text) {
+                        return undefined;
+                    }
                     try {
-                        return [new URL(href, snapshot.href).toString(), text] as const;
+                        const parsed = new URL(href, snapshot.href);
+                        if (parsed.protocol === 'file:' || parsed.protocol === 'javascript:') {
+                            return undefined;
+                        }
+                        return [parsed.toString(), text] as const;
                     } catch (err) {
                         return undefined;
                     }

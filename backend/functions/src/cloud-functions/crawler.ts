@@ -196,6 +196,7 @@ export class CrawlerHost extends RPCHost {
         }
         let imgIdx = 0;
         const imageSummary = {} as { [k: string]: string; };
+        const imageIdxTrack = new Map<string, number[]>();
         turnDownService.addRule('img-generated-alt', {
             filter: 'img',
             replacement: (_content, node) => {
@@ -218,7 +219,11 @@ export class CrawlerHost extends RPCHost {
                     return '';
                 }
                 const mapped = urlToAltMap[src];
-                imgIdx++;
+                const imgSerial = ++imgIdx;
+                const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
+                idxArr.push(imgSerial);
+                imageIdxTrack.set(src, idxArr);
+
                 if (mapped) {
                     imageSummary[src] = mapped || alt;
 
@@ -286,21 +291,15 @@ export class CrawlerHost extends RPCHost {
                 const suffixMixins = [];
                 if (this.images) {
                     const imageSummaryChunks = ['Images:'];
-                    let i = 0;
                     for (const [k, v] of Object.entries(this.images)) {
-                        i++;
-                        if (v) {
-                            imageSummaryChunks.push(`- ![Image ${i}: ${v}](${k})`);
-                        } else {
-                            imageSummaryChunks.push(`- ![Image ${i}](${k})`);
-                        }
+                        imageSummaryChunks.push(`- ![${k}](${v})`);
                     }
                     suffixMixins.push(imageSummaryChunks.join('\n'));
                 }
                 if (this.links) {
                     const linkSummaryChunks = ['Links/Buttons:'];
                     for (const [k, v] of Object.entries(this.links)) {
-                        linkSummaryChunks.push(`- [${v}](${k})`);
+                        linkSummaryChunks.push(`- [${k}](${v})`);
                     }
                     suffixMixins.push(linkSummaryChunks.join('\n'));
                 }
@@ -315,11 +314,18 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
         };
 
-        if (this.threadLocal.get('withLinksSummary')) {
-            formatted.links = this.puppeteerControl.getExtendSnapshot(snapshot).links;
-        }
         if (this.threadLocal.get('withImagesSummary')) {
-            formatted.images = imageSummary;
+            formatted.images = _.fromPairs(
+                _.toPairs(imageSummary)
+                    .map(
+                        ([url, alt], i) => {
+                            return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
+                        }
+                    )
+            );
+        }
+        if (this.threadLocal.get('withLinksSummary')) {
+            formatted.links = _.invert(this.puppeteerControl.getExtendSnapshot(snapshot).links || {});
         }
 
         return formatted as FormattedPage;
@@ -349,11 +355,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             operation: {
                 parameters: {
                     'Accept': {
-                        description: `Specifies your preference for the response format. \n\n` +
-                            `Supported formats:\n` +
-                            `- text/event-stream\n` +
-                            `- application/json  or  text/json\n` +
-                            `- text/plain`
+                        description: `Specifies your preference for the response format.\n\n` +
+                            `Supported formats: \n` +
+                            `- text / event - stream\n` +
+                            `- application / json  or  text / json\n` +
+                            `- text / plain`
                         ,
                         in: 'header',
                         schema: { type: 'string' }
@@ -364,13 +370,13 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                         schema: { type: 'string' }
                     },
                     'X-No-Cache': {
-                        description: `Ignores internal cache if this header is specified with a value.\n\nEquivalent to X-Cache-Tolerance: 0`,
+                        description: `Ignores internal cache if this header is specified with a value.\n\nEquivalent to X - Cache - Tolerance: 0`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Respond-With': {
-                        description: `Specifies the (non-default) form factor of the crawled data you prefer. \n\n` +
-                            `Supported formats:\n` +
+                        description: `Specifies the(non -default ) form factor of the crawled data you prefer.\n\n` +
+                            `Supported formats: \n` +
                             `- markdown\n` +
                             `- html\n` +
                             `- text\n` +
@@ -380,22 +386,22 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                         schema: { type: 'string' }
                     },
                     'X-Wait-For-Selector': {
-                        description: `Specifies a CSS selector to wait for the appearance of such an element before returning. \n\n` +
-                            'Example: `X-Wait-For-Selector: .content-block`\n'
+                        description: `Specifies a CSS selector to wait for the appearance of such an element before returning.\n\n` +
+                            'Example: `X - Wait - For - Selector: .content - block`\n'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Target-Selector': {
-                        description: `Specifies a CSS selector for return target instead of the full html. \n\n` +
-                            'Implies `X-Wait-For-Selector: (same selector)`'
+                        description: `Specifies a CSS selector for return target instead of the full html.\n\n` +
+                            'Implies `X - Wait - For - Selector: (same selector)`'
                         ,
                         in: 'header',
                         schema: { type: 'string' }
                     },
                     'X-Proxy-Url': {
-                        description: `Specifies your custom proxy if you prefer to use one. \n\n` +
-                            `Supported protocols:\n` +
+                        description: `Specifies your custom proxy if you prefer to use one.\n\n` +
+                            `Supported protocols: \n` +
                             `- http\n` +
                             `- https\n` +
                             `- socks4\n` +
@@ -412,6 +418,16 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     },
                     'X-With-Generated-Alt': {
                         description: `Enable automatic alt-text generating for images without an meaningful alt-text.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-Images-Summary': {
+                        description: `Enable dedicated summary section for images on the page.`,
+                        in: 'header',
+                        schema: { type: 'string' }
+                    },
+                    'X-With-links-Summary': {
+                        description: `Enable dedicated summary section for hyper links on the page.`,
                         in: 'header',
                         schema: { type: 'string' }
                     },
@@ -732,7 +748,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
+    async * cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
         let cache;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
@@ -786,7 +802,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     }
 
 
-    async *scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
+    async * scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
         const iterators = urls.map((url) => this.cachedScrap(url, options, cacheTolerance));
 
         const results: (PageSnapshot | undefined)[] = iterators.map((_x) => undefined);
