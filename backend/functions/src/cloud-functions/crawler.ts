@@ -21,6 +21,7 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
+import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -44,6 +45,16 @@ export interface FormattedPage {
     toString: () => string;
 }
 
+const indexProto = {
+    toString: function (): string {
+        return _(this)
+            .toPairs()
+            .map(([k, v]) => k ? `[${_.upperFirst(_.lowerCase(k))}] ${v}` : '')
+            .value()
+            .join('\n') + '\n';
+    }
+};
+
 @singleton()
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
@@ -53,12 +64,6 @@ export class CrawlerHost extends RPCHost {
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
     cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
-
-    indexText = `[Usage1] https://r.jina.ai/YOUR_URL
-[Usage2] https://s.jina.ai/YOUR_SEARCH_QUERY
-[Homepage] https://jina.ai/reader
-[Source code] https://github.com/jina-ai/reader
-`;
 
     constructor(
         protected globalLogger: Logger,
@@ -87,6 +92,25 @@ export class CrawlerHost extends RPCHost {
         await this.dependencyReady();
 
         this.emit('ready');
+    }
+
+    getIndex(user?: JinaEmbeddingsTokenAccount) {
+        const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
+
+        Object.assign(indexObject, {
+            usage1: 'https://r.jina.ai/YOUR_URL',
+            usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
+            homepage: 'https://jina.ai/reader',
+            sourceCode: 'https://github.com/jina-ai/reader',
+        });
+
+        if (user) {
+            indexObject[''] = undefined;
+            indexObject.authenticatedAs = `${user.user_id} (${user.full_name})`;
+            indexObject.balanceLeft = user.wallet.total_balance;
+        }
+
+        return indexObject;
     }
 
     getTurndown(noRules?: boolean | string) {
@@ -497,12 +521,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
             const latestUser = uid ? await auth.assertUser() : undefined;
-            const authMixin = latestUser ? `
-[Authenticated as] ${latestUser.user_id} (${latestUser.full_name})
-[Balance left] ${latestUser.wallet.total_balance}
-` : '';
+            if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+                return this.getIndex(latestUser);
+            }
 
-            return assignTransferProtocolMeta(`${this.indexText}${authMixin}`,
+            return assignTransferProtocolMeta(`${this.getIndex(latestUser)}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }

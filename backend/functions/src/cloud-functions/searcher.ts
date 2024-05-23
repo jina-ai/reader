@@ -152,12 +152,12 @@ export class SearcherHost extends RPCHost {
         const noSlashPath = ctx.req.url.slice(1);
         if (!noSlashPath) {
             const latestUser = uid ? await auth.assertUser() : undefined;
-            const authMixin = latestUser ? `
-[Authenticated as] ${latestUser.user_id} (${latestUser.full_name})
-[Balance left] ${latestUser.wallet.total_balance}
-` : '';
+            if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
 
-            return assignTransferProtocolMeta(`${this.crawler.indexText}${authMixin}`,
+                return this.crawler.getIndex(latestUser);
+            }
+
+            return assignTransferProtocolMeta(`${this.crawler.getIndex(latestUser)}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
