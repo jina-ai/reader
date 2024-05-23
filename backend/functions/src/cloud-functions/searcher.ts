@@ -19,6 +19,7 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
 import { SearchResult } from '../db/searched';
 import { WebSearchApiResponse, SearchResult as WebSearchResult } from '../shared/3rd-party/brave-types';
+import {SerperSearchService} from "../services/serper-search";
 
 
 @singleton()
@@ -38,6 +39,7 @@ export class SearcherHost extends RPCHost {
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncContext,
         protected braveSearchService: BraveSearchService,
+        protected serperSearchService: SerperSearchService,
         protected crawler: CrawlerHost,
     ) {
         super(...arguments);
@@ -493,7 +495,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
         }
 
         try {
-            const r = await this.braveSearchService.webSearch(query);
+            const r = await this.webSearch(query);
 
             const nowDate = new Date();
             const record = SearchResult.from({
@@ -518,5 +520,13 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
             throw err;
         }
 
+    }
+
+    async webSearch(query: WebSearchQueryParams) {
+        if(this.secretExposer.SERPER_API_KEY) {
+            return await this.serperSearchService.webSearch(query);
+        }else {
+            return await this.braveSearchService.webSearch(query);
+        }
     }
 }
