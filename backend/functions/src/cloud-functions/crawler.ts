@@ -6,7 +6,7 @@ import {
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
-import { RateLimitControl } from '../shared/services/rate-limit';
+import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
@@ -535,23 +535,26 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['CRAWL'],
-                [
-                    // 200 requests per minute
-                    new Date(Date.now() - 60 * 1000), 200
-                ]
+            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [RateLimitDesc.from({
+                occurrence: 200,
+                periodSeconds: 60
+            })];
+
+            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
+                rpcReflect, uid, [rpcReflect.name.toUpperCase()],
+                ...rateLimitPolicy
             );
 
             rpcReflect.finally(() => {
                 if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, 'reader-crawl').catch((err) => {
+                    auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
                     apiRoll.chargeAmount = chargeAmount;
                 }
             });
         } else if (ctx.req.ip) {
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['CRAWL'],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, [rpcReflect.name.toUpperCase()],
                 [
                     // 20 requests per minute
                     new Date(Date.now() - 60 * 1000), 20

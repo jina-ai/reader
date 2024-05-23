@@ -6,7 +6,7 @@ import {
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
-import { RateLimitControl } from '../shared/services/rate-limit';
+import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
@@ -168,16 +168,19 @@ export class SearcherHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(rpcReflect, uid, ['SEARCH'],
-                [
-                    // 40 requests per minute
-                    new Date(Date.now() - 60 * 1000), 40
-                ]
+            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [RateLimitDesc.from({
+                occurrence: 40,
+                periodSeconds: 60
+            })];
+
+            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
+                rpcReflect, uid, [rpcReflect.name.toUpperCase()],
+                ...rateLimitPolicy
             );
 
             rpcReflect.finally(() => {
                 if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, 'reader-search').catch((err) => {
+                    auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
                     apiRoll.chargeAmount = chargeAmount;
@@ -185,7 +188,7 @@ export class SearcherHost extends RPCHost {
             });
         } else if (ctx.req.ip) {
             this.threadLocal.set('ip', ctx.req.ip);
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, ['SEARCH'],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, [rpcReflect.name.toUpperCase()],
                 [
                     // 5 requests per minute
                     new Date(Date.now() - 60 * 1000), 5
