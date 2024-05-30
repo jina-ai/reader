@@ -10,18 +10,18 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
-import normalizeUrl from "@esm2cjs/normalize-url";
+const pNormalizeUrl = import("@esm2cjs/normalize-url");
 import { AltTextService } from '../services/alt-text';
 import TurndownService from 'turndown';
-import { parseString as parseSetCookieString } from 'set-cookie-parser';
-import type { CookieParam } from 'puppeteer';
 import { Crawled } from '../db/crawled';
 import { cleanAttribute } from '../utils/misc';
 import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
+import { CrawlerOptions } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
+import { PDFExtractor } from '../services/pdf-extract';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -69,6 +69,7 @@ export class CrawlerHost extends RPCHost {
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
         protected altTextService: AltTextService,
+        protected pdfExtractor: PDFExtractor,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncContext,
@@ -76,7 +77,7 @@ export class CrawlerHost extends RPCHost {
         super(...arguments);
 
         puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ScrappingOptions & { url: URL; }) => {
-            if (!snapshot.title?.trim()) {
+            if (!snapshot.title?.trim() && !snapshot.pdfs?.length) {
                 return;
             }
             if (options.cookies?.length) {
@@ -138,14 +139,14 @@ export class CrawlerHost extends RPCHost {
         });
         turnDownService.addRule('improved-inline-link', {
             filter: function (node, options) {
-                return (
+                return Boolean(
                     options.linkStyle === 'inlined' &&
                     node.nodeName === 'A' &&
                     node.getAttribute('href')
                 );
             },
 
-            replacement: function (content, node) {
+            replacement: function (content, node: any) {
                 let href = node.getAttribute('href');
                 if (href) href = href.replace(/([()])/g, '\\$1');
                 let title = cleanAttribute(node.getAttribute('title'));
@@ -226,6 +227,26 @@ export class CrawlerHost extends RPCHost {
                 }
             } as FormattedPage;
         }
+
+        let pdfMode = false;
+        if (snapshot.pdfs?.length && !snapshot.title) {
+            const pdf = await this.pdfExtractor.cachedExtract(snapshot.pdfs[0]);
+            if (pdf) {
+                pdfMode = true;
+                snapshot.title = pdf.meta?.Title;
+                snapshot.text = pdf.text || snapshot.text;
+                snapshot.parsed = {
+                    content: pdf.content,
+                    textContent: pdf.content,
+                    length: pdf.content?.length,
+                    byline: pdf.meta?.Author,
+                    lang: pdf.meta?.Language || undefined,
+                    title: pdf.meta?.Title,
+                    publishedTime: this.pdfExtractor.parsePdfDate(pdf.meta?.ModDate || pdf.meta?.CreationDate)?.toISOString(),
+                };
+            }
+        }
+
         if (mode === 'text') {
             return {
                 ...this.getGeneralSnapshotMixins(snapshot),
@@ -236,101 +257,108 @@ export class CrawlerHost extends RPCHost {
             } as FormattedPage;
         }
 
-        const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
-        let turnDownService = mode === 'markdown' ? this.getTurndown() : this.getTurndown('without any rule');
-        for (const plugin of this.turnDownPlugins) {
-            turnDownService = turnDownService.use(plugin);
-        }
-        const urlToAltMap: { [k: string]: string | undefined; } = {};
-        if (snapshot.imgs?.length && this.threadLocal.get('withGeneratedAlt')) {
-            const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
-                const r = await this.altTextService.getAltText(x).catch((err: any) => {
-                    this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
-                    return undefined;
+        let contentText = '';
+        const imageSummary = {} as { [k: string]: string; };
+        const imageIdxTrack = new Map<string, number[]>();
+        do {
+            if (pdfMode) {
+                contentText = snapshot.parsed?.content || snapshot.text;
+                break;
+            }
+
+            const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
+            let turnDownService = mode === 'markdown' ? this.getTurndown() : this.getTurndown('without any rule');
+            for (const plugin of this.turnDownPlugins) {
+                turnDownService = turnDownService.use(plugin);
+            }
+            const urlToAltMap: { [k: string]: string | undefined; } = {};
+            if (snapshot.imgs?.length && this.threadLocal.get('withGeneratedAlt')) {
+                const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
+                    const r = await this.altTextService.getAltText(x).catch((err: any) => {
+                        this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
+                        return undefined;
+                    });
+                    if (r && x.src) {
+                        urlToAltMap[x.src.trim()] = r;
+                    }
                 });
-                if (r && x.src) {
-                    urlToAltMap[x.src.trim()] = r;
+
+                await Promise.all(tasks);
+            }
+            let imgIdx = 0;
+            turnDownService.addRule('img-generated-alt', {
+                filter: 'img',
+                replacement: (_content, node: any) => {
+                    let linkPreferredSrc = (node.getAttribute('src') || '').trim();
+                    if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
+                        const dataSrc = (node.getAttribute('data-src') || '').trim();
+                        if (dataSrc && !dataSrc.startsWith('data:')) {
+                            linkPreferredSrc = dataSrc;
+                        }
+                    }
+
+                    let src;
+                    try {
+                        src = new URL(linkPreferredSrc, nominalUrl).toString();
+                    } catch (_err) {
+                        void 0;
+                    }
+                    const alt = cleanAttribute(node.getAttribute('alt'));
+                    if (!src) {
+                        return '';
+                    }
+                    const mapped = urlToAltMap[src];
+                    const imgSerial = ++imgIdx;
+                    const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
+                    idxArr.push(imgSerial);
+                    imageIdxTrack.set(src, idxArr);
+
+                    if (mapped) {
+                        imageSummary[src] = mapped || alt;
+
+                        return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
+                    }
+
+                    imageSummary[src] = alt || '';
+
+                    return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
                 }
             });
 
-            await Promise.all(tasks);
-        }
-        let imgIdx = 0;
-        const imageSummary = {} as { [k: string]: string; };
-        const imageIdxTrack = new Map<string, number[]>();
-        turnDownService.addRule('img-generated-alt', {
-            filter: 'img',
-            replacement: (_content, node) => {
-                let linkPreferredSrc = (node.getAttribute('src') || '').trim();
-                if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
-                    const dataSrc = (node.getAttribute('data-src') || '').trim();
-                    if (dataSrc && !dataSrc.startsWith('data:')) {
-                        linkPreferredSrc = dataSrc;
+            if (toBeTurnedToMd) {
+                try {
+                    contentText = turnDownService.turndown(toBeTurnedToMd).trim();
+                } catch (err) {
+                    this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
+                    const vanillaTurnDownService = this.getTurndown();
+                    try {
+                        contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
+                    } catch (err2) {
+                        this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }
                 }
-
-                let src;
-                try {
-                    src = new URL(linkPreferredSrc, nominalUrl).toString();
-                } catch (_err) {
-                    void 0;
-                }
-                const alt = cleanAttribute(node.getAttribute('alt'));
-                if (!src) {
-                    return '';
-                }
-                const mapped = urlToAltMap[src];
-                const imgSerial = ++imgIdx;
-                const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
-                idxArr.push(imgSerial);
-                imageIdxTrack.set(src, idxArr);
-
-                if (mapped) {
-                    imageSummary[src] = mapped || alt;
-
-                    return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
-                }
-
-                imageSummary[src] = alt || '';
-
-                return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
             }
-        });
 
-        let contentText = '';
-        if (toBeTurnedToMd) {
-            try {
-                contentText = turnDownService.turndown(toBeTurnedToMd).trim();
-            } catch (err) {
-                this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                const vanillaTurnDownService = this.getTurndown();
+            if (
+                !contentText || (contentText.startsWith('<') && contentText.endsWith('>'))
+                && toBeTurnedToMd !== snapshot.html
+            ) {
                 try {
-                    contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
-                } catch (err2) {
-                    this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
+                    contentText = turnDownService.turndown(snapshot.html);
+                } catch (err) {
+                    this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
+                    const vanillaTurnDownService = this.getTurndown();
+                    try {
+                        contentText = vanillaTurnDownService.turndown(snapshot.html);
+                    } catch (err2) {
+                        this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
+                    }
                 }
             }
-        }
-
-        if (
-            !contentText || (contentText.startsWith('<') && contentText.endsWith('>'))
-            && toBeTurnedToMd !== snapshot.html
-        ) {
-            try {
-                contentText = turnDownService.turndown(snapshot.html);
-            } catch (err) {
-                this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                const vanillaTurnDownService = this.getTurndown();
-                try {
-                    contentText = vanillaTurnDownService.turndown(snapshot.html);
-                } catch (err2) {
-                    this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
-                }
+            if (!contentText || (contentText.startsWith('<') || contentText.endsWith('>'))) {
+                contentText = snapshot.text;
             }
-        }
-        if (!contentText || (contentText.startsWith('<') || contentText.endsWith('>'))) {
-            contentText = snapshot.text;
-        }
+        } while (false);
 
         const cleanText = (contentText || '').trim();
 
@@ -514,7 +542,8 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             req: Request,
             res: Response,
         },
-        auth: JinaEmbeddingsAuthDTO
+        auth: JinaEmbeddingsAuthDTO,
+        crawlerOptions: CrawlerOptions,
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
@@ -571,6 +600,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         let urlToCrawl;
+        const normalizeUrl = (await pNormalizeUrl).default;
         try {
             urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false }));
         } catch (err) {
@@ -586,58 +616,19 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             });
         }
 
-        const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
-        const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
-        const withLinksSummary = Boolean(ctx.req.get('x-with-links-summary'));
-        const withImagesSummary = Boolean(ctx.req.get('x-with-images-summary'));
-        const noCache = Boolean(ctx.req.get('x-no-cache'));
-        let cacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
-        if (isNaN(cacheTolerance)) {
-            cacheTolerance = this.cacheValidMs;
-            if (noCache) {
-                cacheTolerance = 0;
-            }
-        }
-        const targetSelector = ctx.req.get('x-target-selector') || undefined;
-        const waitForSelector = ctx.req.get('x-wait-for-selector') || targetSelector;
-        const cookies: CookieParam[] = [];
-        const setCookieHeaders = ctx.req.headers['x-set-cookie'];
-        if (Array.isArray(setCookieHeaders)) {
-            for (const setCookie of setCookieHeaders) {
-                cookies.push({
-                    ...parseSetCookieString(setCookie, { decodeValues: false }) as CookieParam,
-                    domain: urlToCrawl.hostname,
-                });
-            }
-        } else if (setCookieHeaders) {
-            cookies.push({
-                ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
-                domain: urlToCrawl.hostname,
-            });
-        }
-        this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
-        this.threadLocal.set('withLinksSummary', withLinksSummary);
-        this.threadLocal.set('withImagesSummary', withImagesSummary);
-
-        const crawlOpts: ExtraScrappingOptions = {
-            proxyUrl: ctx.req.get('x-proxy-url'),
-            cookies,
-            favorScreenshot: customMode === 'screenshot',
-            waitForSelector,
-            targetSelector,
-        };
+        const crawlOpts = this.configure(crawlerOptions);
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
+                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions.cacheTolerance)) {
                     if (!scrapped) {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+                    const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
                     chargeAmount = this.getChargeAmount(formatted);
                     sseStream.write({
                         event: 'data',
@@ -659,13 +650,13 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
+            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions.cacheTolerance)) {
                 lastScrapped = scrapped;
-                if (waitForSelector || !scrapped?.parsed?.content || !(scrapped.title?.trim())) {
+                if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+                const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
                 chargeAmount = this.getChargeAmount(formatted);
 
                 return formatted;
@@ -675,21 +666,21 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
             }
 
-            const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+            const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, urlToCrawl);
             chargeAmount = this.getChargeAmount(formatted);
 
             return formatted;
         }
 
-        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, cacheTolerance)) {
+        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions.cacheTolerance)) {
             lastScrapped = scrapped;
-            if (waitForSelector || !scrapped?.parsed?.content || !(scrapped.title?.trim())) {
+            if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
                 continue;
             }
 
-            const formatted = await this.formatSnapshot(customMode, scrapped, urlToCrawl);
+            const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
             chargeAmount = this.getChargeAmount(formatted);
-            if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+            if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
                 return assignTransferProtocolMeta(`${formatted}`,
                     { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
@@ -703,9 +694,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
         }
 
-        const formatted = await this.formatSnapshot(customMode, lastScrapped, urlToCrawl);
+        const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, urlToCrawl);
         chargeAmount = this.getChargeAmount(formatted);
-        if (customMode === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+        if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
             return assignTransferProtocolMeta(`${formatted}`,
                 { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
@@ -913,6 +904,57 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 x.return();
             }
         }
+    }
+
+    configure(opts: CrawlerOptions) {
+
+        this.threadLocal.set('withGeneratedAlt', opts.withGeneratedAlt);
+        this.threadLocal.set('withLinksSummary', opts.withLinksSummary);
+        this.threadLocal.set('withImagesSummary', opts.withImagesSummary);
+
+        const crawlOpts: ExtraScrappingOptions = {
+            proxyUrl: opts.proxyUrl,
+            cookies: opts.setCookies,
+            favorScreenshot: opts.respondWith === 'screenshot',
+            waitForSelector: opts.waitForSelector,
+            targetSelector: opts.targetSelector,
+        };
+
+        return crawlOpts;
+    }
+
+    async simpleCrawl(mode: string, url: URL, opts?: ExtraScrappingOptions) {
+        const it = this.cachedScrap(url, { ...opts, minIntervalMs: 500 });
+
+        let lastSnapshot;
+        let goodEnough = false;
+        try {
+            for await (const x of it) {
+                lastSnapshot = x;
+
+                if (goodEnough) {
+                    break;
+                }
+
+                if (lastSnapshot?.parsed?.content) {
+                    // After it's good enough, wait for next snapshot;
+                    goodEnough = true;
+                }
+            }
+
+        } catch (err) {
+            if (lastSnapshot) {
+                return this.formatSnapshot(mode, lastSnapshot, url);
+            }
+
+            throw err;
+        }
+
+        if (!lastSnapshot) {
+            throw new AssertionFailureError(`No content available`);
+        }
+
+        return this.formatSnapshot(mode, lastSnapshot, url);
     }
 
 }

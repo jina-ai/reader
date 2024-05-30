@@ -6,7 +6,6 @@ import { ImageInterrogationManager } from '../shared/services/common-iminterroga
 import { ImgBrief } from './puppeteer';
 import { ImgAlt } from '../db/img-alt';
 
-
 const md5Hasher = new HashManager('md5', 'hex');
 
 @singleton()

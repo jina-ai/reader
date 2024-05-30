@@ -19,6 +19,7 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
 import { SearchResult } from '../db/searched';
 import { WebSearchApiResponse, SearchResult as WebSearchResult } from '../shared/3rd-party/brave-types';
+import { CrawlerOptions } from '../dto/scrapping-options';
 
 
 @singleton()
@@ -145,7 +146,8 @@ export class SearcherHost extends RPCHost {
             req: Request,
             res: Response,
         },
-        auth: JinaEmbeddingsAuthDTO
+        auth: JinaEmbeddingsAuthDTO,
+        crawlerOptions: CrawlerOptions,
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
@@ -201,18 +203,7 @@ export class SearcherHost extends RPCHost {
             });
         }
 
-        const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format') || 'default';
-        const withGeneratedAlt = Boolean(ctx.req.get('x-with-generated-alt'));
-        const withLinksSummary = Boolean(ctx.req.get('x-with-links-summary'));
-        const withImagesSummary = Boolean(ctx.req.get('x-with-images-summary'));
-        const noCache = Boolean(ctx.req.get('x-no-cache'));
-        let pageCacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '') * 1000;
-        if (isNaN(pageCacheTolerance)) {
-            pageCacheTolerance = this.pageCacheToleranceMs;
-            if (noCache) {
-                pageCacheTolerance = 0;
-            }
-        }
+        const crawlOpts = this.crawler.configure(crawlerOptions);
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
         if (Array.isArray(setCookieHeaders)) {
@@ -226,27 +217,19 @@ export class SearcherHost extends RPCHost {
                 ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
             });
         }
-        this.threadLocal.set('withGeneratedAlt', withGeneratedAlt);
-        this.threadLocal.set('withLinksSummary', withLinksSummary);
-        this.threadLocal.set('withImagesSummary', withImagesSummary);
-
-        const crawlOpts: ScrappingOptions = {
-            proxyUrl: ctx.req.get('x-proxy-url'),
-            cookies,
-            favorScreenshot: customMode === 'screenshot'
-        };
-
         const searchQuery = noSlashPath;
         const r = await this.cachedWebSearch({
             q: searchQuery,
             count: 10
-        }, noCache);
+        }, crawlerOptions.noCache);
 
         if (!r.web?.results.length) {
             throw new AssertionFailureError(`No search results available for query ${searchQuery}`);
         }
 
-        const it = this.fetchSearchResults(customMode, r.web?.results, crawlOpts, pageCacheTolerance);
+        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
+            crawlerOptions.cacheTolerance || this.pageCacheToleranceMs
+        );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
