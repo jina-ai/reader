@@ -50,6 +50,7 @@ export interface PageSnapshot {
     parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
     imgs?: ImgBrief[];
+    pdfs?: string[];
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
@@ -62,6 +63,7 @@ export interface ScrappingOptions {
     cookies?: CookieParam[];
     favorScreenshot?: boolean;
     waitForSelector?: string;
+    minIntervalMs?: number;
 }
 
 
@@ -97,7 +99,9 @@ export class PuppeteerControl extends AsyncService {
     livePages = new Set<Page>();
     lastPageCratedAt: number = 0;
 
-    constructor(protected globalLogger: Logger) {
+    constructor(
+        protected globalLogger: Logger,
+    ) {
         super(...arguments);
         this.setMaxListeners(2 * Math.floor(os.totalmem() / (256 * 1024 * 1024)) + 1); 148 - 95;
 
@@ -219,7 +223,17 @@ function briefImgs(elem) {
         };
     });
 }
-function giveSnapshot() {
+function briefPDFs() {
+    const pdfTags = Array.from(document.querySelectorAll('embed[type="application/pdf"]'));
+
+    return pdfTags.map((x)=> {
+        return x.src === 'about:blank' ? document.location.href : x.src;
+    });
+}
+function giveSnapshot(stopActiveSnapshot) {
+    if (stopActiveSnapshot) {
+        window.haltSnapshot = true;
+    }
     let parsed;
     try {
         parsed = new Readability(document.cloneNode(true)).parse();
@@ -234,6 +248,7 @@ function giveSnapshot() {
         text: document.body?.innerText,
         parsed: parsed,
         imgs: [],
+        pdfs: briefPDFs(),
     };
     if (parsed && parsed.content) {
         const elem = document.createElement('div');
@@ -277,7 +292,7 @@ function giveSnapshot() {
         });
 
         await page.evaluateOnNewDocument(`
-let aftershot = undefined;
+let lastTextLength = 0;
 const handlePageLoad = () => {
     if (window.haltSnapshot) {
         return;
@@ -285,26 +300,23 @@ const handlePageLoad = () => {
     if (document.readyState !== 'complete') {
         return;
     }
-    const parsed = giveSnapshot();
-    window.reportSnapshot(parsed);
-    if (!parsed.text) {
-        if (aftershot) {
-            clearTimeout(aftershot);
-        }
-        aftershot = setTimeout(() => {
-            const r = giveSnapshot();
-            if (r && r.text) {
-                window.reportSnapshot(r);
-            }
-        }, 500);
+    const thisTextLength = (document.body.innerText || '').length;
+    const deltaLength = Math.abs(thisTextLength - lastTextLength);
+    if (10 * deltaLength < lastTextLength) {
+        // Change is not significant
+        return;
     }
+    const r = giveSnapshot();
+    window.reportSnapshot(r);
+    lastTextLength = thisTextLength;
 };
+setInterval(handlePageLoad, 500);
 document.addEventListener('readystatechange', handlePageLoad);
 document.addEventListener('load', handlePageLoad);
 `);
 
         this.snMap.set(page, sn);
-        this.logger.warn(`Page ${sn} created.`);
+        this.logger.info(`Page ${sn} created.`);
         this.lastPageCratedAt = Date.now();
         this.livePages.add(page);
 
@@ -409,12 +421,12 @@ document.addEventListener('load', handlePageLoad);
                     finalized = true;
                     return;
                 }
-                snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
                 screenshot = await page.screenshot();
-                if (!snapshot.title || !snapshot.parsed?.content) {
+                if ((!snapshot.title || !snapshot.parsed?.content) && !(snapshot.pdfs?.length)) {
                     const salvaged = await this.salvage(url, page);
                     if (salvaged) {
-                        snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                        snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
                         screenshot = await page.screenshot();
                     }
                 }
@@ -429,7 +441,7 @@ document.addEventListener('load', handlePageLoad);
         if (options?.waitForSelector) {
             page.waitForSelector(options.waitForSelector)
                 .then(async () => {
-                    snapshot = await page.evaluate('giveSnapshot()') as PageSnapshot;
+                    snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
                     screenshot = await page.screenshot();
                     finalized = true;
                     nextSnapshotDeferred.resolve(snapshot);
@@ -442,7 +454,11 @@ document.addEventListener('load', handlePageLoad);
         try {
             let lastHTML = snapshot?.html;
             while (true) {
-                await Promise.race([nextSnapshotDeferred.promise, gotoPromise]);
+                const ckpt = [nextSnapshotDeferred.promise, gotoPromise];
+                if (options?.minIntervalMs) {
+                    ckpt.push(delay(options.minIntervalMs));
+                }
+                await Promise.race(ckpt);
                 if (finalized) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
