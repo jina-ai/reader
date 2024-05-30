@@ -547,7 +547,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const noSlashURL = ctx.req.url.slice(1);
+        const noSlashURL = ctx.req.url.slice(1).trimStart();
         if (!noSlashURL) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
