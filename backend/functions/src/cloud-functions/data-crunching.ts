@@ -131,7 +131,7 @@ export class DataCrunchingHost extends RPCHost {
     async dispatchPageCacheCrunching(
         @RPCReflect() rpcReflect: RPCReflection,
     ) {
-        const sse = new OutputServerEventStream();
+        const sse = new OutputServerEventStream({ highWaterMark: 4096 });
         rpcReflect.return(sse);
         rpcReflect.catch((err) => {
             sse.end({ data: `Error: ${err.message}` });
