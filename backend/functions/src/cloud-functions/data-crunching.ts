@@ -147,6 +147,7 @@ export class DataCrunchingHost extends RPCHost {
         }
 
         sse.end({ data: 'done' });
+        sse.resume();
 
         return true;
     }
