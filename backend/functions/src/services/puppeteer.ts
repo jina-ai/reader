@@ -12,6 +12,7 @@ import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
 import { SecurityCompromiseError, ServiceCrashedError } from '../shared/lib/errors';
 import { Readability } from '@mozilla/readability';
+const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
 
@@ -279,8 +280,10 @@ function giveSnapshot(stopActiveSnapshot) {
             if (!requestUrl.startsWith("http:") && !requestUrl.startsWith("https:") && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
             }
+            const tldParsed = tldExtract(requestUrl);
+            domainSet.add(tldParsed.domain);
+
             const parsedUrl = new URL(requestUrl);
-            domainSet.add(parsedUrl.hostname);
 
             if (
                 parsedUrl.hostname === 'localhost' ||
@@ -291,13 +294,13 @@ function giveSnapshot(stopActiveSnapshot) {
                 return req.abort('blockedbyclient', 1000);
             }
 
-            if (reqCounter > 200) {
+            if (reqCounter > 2000) {
                 page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many requests: ${reqCounter}` });
 
                 return req.abort('blockedbyclient', 1000);
             }
 
-            if (domainSet.size > 51) {
+            if (domainSet.size > 200) {
                 page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many domains (${domainSet.size})` });
 
                 return req.abort('blockedbyclient', 1000);

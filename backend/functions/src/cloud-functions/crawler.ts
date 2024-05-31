@@ -65,7 +65,7 @@ export class CrawlerHost extends RPCHost {
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
     cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
-    abuseBlockMs = 1000 * 3600 * 24;
+    abuseBlockMs = 1000 * 3600;
 
     constructor(
         protected globalLogger: Logger,
