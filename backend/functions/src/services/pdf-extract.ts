@@ -288,8 +288,6 @@ export class PDFExtractor extends AsyncService {
             {
                 src: url.toString(),
                 meta: extracted?.meta || {},
-                text: extracted?.text || '',
-                content: extracted?.content || '',
                 urlDigest: digest,
                 createdAt: new Date(),
                 ...expireMixin
