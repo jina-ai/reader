@@ -118,6 +118,20 @@ export class DataCrunchingHost extends RPCHost {
         },
         tags: ['DataCrunching'],
     })
+    async dispatchPageCacheCrunching() {
+        for await (const { fileName, date, offset } of this.iterPageCacheChunks()) {
+            this.logger.info(`Dispatching ${fileName}...`);
+            // sse.write({ data: `Dispatching ${fileName}...` });
+
+            await getFunctions().taskQueue('crunchPageCacheWorker').enqueue({ date, offset }, {
+                dispatchDeadlineSeconds: 1800,
+                uri: await getFunctionUrl('crunchPageCacheWorker'),
+            });
+        }
+
+        return true;
+    }
+
     // @CloudHTTPv2({
     //     runtime: {
     //         cpu: 2,
@@ -128,29 +142,28 @@ export class DataCrunchingHost extends RPCHost {
     //     },
     //     tags: ['DataCrunching'],
     // })
-    async dispatchPageCacheCrunching(
-        @RPCReflect() rpcReflect: RPCReflection,
-    ) {
-        const sse = new OutputServerEventStream({ highWaterMark: 4096 });
-        rpcReflect.return(sse);
-        rpcReflect.catch((err) => {
-            sse.end({ data: `Error: ${err.message}` });
-        });
-        for await (const { fileName, date, offset } of this.iterPageCacheChunks()) {
-            this.logger.info(`Dispatching ${fileName}...`);
-            sse.write({ data: `Dispatching ${fileName}...` });
+    // async dispatchPageCacheCrunching(
+    //     @RPCReflect() rpcReflect: RPCReflection
+    // ) {
+    //     const sse = new OutputServerEventStream({ highWaterMark: 4096 });
+    //     rpcReflect.return(sse);
+    //     rpcReflect.catch((err) => {
+    //         sse.end({ data: `Error: ${err.message}` });
+    //     });
+    //     for await (const { fileName, date, offset } of this.iterPageCacheChunks()) {
+    //         this.logger.info(`Dispatching ${fileName}...`);
+    //         sse.write({ data: `Dispatching ${fileName}...` });
 
-            await getFunctions().taskQueue('crunchPageCacheWorker').enqueue({ date, offset }, {
-                dispatchDeadlineSeconds: 1800,
-                uri: await getFunctionUrl('crunchPageCacheWorker'),
-            });
-        }
+    //         await getFunctions().taskQueue('crunchPageCacheWorker').enqueue({ date, offset }, {
+    //             dispatchDeadlineSeconds: 1800,
+    //             uri: await getFunctionUrl('crunchPageCacheWorker'),
+    //         });
+    //     }
 
-        sse.end({ data: 'done' });
-        sse.resume();
+    //     sse.end({ data: 'done' });
 
-        return true;
-    }
+    //     return true;
+    // }
 
     async* iterPageCacheRecords(date?: string, inputOffset?: number | string) {
         const startOfToday = dayjs().utc().startOf('day');
@@ -234,8 +247,6 @@ export class DataCrunchingHost extends RPCHost {
             if (nRecords) {
                 yield { fileName, date: theDay.toISOString(), offset };
             }
-
-            continue;
         }
     }
 

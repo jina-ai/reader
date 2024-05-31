@@ -380,7 +380,7 @@ document.addEventListener('load', handlePageLoad);
         let screenshot: Buffer | undefined;
         const page = await this.getNextPage();
         const sn = this.snMap.get(page);
-        this.logger.info(`Page ${sn}:  Scraping ${url}`, { url });
+        this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
         if (options?.proxyUrl) {
             await page.useProxy(options.proxyUrl);
         }

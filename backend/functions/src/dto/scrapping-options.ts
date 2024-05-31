@@ -52,44 +52,44 @@ export class CrawlerOptions extends AutoCastable {
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
             req: Request,
             res: Response,
-        };
+        } | undefined;
 
-        const customMode = ctx.req.get('x-respond-with') || ctx.req.get('x-return-format');
+        const customMode = ctx?.req.get('x-respond-with') || ctx?.req.get('x-return-format');
         if (customMode !== undefined) {
             instance.respondWith = customMode;
         }
 
-        const withGeneratedAlt = ctx.req.get('x-with-generated-alt');
+        const withGeneratedAlt = ctx?.req.get('x-with-generated-alt');
         if (withGeneratedAlt !== undefined) {
             instance.withGeneratedAlt = Boolean(withGeneratedAlt);
         }
-        const withLinksSummary = ctx.req.get('x-with-links-summary');
+        const withLinksSummary = ctx?.req.get('x-with-links-summary');
         if (withLinksSummary !== undefined) {
             instance.withLinksSummary = Boolean(withLinksSummary);
         }
-        const withImagesSummary = ctx.req.get('x-with-images-summary');
+        const withImagesSummary = ctx?.req.get('x-with-images-summary');
         if (withImagesSummary !== undefined) {
             instance.withImagesSummary = Boolean(withImagesSummary);
         }
-        const noCache = ctx.req.get('x-no-cache');
+        const noCache = ctx?.req.get('x-no-cache');
         if (noCache !== undefined) {
             instance.noCache = Boolean(noCache);
-            if (instance.noCache && instance.cacheTolerance === undefined) {
-                instance.cacheTolerance = 0;
-            }
         }
-        let cacheTolerance = parseInt(ctx.req.get('x-cache-tolerance') || '');
+        if (instance.noCache && instance.cacheTolerance === undefined) {
+            instance.cacheTolerance = 0;
+        }
+        let cacheTolerance = parseInt(ctx?.req.get('x-cache-tolerance') || '');
         if (!isNaN(cacheTolerance)) {
             instance.cacheTolerance = cacheTolerance;
         }
 
-        const targetSelector = ctx.req.get('x-target-selector');
+        const targetSelector = ctx?.req.get('x-target-selector');
         instance.targetSelector ??= targetSelector;
-        const waitForSelector = ctx.req.get('x-wait-for-selector');
+        const waitForSelector = ctx?.req.get('x-wait-for-selector');
         instance.waitForSelector ??= waitForSelector || instance.targetSelector;
 
         const cookies: CookieParam[] = [];
-        const setCookieHeaders = ctx.req.headers['x-set-cookie'] || (instance.setCookies as any as string[]);
+        const setCookieHeaders = ctx?.req.headers['x-set-cookie'] || (instance.setCookies as any as string[]);
         if (Array.isArray(setCookieHeaders)) {
             for (const setCookie of setCookieHeaders) {
                 cookies.push({
@@ -102,8 +102,22 @@ export class CrawlerOptions extends AutoCastable {
             });
         }
 
-        const proxyUrl = ctx.req.get('x-proxy-url');
+        const proxyUrl = ctx?.req.get('x-proxy-url');
         instance.proxyUrl ??= proxyUrl;
+
+        if (instance.cacheTolerance) {
+            instance.cacheTolerance = instance.cacheTolerance * 1000;
+        }
+
+        return instance;
+    }
+}
+
+export class CrawlerOptionsHeaderOnly extends CrawlerOptions {
+    static override from(input: any) {
+        const instance = super.from({
+            [RPC_CALL_ENVIRONMENT]: Reflect.get(input, RPC_CALL_ENVIRONMENT),
+        }) as CrawlerOptionsHeaderOnly;
 
         return instance;
     }

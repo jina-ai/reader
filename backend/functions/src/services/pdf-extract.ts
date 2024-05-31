@@ -6,6 +6,8 @@ import { AsyncService, HashManager } from 'civkit';
 import { Logger } from '../shared/services/logger';
 import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
+import { FirebaseStorageBucketControl } from '../shared';
+import { randomUUID } from 'crypto';
 const utc = require('dayjs/plugin/utc');  // Import the UTC plugin
 dayjs.extend(utc);  // Extend dayjs with the UTC plugin
 const timezone = require('dayjs/plugin/timezone');
@@ -46,6 +48,7 @@ export class PDFExtractor extends AsyncService {
 
     constructor(
         protected globalLogger: Logger,
+        protected firebaseObjectStorage: FirebaseStorageBucketControl,
     ) {
         super(...arguments);
     }
@@ -225,22 +228,46 @@ export class PDFExtractor extends AsyncService {
         return { meta: meta.info as Record<string, any>, content: mdChunks.join(''), text: rawChunks.join('') };
     }
 
-    async cachedExtract(url: string | URL) {
+    async cachedExtract(url: string | URL, cacheTolerance: number = 1000 * 3600 * 24) {
         if (!url) {
             return undefined;
         }
 
         const digest = md5Hasher.hash(url.toString());
-        const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
 
-        const existing = await PDFContent.fromFirestore(shortDigest);
+        const cache: PDFContent | undefined = (await PDFContent.fromFirestoreQuery(PDFContent.COLLECTION.where('urlDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
-        if (existing) {
-            return {
-                meta: existing.meta,
-                content: existing.content,
-                text: existing.text
-            };
+        if (cache) {
+            const age = Date.now() - cache?.createdAt.valueOf();
+            const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
+            this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for PDF ${url}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
+                url, digest, age, stale, cacheTolerance
+            });
+
+            if (!stale) {
+                if (cache.content && cache.text) {
+                    return {
+                        meta: cache.meta,
+                        content: cache.content,
+                        text: cache.text
+                    };
+                }
+
+                try {
+                    const r = await this.firebaseObjectStorage.downloadFile(`pdfs/${cache._id}`);
+                    let cached = JSON.parse(r.toString('utf-8'));
+
+                    return {
+                        meta: cached.meta,
+                        content: cached.content,
+                        text: cached.text
+                    };
+                } catch (err) {
+                    this.logger.warn(`Unable to load cached content for ${url}`, { err });
+
+                    return undefined;
+                }
+            }
         }
 
         let extracted;
@@ -253,14 +280,16 @@ export class PDFExtractor extends AsyncService {
 
         // Don't try again until the next day
         const expireMixin = extracted ? {} : { expireAt: new Date(Date.now() + 1000 * 3600 * 24) };
+        const theID = randomUUID();
+        await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
+            Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
 
-        await PDFContent.COLLECTION.doc(shortDigest).set(
+        await PDFContent.COLLECTION.doc(theID).set(
             {
-                _id: shortDigest,
                 src: url.toString(),
                 meta: extracted?.meta || {},
-                content: extracted?.content || '',
                 text: extracted?.text || '',
+                content: extracted?.content || '',
                 urlDigest: digest,
                 createdAt: new Date(),
                 ...expireMixin

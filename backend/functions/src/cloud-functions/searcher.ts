@@ -53,6 +53,7 @@ export class SearcherHost extends RPCHost {
     @CloudHTTPv2({
         name: 'search2',
         runtime: {
+            cpu: 4,
             memory: '4GiB',
             timeoutSeconds: 300,
             concurrency: 4,
@@ -64,10 +65,10 @@ export class SearcherHost extends RPCHost {
     })
     @CloudHTTPv2({
         runtime: {
-            cpu: 4,
+            cpu: 8,
             memory: '8GiB',
             timeoutSeconds: 300,
-            concurrency: 4,
+            concurrency: 6,
             maxInstances: 200,
         },
         openapi: {
@@ -265,28 +266,40 @@ export class SearcherHost extends RPCHost {
         let lastScrapped: any[] | undefined;
         let earlyReturn = false;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            const earlyReturnTimer = setTimeout(() => {
-                if (!lastScrapped) {
+            let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
+            const setEarlyReturnTimer = () => {
+                if (earlyReturnTimer) {
                     return;
                 }
-                chargeAmount = this.getChargeAmount(lastScrapped);
-                rpcReflect.return(lastScrapped);
-                earlyReturn = true;
-            }, this.reasonableDelayMs);
+                earlyReturnTimer = setTimeout(() => {
+                    if (!lastScrapped) {
+                        return;
+                    }
+                    chargeAmount = this.getChargeAmount(lastScrapped);
+                    rpcReflect.return(lastScrapped);
+                    earlyReturn = true;
+                }, this.reasonableDelayMs);
+            };
 
             for await (const scrapped of it) {
                 lastScrapped = scrapped;
-
+                if (_.some(scrapped, (x) => this.pageQualified(x))) {
+                    setEarlyReturnTimer();
+                }
                 if (!this.searchResultsQualified(scrapped)) {
                     continue;
                 }
-                clearTimeout(earlyReturnTimer);
+                if (earlyReturnTimer) {
+                    clearTimeout(earlyReturnTimer);
+                }
                 chargeAmount = this.getChargeAmount(scrapped);
 
                 return scrapped;
             }
 
-            clearTimeout(earlyReturnTimer);
+            if (earlyReturnTimer) {
+                clearTimeout(earlyReturnTimer);
+            }
 
             if (!lastScrapped) {
                 throw new AssertionFailureError(`No content available for query ${searchQuery}`);
@@ -299,29 +312,44 @@ export class SearcherHost extends RPCHost {
             return lastScrapped;
         }
 
-        const earlyReturnTimer = setTimeout(() => {
-            if (!lastScrapped) {
+        let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
+        const setEarlyReturnTimer = () => {
+            if (earlyReturnTimer) {
                 return;
             }
-            chargeAmount = this.getChargeAmount(lastScrapped);
-            rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
-            earlyReturn = true;
-        }, this.reasonableDelayMs);
+            earlyReturnTimer = setTimeout(() => {
+                if (!lastScrapped) {
+                    return;
+                }
+                chargeAmount = this.getChargeAmount(lastScrapped);
+                rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
+                earlyReturn = true;
+            }, this.reasonableDelayMs);
+        };
 
         for await (const scrapped of it) {
             lastScrapped = scrapped;
+
+            if (_.some(scrapped, (x) => this.pageQualified(x))) {
+                setEarlyReturnTimer();
+            }
 
             if (!this.searchResultsQualified(scrapped)) {
                 continue;
             }
 
-            clearTimeout(earlyReturnTimer);
+            if (earlyReturnTimer) {
+                clearTimeout(earlyReturnTimer);
+            }
+
             chargeAmount = this.getChargeAmount(scrapped);
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
 
-        clearTimeout(earlyReturnTimer);
+        if (earlyReturnTimer) {
+            clearTimeout(earlyReturnTimer);
+        }
 
         if (!lastScrapped) {
             throw new AssertionFailureError(`No content available for query ${searchQuery}`);
@@ -330,7 +358,6 @@ export class SearcherHost extends RPCHost {
         if (!earlyReturn) {
             chargeAmount = this.getChargeAmount(lastScrapped);
         }
-
 
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
     }

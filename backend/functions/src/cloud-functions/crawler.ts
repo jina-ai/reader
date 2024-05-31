@@ -19,7 +19,7 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { CrawlerOptions } from '../dto/scrapping-options';
+import { CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { PDFExtractor } from '../services/pdf-extract';
 
@@ -230,7 +230,9 @@ export class CrawlerHost extends RPCHost {
 
         let pdfMode = false;
         if (snapshot.pdfs?.length && !snapshot.title) {
-            const pdf = await this.pdfExtractor.cachedExtract(snapshot.pdfs[0]);
+            const pdf = await this.pdfExtractor.cachedExtract(snapshot.pdfs[0],
+                this.threadLocal.get('cacheTolerance')
+            );
             if (pdf) {
                 pdfMode = true;
                 snapshot.title = pdf.meta?.Title;
@@ -432,7 +434,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         runtime: {
             memory: '4GiB',
             timeoutSeconds: 300,
-            concurrency: 4,
+            concurrency: 22,
         },
         tags: ['Crawler'],
         httpMethod: ['get', 'post'],
@@ -442,9 +444,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     @CloudHTTPv2({
         runtime: {
             memory: '4GiB',
-            cpu: 2,
+            cpu: 4,
             timeoutSeconds: 300,
-            concurrency: 11,
+            concurrency: 22,
             maxInstances: 455,
         },
         openapi: {
@@ -543,11 +545,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
-        crawlerOptions: CrawlerOptions,
+        crawlerOptions: CrawlerOptionsHeaderOnly,
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const noSlashURL = ctx.req.url.slice(1).trimStart();
+        const noSlashURL = ctx.req.url.slice(1);
         if (!noSlashURL) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
@@ -911,6 +913,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         this.threadLocal.set('withGeneratedAlt', opts.withGeneratedAlt);
         this.threadLocal.set('withLinksSummary', opts.withLinksSummary);
         this.threadLocal.set('withImagesSummary', opts.withImagesSummary);
+        this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,

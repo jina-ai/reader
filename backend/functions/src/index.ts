@@ -13,6 +13,7 @@ Object.assign(exports, registry.exportGrouped({
     memory: '4GiB',
     timeoutSeconds: 540,
 }));
+registry.allHandsOnDeck().catch(() => void 0);
 registry.title = 'reader';
 registry.version = '0.1.0';
 
