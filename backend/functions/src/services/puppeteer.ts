@@ -10,7 +10,7 @@ import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
-import { ServiceCrashedError } from '../shared/lib/errors';
+import { SecurityCompromiseError, ServiceCrashedError } from '../shared/lib/errors';
 import { Readability } from '@mozilla/readability';
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -270,17 +270,36 @@ function giveSnapshot(stopActiveSnapshot) {
 
         await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
 
+        const domainSet = new Set<string>();
+        let reqCounter = 0;
+
         page.on('request', (req) => {
+            reqCounter++;
             const requestUrl = req.url();
             if (!requestUrl.startsWith("http:") && !requestUrl.startsWith("https:") && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
             }
             const parsedUrl = new URL(requestUrl);
+            domainSet.add(parsedUrl.hostname);
 
             if (
                 parsedUrl.hostname === 'localhost' ||
                 parsedUrl.hostname.startsWith('127.')
             ) {
+                page.emit('abuse', { url: requestUrl, page, sn, reason: `Suspicious action: Request to localhost: ${requestUrl}` });
+
+                return req.abort('blockedbyclient', 1000);
+            }
+
+            if (reqCounter > 200) {
+                page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many requests: ${reqCounter}` });
+
+                return req.abort('blockedbyclient', 1000);
+            }
+
+            if (domainSet.size > 21) {
+                page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many domains (${domainSet.size})` });
+
                 return req.abort('blockedbyclient', 1000);
             }
 
@@ -408,6 +427,12 @@ document.addEventListener('load', handlePageLoad);
             });
         };
         page.on('snapshot', hdl);
+        page.once('abuse', (event: any) => {
+            this.emit('abuse', { ...event, url: parsedUrl });
+            nextSnapshotDeferred.reject(
+                new SecurityCompromiseError(`Abuse detected: ${event.reason}`)
+            );
+        });
 
         const gotoPromise = page.goto(url, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 30_000 })
             .catch((err) => {

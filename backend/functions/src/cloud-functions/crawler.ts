@@ -5,7 +5,7 @@ import {
     AssertionFailureError, ParamValidationError, Defer,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect, SecurityCompromiseError } from '../shared';
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -22,6 +22,7 @@ import { countGPTToken as estimateToken } from '../shared/utils/openai';
 import { CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { PDFExtractor } from '../services/pdf-extract';
+import { DomainBlockade } from '../db/domain-blockade';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -64,6 +65,7 @@ export class CrawlerHost extends RPCHost {
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
     cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
+    abuseBlockMs = 1000 * 3600 * 24;
 
     constructor(
         protected globalLogger: Logger,
@@ -86,6 +88,21 @@ export class CrawlerHost extends RPCHost {
             }
 
             await this.setToCache(options.url, snapshot);
+        });
+
+        puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
+            this.logger.warn(`Abuse detected on ${abuseEvent.url}, blocking ${abuseEvent.url.hostname}`, { reason: abuseEvent.reason, sn: abuseEvent.sn });
+
+            await DomainBlockade.save(DomainBlockade.from({
+                domain: abuseEvent.url.hostname.toLowerCase(),
+                triggerReason: `${abuseEvent.reason}`,
+                triggerUrl: abuseEvent.url.toString(),
+                createdAt: new Date(),
+                expireAt: new Date(Date.now() + this.abuseBlockMs),
+            })).catch((err) => {
+                this.logger.warn(`Failed to save domain blockade for ${abuseEvent.url.hostname}`, { err: marshalErrorLike(err) });
+            });
+
         });
     }
 
@@ -616,6 +633,13 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 message: `Invalid protocol ${urlToCrawl.protocol}`,
                 path: 'url'
             });
+        }
+        const blockade = (await DomainBlockade.fromFirestoreQuery(
+            DomainBlockade.COLLECTION.where('domain', '==', urlToCrawl.hostname.toLowerCase()).limit(1)
+        ))[0];
+
+        if (blockade) {
+            throw new SecurityCompromiseError(`Domain ${urlToCrawl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
         }
 
         const crawlOpts = this.configure(crawlerOptions);
