@@ -276,32 +276,25 @@ export class PDFExtractor extends AsyncService {
 
         try {
             extracted = await this.extract(url);
+
+            const theID = randomUUID();
+            await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
+                Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
+            PDFContent.save(
+                PDFContent.from({
+                    _id: theID,
+                    src: url.toString(),
+                    meta: extracted?.meta || {},
+                    urlDigest: digest,
+                    createdAt: new Date(),
+                    expireAt: new Date(Date.now() + this.cacheRetentionMs)
+                }).degradeForFireStore()
+            ).catch((r) => {
+                this.logger.warn(`Unable to cache PDF content for ${url}`, { err: r });
+            });
         } catch (err) {
             this.logger.warn(`Unable to extract from pdf ${url}`, { err });
         }
-
-        // Don't try again until the next hour
-        const expireMixin = extracted ? {
-            expireAt: new Date(Date.now() + this.cacheRetentionMs)
-        } : {
-            expireAt: new Date(Date.now() + 1000 * 3600)
-        };
-        const theID = randomUUID();
-
-        await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
-            Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
-        PDFContent.save(
-            PDFContent.from({
-                _id: theID,
-                src: url.toString(),
-                meta: extracted?.meta || {},
-                urlDigest: digest,
-                createdAt: new Date(),
-                ...expireMixin
-            }).degradeForFireStore()
-        ).catch((r) => {
-            this.logger.warn(`Unable to cache PDF content for ${url}`, { err: r });
-        });
 
         return extracted;
     }
