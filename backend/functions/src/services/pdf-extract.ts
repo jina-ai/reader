@@ -281,18 +281,21 @@ export class PDFExtractor extends AsyncService {
         // Don't try again until the next day
         const expireMixin = extracted ? {} : { expireAt: new Date(Date.now() + 1000 * 3600 * 24) };
         const theID = randomUUID();
+
         await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
             Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
-
-        await PDFContent.COLLECTION.doc(theID).set(
-            {
+        PDFContent.save(
+            PDFContent.from({
+                _id: theID,
                 src: url.toString(),
                 meta: extracted?.meta || {},
                 urlDigest: digest,
                 createdAt: new Date(),
                 ...expireMixin
-            }, { merge: true }
-        );
+            }).degradeForFireStore()
+        ).catch((r) => {
+            this.logger.warn(`Unable to cache PDF content for ${url}`, { err: r });
+        });
 
         return extracted;
     }
