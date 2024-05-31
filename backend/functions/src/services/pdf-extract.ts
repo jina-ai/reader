@@ -46,6 +46,8 @@ export class PDFExtractor extends AsyncService {
     logger = this.globalLogger.child({ service: this.constructor.name });
     pdfjs!: Awaited<typeof pPdfjs>;
 
+    cacheRetentionMs = 1000 * 3600 * 24 * 7;
+
     constructor(
         protected globalLogger: Logger,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
@@ -278,8 +280,12 @@ export class PDFExtractor extends AsyncService {
             this.logger.warn(`Unable to extract from pdf ${url}`, { err });
         }
 
-        // Don't try again until the next day
-        const expireMixin = extracted ? {} : { expireAt: new Date(Date.now() + 1000 * 3600 * 24) };
+        // Don't try again until the next hour
+        const expireMixin = extracted ? {
+            expireAt: new Date(Date.now() + this.cacheRetentionMs)
+        } : {
+            expireAt: new Date(Date.now() + 1000 * 3600)
+        };
         const theID = randomUUID();
 
         await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
