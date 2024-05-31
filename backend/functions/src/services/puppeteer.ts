@@ -297,7 +297,7 @@ function giveSnapshot(stopActiveSnapshot) {
                 return req.abort('blockedbyclient', 1000);
             }
 
-            if (domainSet.size > 21) {
+            if (domainSet.size > 51) {
                 page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many domains (${domainSet.size})` });
 
                 return req.abort('blockedbyclient', 1000);
