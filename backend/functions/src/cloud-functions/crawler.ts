@@ -635,7 +635,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             });
         }
         const blockade = (await DomainBlockade.fromFirestoreQuery(
-            DomainBlockade.COLLECTION.where('domain', '==', urlToCrawl.hostname.toLowerCase()).limit(1)
+            DomainBlockade.COLLECTION
+                .where('domain', '==', urlToCrawl.hostname.toLowerCase())
+                .where('expireAt', '>=', new Date())
+                .limit(1)
         ))[0];
 
         if (blockade) {
