@@ -138,6 +138,10 @@ export class CrawlerHost extends RPCHost {
                 filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea'],
                 replacement: () => ''
             });
+            turnDownService.addRule('truncate-svg', {
+                filter: 'svg' as any,
+                replacement: () => ''
+            });
             turnDownService.addRule('title-as-h1', {
                 filter: ['title'],
                 replacement: (innerText) => `${innerText}\n===============\n`
