@@ -100,6 +100,8 @@ export class PuppeteerControl extends AsyncService {
     livePages = new Set<Page>();
     lastPageCratedAt: number = 0;
 
+    circuitBreakerHosts: Set<string> = new Set();
+
     constructor(
         protected globalLogger: Logger,
     ) {
@@ -284,6 +286,12 @@ function giveSnapshot(stopActiveSnapshot) {
             domainSet.add(tldParsed.domain);
 
             const parsedUrl = new URL(requestUrl);
+
+            if (this.circuitBreakerHosts.has(parsedUrl.hostname.toLowerCase())) {
+                page.emit('abuse', { url: requestUrl, page, sn, reason: `Abusive request: ${requestUrl}` });
+
+                return req.abort('blockedbyclient', 1000);
+            }
 
             if (
                 parsedUrl.hostname === 'localhost' ||

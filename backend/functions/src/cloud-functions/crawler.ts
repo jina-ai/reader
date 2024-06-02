@@ -581,6 +581,12 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 { contentType: 'text/plain', envelope: null }
             );
         }
+
+        // Prevent circular crawling
+        this.puppeteerControl.circuitBreakerHosts.add(
+            ctx.req.hostname.toLowerCase()
+        );
+
         if (uid) {
             const user = await auth.assertUser();
             if (!(user.wallet.total_balance > 0)) {
@@ -638,15 +644,17 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 path: 'url'
             });
         }
-        const blockade = (await DomainBlockade.fromFirestoreQuery(
-            DomainBlockade.COLLECTION
-                .where('domain', '==', urlToCrawl.hostname.toLowerCase())
-                .where('expireAt', '>=', new Date())
-                .limit(1)
-        ))[0];
 
-        if (blockade && !uid) {
-            throw new SecurityCompromiseError(`Domain ${urlToCrawl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
+        if (!uid) {
+            const blockade = (await DomainBlockade.fromFirestoreQuery(
+                DomainBlockade.COLLECTION
+                    .where('domain', '==', urlToCrawl.hostname.toLowerCase())
+                    .where('expireAt', '>=', new Date())
+                    .limit(1)
+            ))[0];
+            if (blockade) {
+                throw new SecurityCompromiseError(`Domain ${urlToCrawl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
+            }
         }
 
         const crawlOpts = this.configure(crawlerOptions);
