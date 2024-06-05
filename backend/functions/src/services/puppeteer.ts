@@ -65,6 +65,7 @@ export interface ScrappingOptions {
     favorScreenshot?: boolean;
     waitForSelector?: string;
     minIntervalMs?: number;
+    overrideUserAgent?: string;
 }
 
 
@@ -416,6 +417,9 @@ document.addEventListener('load', handlePageLoad);
         }
         if (options?.cookies) {
             await page.setCookie(...options.cookies);
+        }
+        if (options?.overrideUserAgent) {
+            await page.setUserAgent(options.overrideUserAgent);
         }
 
         let nextSnapshotDeferred = Defer();
