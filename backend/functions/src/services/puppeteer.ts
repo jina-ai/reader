@@ -66,6 +66,7 @@ export interface ScrappingOptions {
     waitForSelector?: string;
     minIntervalMs?: number;
     overrideUserAgent?: string;
+    timeoutMs?: number;
 }
 
 
@@ -449,7 +450,10 @@ document.addEventListener('load', handlePageLoad);
             );
         });
 
-        const gotoPromise = page.goto(url, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 30_000 })
+        const gotoPromise = page.goto(url, {
+            waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
+            timeout: options?.timeoutMs || 30_000
+        })
             .catch((err) => {
                 this.logger.warn(`Page ${sn}: Browsing of ${url} did not fully succeed`, { err: marshalErrorLike(err) });
                 return Promise.reject(new AssertionFailureError({

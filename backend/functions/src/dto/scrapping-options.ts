@@ -91,6 +91,11 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Timeout': {
+                    description: `Specify timeout in seconds. Max 180.`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
             }
         }
     }
@@ -142,6 +147,11 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     userAgent?: string;
 
+    @Prop({
+        validate: (v: number) => v > 0 && v <= 180,
+    })
+    timeout?: number;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -176,6 +186,11 @@ export class CrawlerOptions extends AutoCastable {
         let cacheTolerance = parseInt(ctx?.req.get('x-cache-tolerance') || '');
         if (!isNaN(cacheTolerance)) {
             instance.cacheTolerance = cacheTolerance;
+        }
+
+        let timeoutSeconds = parseInt(ctx?.req.get('x-timeout') || '');
+        if (!isNaN(timeoutSeconds)) {
+            instance.timeout = timeoutSeconds;
         }
 
         const targetSelector = ctx?.req.get('x-target-selector');

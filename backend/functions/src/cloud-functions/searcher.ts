@@ -30,7 +30,7 @@ export class SearcherHost extends RPCHost {
     cacheValidMs = 1000 * 3600;
     pageCacheToleranceMs = 1000 * 3600 * 24;
 
-    reasonableDelayMs = 10_000;
+    reasonableDelayMs = 15_000;
 
     targetResultCount = 5;
 
@@ -163,6 +163,10 @@ export class SearcherHost extends RPCHost {
             throw new AssertionFailureError(`No search results available for query ${searchQuery}`);
         }
 
+        if (crawlOpts.timeoutMs && crawlOpts.timeoutMs < 30_000) {
+            delete crawlOpts.timeoutMs;
+        }
+
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
             crawlerOptions.cacheTolerance || this.pageCacheToleranceMs
         );
@@ -213,7 +217,7 @@ export class SearcherHost extends RPCHost {
                     chargeAmount = this.getChargeAmount(lastScrapped);
                     rpcReflect.return(lastScrapped);
                     earlyReturn = true;
-                }, this.reasonableDelayMs);
+                }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
             };
 
             for await (const scrapped of it) {
@@ -259,7 +263,7 @@ export class SearcherHost extends RPCHost {
                 chargeAmount = this.getChargeAmount(lastScrapped);
                 rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
                 earlyReturn = true;
-            }, this.reasonableDelayMs);
+            }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
         };
 
         for await (const scrapped of it) {
@@ -317,7 +321,12 @@ export class SearcherHost extends RPCHost {
                         description: upstreamSearchResult.description,
                     };
                 }
-                return this.crawler.formatSnapshot(mode, x, urls[i]);
+                return this.crawler.formatSnapshot(mode, x, urls[i]).then((r) => {
+                    r.title ??= upstreamSearchResult.title;
+                    r.description = upstreamSearchResult.description;
+
+                    return r;
+                });
             });
 
             const resultArray = await Promise.all(mapped) as FormattedPage[];
@@ -343,7 +352,7 @@ export class SearcherHost extends RPCHost {
             return {
                 ...x,
                 toString(this: any) {
-                    if (this.description) {
+                    if (!this.content && this.description) {
                         if (this.title) {
                             return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}
@@ -355,6 +364,9 @@ export class SearcherHost extends RPCHost {
                     }
 
                     const mixins = [];
+                    if (this.description) {
+                        mixins.push(`[${i + 1}] Description: ${this.description}`);
+                    }
                     if (this.publishedTime) {
                         mixins.push(`[${i + 1}] Published Time: ${this.publishedTime}`);
                     }
