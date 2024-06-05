@@ -189,7 +189,7 @@ export class CrawlerOptions extends AutoCastable {
         }
 
         let timeoutSeconds = parseInt(ctx?.req.get('x-timeout') || '');
-        if (!isNaN(timeoutSeconds)) {
+        if (!isNaN(timeoutSeconds) && timeoutSeconds > 0 && timeoutSeconds <= 180) {
             instance.timeout = timeoutSeconds;
         }
 
