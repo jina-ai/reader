@@ -571,9 +571,14 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             if (blockade) {
                 throw new SecurityCompromiseError(`Domain ${urlToCrawl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
-        }
+            if (urlToCrawl.protocol === 'http:' && (!urlToCrawl.pathname || urlToCrawl.pathname === '/') &&
+                crawlerOptions.respondWith === 'html') {
+                throw new SecurityCompromiseError(`Your request is categorized as abuse. Please don't abuse our service. If you are sure you are not abusing, please authenticate yourself with an API key.`);
+            }
 
+        }
         const crawlOpts = this.configure(crawlerOptions);
+
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -767,7 +772,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
+    async * cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
         let cache;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
@@ -821,7 +826,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     }
 
 
-    async *scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
+    async * scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
         const iterators = urls.map((url) => this.cachedScrap(url, options, cacheTolerance));
 
         const results: (PageSnapshot | undefined)[] = iterators.map((_x) => undefined);
