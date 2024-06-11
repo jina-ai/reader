@@ -562,6 +562,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         if (!uid) {
+            if (urlToCrawl.protocol === 'http:' && (!urlToCrawl.pathname || urlToCrawl.pathname === '/') &&
+                crawlerOptions.respondWith !== 'default') {
+                throw new SecurityCompromiseError(`Your request is categorized as abuse. Please don't abuse our service. If you are sure you are not abusing, please authenticate yourself with an API key.`);
+            }
             const blockade = (await DomainBlockade.fromFirestoreQuery(
                 DomainBlockade.COLLECTION
                     .where('domain', '==', urlToCrawl.hostname.toLowerCase())
@@ -570,10 +574,6 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             ))[0];
             if (blockade) {
                 throw new SecurityCompromiseError(`Domain ${urlToCrawl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
-            }
-            if (urlToCrawl.protocol === 'http:' && (!urlToCrawl.pathname || urlToCrawl.pathname === '/') &&
-                crawlerOptions.respondWith !== 'default') {
-                throw new SecurityCompromiseError(`Your request is categorized as abuse. Please don't abuse our service. If you are sure you are not abusing, please authenticate yourself with an API key.`);
             }
 
         }
