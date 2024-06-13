@@ -132,7 +132,10 @@ export class CrawlerHost extends RPCHost {
     }
 
     getTurndown(noRules?: boolean | string) {
-        const turnDownService = new TurndownService();
+        const turnDownService = new TurndownService({
+            codeBlockStyle: 'fenced',
+            preformattedCode: true,
+        } as any);
         if (!noRules) {
             turnDownService.addRule('remove-irrelevant', {
                 filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea'],
@@ -177,6 +180,30 @@ export class CrawlerHost extends RPCHost {
                 const fixedHref = href.replace(/\s+/g, '').trim();
 
                 return `[${fixedContent}](${fixedHref}${title || ''})`;
+            }
+        });
+        turnDownService.addRule('improved-code', {
+            filter: function (node: any) {
+                let hasSiblings = node.previousSibling || node.nextSibling;
+                let isCodeBlock = node.parentNode.nodeName === 'PRE' && !hasSiblings;
+
+                return node.nodeName === 'CODE' && !isCodeBlock;
+            },
+
+            replacement: function (inputContent: any) {
+                if (!inputContent) return '';
+                let content = inputContent;
+
+                let delimiter = '`';
+                let matches = content.match(/`+/gm) || [];
+                while (matches.indexOf(delimiter) !== -1) delimiter = delimiter + '`';
+                if (content.includes('\n')) {
+                    delimiter = '```';
+                }
+
+                let extraSpace = delimiter === '```' ? '\n' : /^`|^ .*?[^ ].* $|`$/.test(content) ? ' ' : '';
+
+                return delimiter + extraSpace + content + (delimiter === '```' && !content.endsWith(extraSpace) ? extraSpace : '') + delimiter;
             }
         });
 
