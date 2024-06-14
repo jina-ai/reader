@@ -329,6 +329,10 @@ const handlePageLoad = () => {
     if (window.haltSnapshot) {
         return;
     }
+    const documentObj = window.document || window.contentDocument || window.contentWindow.document;
+    if (window.waitForSelector && !documentObj.querySelector(window.waitForSelector)) {
+        return;
+    }
     if (document.readyState !== 'complete') {
         return;
     }
@@ -421,6 +425,11 @@ document.addEventListener('load', handlePageLoad);
         }
         if (options?.overrideUserAgent) {
             await page.setUserAgent(options.overrideUserAgent);
+        }
+        if (options?.waitForSelector) {
+            await page.evaluateOnNewDocument(`
+                window.waitForSelector="${options?.waitForSelector || ''}";
+            `);
         }
 
         let nextSnapshotDeferred = Defer();
