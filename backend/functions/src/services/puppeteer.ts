@@ -63,7 +63,7 @@ export interface ScrappingOptions {
     proxyUrl?: string;
     cookies?: CookieParam[];
     favorScreenshot?: boolean;
-    waitForSelector?: string;
+    waitForSelector?: string | string[];
     minIntervalMs?: number;
     overrideUserAgent?: string;
     timeoutMs?: number;
@@ -483,7 +483,8 @@ document.addEventListener('load', handlePageLoad);
                 );
             });
         if (options?.waitForSelector) {
-            page.waitForSelector(options.waitForSelector)
+            const waitPromise = Array.isArray(options.waitForSelector) ? Promise.all(options.waitForSelector.map((x) => page.waitForSelector(x))) : page.waitForSelector(options.waitForSelector);
+            waitPromise
                 .then(async () => {
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
                     screenshot = await page.screenshot();
@@ -547,8 +548,11 @@ document.addEventListener('load', handlePageLoad);
         return true;
     }
 
-    narrowSnapshot(snapshot: PageSnapshot | undefined, targetSelect?: string): PageSnapshot | undefined {
-        if (!targetSelect) {
+    narrowSnapshot(snapshot: PageSnapshot | undefined, options?: {
+        targetSelector?: string | string[];
+        removeSelector?: string | string[];
+    }): PageSnapshot | undefined {
+        if (!options?.targetSelector && !options?.removeSelector) {
             return snapshot;
         }
         if (!snapshot?.html) {
@@ -556,26 +560,68 @@ document.addEventListener('load', handlePageLoad);
         }
 
         const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
-        const elem = jsdom.window.document.querySelector(targetSelect);
+        const allNodes: Node[] = [];
 
-        if (!elem) {
-            return snapshot;
+        if (Array.isArray(options.removeSelector)) {
+            for (const rl of options.removeSelector) {
+                jsdom.window.document.querySelectorAll(rl).forEach((x) => x.remove());
+            }
+        } else if (options.removeSelector) {
+            jsdom.window.document.querySelectorAll(options.removeSelector).forEach((x) => x.remove());
         }
 
-        const selectedJsDom = new JSDOM(elem.outerHTML, { url: snapshot.href, virtualConsole });
+        if (Array.isArray(options.targetSelector)) {
+            for (const x of options.targetSelector.map((x) => jsdom.window.document.querySelectorAll(x))) {
+                x.forEach((el) => {
+                    if (!allNodes.includes(el)) {
+                        allNodes.push(el);
+                    }
+                });
+            }
+        } else if (options.targetSelector) {
+            jsdom.window.document.querySelectorAll(options.targetSelector).forEach((el) => {
+                if (!allNodes.includes(el)) {
+                    allNodes.push(el);
+                }
+            });
+        } else {
+            allNodes.push(jsdom.window.document);
+        }
+
+        if (!allNodes.length) {
+            return snapshot;
+        }
+        const textChunks: string[] = [];
+        let rootDoc: Document;
+        if (allNodes.length === 1 && allNodes[0].nodeName === '#document') {
+            rootDoc = allNodes[0] as any;
+            if (rootDoc.body.textContent) {
+                textChunks.push(rootDoc.body.textContent);
+            }
+        } else {
+            rootDoc = new JSDOM('', { url: snapshot.href, virtualConsole }).window.document;
+            for (const n of allNodes) {
+                rootDoc.body.appendChild(n);
+                rootDoc.body.appendChild(rootDoc.createTextNode('\n\n'));
+                if (n.textContent) {
+                    textChunks.push(n.textContent);
+                }
+            }
+        }
+
         let parsed;
         try {
-            parsed = new Readability(selectedJsDom.window.document).parse();
+            parsed = new Readability(rootDoc.cloneNode(true) as any).parse();
         } catch (err: any) {
             this.logger.warn(`Failed to parse selected element`, { err: marshalErrorLike(err) });
         }
 
         // No innerText in jsdom
         // https://github.com/jsdom/jsdom/issues/1245
-        const textContent = elem.textContent;
+        const textContent = textChunks.join('\n\n');
         const cleanedText = textContent?.split('\n').map((x: any) => x.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n');
 
-        const imageTags = Array.from(elem.querySelectorAll('img[src],img[data-src]'))
+        const imageTags = Array.from(rootDoc.querySelectorAll('img[src],img[data-src]'))
             .map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src')])
             .flat()
             .map((x) => {
@@ -592,7 +638,7 @@ document.addEventListener('load', handlePageLoad);
         const r = {
             ...snapshot,
             parsed,
-            html: elem.outerHTML,
+            html: rootDoc.documentElement.outerHTML,
             text: cleanedText,
             imgs: snapshot.imgs?.filter((x) => imageSet.has(x.src)) || [],
         } as PageSnapshot;

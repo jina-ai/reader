@@ -27,7 +27,8 @@ import { DomainBlockade } from '../db/domain-blockade';
 const md5Hasher = new HashManager('md5', 'hex');
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
-    targetSelector?: string;
+    targetSelector?: string | string[];
+    removeSelector?: string | string[];
 }
 
 export interface FormattedPage {
@@ -131,12 +132,15 @@ export class CrawlerHost extends RPCHost {
         return indexObject;
     }
 
-    getTurndown(noRules?: boolean | string) {
+    getTurndown(options?: {
+        noRules?: boolean | string,
+        url?: string | URL;
+    }) {
         const turnDownService = new TurndownService({
             codeBlockStyle: 'fenced',
             preformattedCode: true,
         } as any);
-        if (!noRules) {
+        if (!options?.noRules) {
             turnDownService.addRule('remove-irrelevant', {
                 filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea'],
                 replacement: () => ''
@@ -177,7 +181,14 @@ export class CrawlerHost extends RPCHost {
                 if (title) title = ' "' + title.replace(/"/g, '\\"') + '"';
 
                 const fixedContent = content.replace(/\s+/g, ' ').trim();
-                const fixedHref = href.replace(/\s+/g, '').trim();
+                let fixedHref = href.replace(/\s+/g, '').trim();
+                if (options?.url) {
+                    try {
+                        fixedHref = new URL(fixedHref, options.url).toString();
+                    } catch (_err) {
+                        void 0;
+                    }
+                }
 
                 return `[${fixedContent}](${fixedHref}${title || ''})`;
             }
@@ -317,7 +328,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
-            let turnDownService = mode === 'markdown' ? this.getTurndown() : this.getTurndown('without any rule');
+            let turnDownService = mode === 'markdown' ? this.getTurndown({ url: snapshot.href }) : this.getTurndown({ noRules: true, url: snapshot.href });
             for (const plugin of this.turnDownPlugins) {
                 turnDownService = turnDownService.use(plugin);
             }
@@ -380,7 +391,7 @@ export class CrawlerHost extends RPCHost {
                     contentText = turnDownService.turndown(toBeTurnedToMd).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown();
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href });
                     try {
                         contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
                     } catch (err2) {
@@ -397,7 +408,7 @@ export class CrawlerHost extends RPCHost {
                     contentText = turnDownService.turndown(snapshot.html);
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown();
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href });
                     try {
                         contentText = vanillaTurnDownService.turndown(snapshot.html);
                     } catch (err2) {
@@ -799,22 +810,22 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return r;
     }
 
-    async * cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
         let cache;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
         if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
-            yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts?.targetSelector);
+            yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts);
 
             return;
         }
 
         try {
-            if (crawlOpts?.targetSelector) {
+            if (crawlOpts?.targetSelector || crawlOpts?.removeSelector) {
                 for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
-                    yield this.puppeteerControl.narrowSnapshot(x, crawlOpts.targetSelector);
+                    yield this.puppeteerControl.narrowSnapshot(x, crawlOpts);
                 }
 
                 return;
@@ -824,7 +835,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         } catch (err: any) {
             if (cache) {
                 this.logger.warn(`Failed to scrap ${urlToCrawl}, but a stale cache is available. Falling back to cache`, { err: marshalErrorLike(err) });
-                yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts?.targetSelector);
+                yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts);
                 return;
             }
             throw err;
@@ -853,7 +864,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     }
 
 
-    async * scrapMany(urls: URL[], options?: ScrappingOptions, cacheTolerance?: number) {
+    async *scrapMany(urls: URL[], options?: ExtraScrappingOptions, cacheTolerance?: number) {
         const iterators = urls.map((url) => this.cachedScrap(url, options, cacheTolerance));
 
         const results: (PageSnapshot | undefined)[] = iterators.map((_x) => undefined);
@@ -910,8 +921,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             proxyUrl: opts.proxyUrl,
             cookies: opts.setCookies,
             favorScreenshot: opts.respondWith === 'screenshot',
-            waitForSelector: opts.waitForSelector,
+            removeSelector: opts.removeSelector,
             targetSelector: opts.targetSelector,
+            waitForSelector: opts.waitForSelector,
             overrideUserAgent: opts.userAgent,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
         };

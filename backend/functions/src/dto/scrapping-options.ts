@@ -53,6 +53,13 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Remove-Selector': {
+                    description: `Specifies a CSS selector to remove elements from the full html.\n\n` +
+                        'Example `X-Remove-Selector: nav`'
+                    ,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Proxy-Url': {
                     description: `Specifies your custom proxy if you prefer to use one.\n\n` +
                         `Supported protocols: \n` +
@@ -130,11 +137,14 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     cacheTolerance?: number;
 
-    @Prop()
-    targetSelector?: string;
+    @Prop({ arrayOf: String })
+    targetSelector?: string | string[];
 
-    @Prop()
-    waitForSelector?: string;
+    @Prop({ arrayOf: String })
+    waitForSelector?: string | string[];
+
+    @Prop({ arrayOf: String })
+    removeSelector?: string | string[];
 
     @Prop({
         arrayOf: String,
@@ -193,15 +203,17 @@ export class CrawlerOptions extends AutoCastable {
             instance.timeout = timeoutSeconds;
         }
 
-        const targetSelector = ctx?.req.get('x-target-selector');
+        const removeSelector = ctx?.req.get('x-remove-selector')?.split(', ');
+        instance.removeSelector ??= removeSelector;
+        const targetSelector = ctx?.req.get('x-target-selector')?.split(', ');
         instance.targetSelector ??= targetSelector;
-        const waitForSelector = ctx?.req.get('x-wait-for-selector');
+        const waitForSelector = ctx?.req.get('x-wait-for-selector')?.split(', ');
         instance.waitForSelector ??= waitForSelector || instance.targetSelector;
         const overrideUserAgent = ctx?.req.get('x-user-agent');
         instance.userAgent ??= overrideUserAgent;
 
         const cookies: CookieParam[] = [];
-        const setCookieHeaders = ctx?.req.headers['x-set-cookie'] || (instance.setCookies as any as string[]);
+        const setCookieHeaders = ctx?.req.get('x-set-cookie')?.split(', ') || (instance.setCookies as any as string[]);
         if (Array.isArray(setCookieHeaders)) {
             for (const setCookie of setCookieHeaders) {
                 cookies.push({

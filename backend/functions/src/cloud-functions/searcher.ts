@@ -8,11 +8,10 @@ import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
-import { ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { BraveSearchService } from '../services/brave-search';
-import { CrawlerHost, FormattedPage } from './crawler';
+import { CrawlerHost, ExtraScrappingOptions, FormattedPage } from './crawler';
 import { CookieParam } from 'puppeteer';
 
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
@@ -304,7 +303,7 @@ export class SearcherHost extends RPCHost {
     async *fetchSearchResults(
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
         searchResults?: WebSearchResult[],
-        options?: ScrappingOptions,
+        options?: ExtraScrappingOptions,
         pageCacheTolerance?: number
     ) {
         if (!searchResults) {
