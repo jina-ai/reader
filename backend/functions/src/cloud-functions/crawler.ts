@@ -331,7 +331,7 @@ export class CrawlerHost extends RPCHost {
             let turnDownService = this.getTurndown({ url: nominalUrl });
             if (mode !== 'markdown' && snapshot.parsed?.content) {
                 const par1 = turnDownService.turndown(toBeTurnedToMd);
-                const par2 = turnDownService.turndown(snapshot.parsed.content)
+                const par2 = turnDownService.turndown(snapshot.parsed.content);
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
