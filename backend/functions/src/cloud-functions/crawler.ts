@@ -327,8 +327,19 @@ export class CrawlerHost extends RPCHost {
                 break;
             }
 
-            const toBeTurnedToMd = mode === 'markdown' ? snapshot.html : snapshot.parsed?.content;
-            let turnDownService = mode === 'markdown' ? this.getTurndown({ url: snapshot.href }) : this.getTurndown({ noRules: true, url: snapshot.href });
+            let toBeTurnedToMd = snapshot.html;
+            let turnDownService = this.getTurndown({ url: nominalUrl });
+            if (mode !== 'markdown' && snapshot.parsed?.content) {
+                const par1 = turnDownService.turndown(toBeTurnedToMd);
+                const par2 = turnDownService.turndown(snapshot.parsed.content)
+
+                // If Readability did its job
+                if (par2.length >= 0.3 * par1.length) {
+                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.href });
+                    toBeTurnedToMd = snapshot.parsed.content;
+                }
+            }
+
             for (const plugin of this.turnDownPlugins) {
                 turnDownService = turnDownService.use(plugin);
             }
@@ -585,7 +596,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         let urlToCrawl;
         const normalizeUrl = (await pNormalizeUrl).default;
         try {
-            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false, sortQueryParameters:false }));
+            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false, sortQueryParameters: false }));
         } catch (err) {
             throw new ParamValidationError({
                 message: `${err}`,
