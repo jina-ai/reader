@@ -585,7 +585,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         let urlToCrawl;
         const normalizeUrl = (await pNormalizeUrl).default;
         try {
-            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false }));
+            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false, sortQueryParameters:false }));
         } catch (err) {
             throw new ParamValidationError({
                 message: `${err}`,
