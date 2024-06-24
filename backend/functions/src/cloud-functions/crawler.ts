@@ -29,6 +29,7 @@ const md5Hasher = new HashManager('md5', 'hex');
 export interface ExtraScrappingOptions extends ScrappingOptions {
     targetSelector?: string | string[];
     removeSelector?: string | string[];
+    keepImgDataUrl?: boolean;
 }
 
 export interface FormattedPage {
@@ -135,6 +136,7 @@ export class CrawlerHost extends RPCHost {
     getTurndown(options?: {
         noRules?: boolean | string,
         url?: string | URL;
+        imgDataUrlToObjectUrl?: boolean;
     }) {
         const turnDownService = new TurndownService({
             codeBlockStyle: 'fenced',
@@ -154,6 +156,26 @@ export class CrawlerHost extends RPCHost {
                 replacement: (innerText) => `${innerText}\n===============\n`
             });
         }
+
+        if (options?.imgDataUrlToObjectUrl) {
+            turnDownService.addRule('data-url-to-pseudo-object-url', {
+                filter: (node) => Boolean(node.tagName === 'IMG' && node.getAttribute('src')?.startsWith('data:')),
+                replacement: (_content, node: any) => {
+                    const src = (node.getAttribute('src') || '').trim();
+                    const alt = cleanAttribute(node.getAttribute('alt')) || '';
+
+                    if (options.url) {
+                        const refUrl = new URL(options.url);
+                        const mappedUrl = new URL(`blob:${refUrl.origin}/${md5Hasher.hash(src)}`);
+
+                        return `![${alt}](${mappedUrl})`;
+                    }
+
+                    return `![${alt}](blob:${md5Hasher.hash(src)})`;
+                }
+            });
+        }
+
         turnDownService.addRule('improved-paragraph', {
             filter: 'p',
             replacement: (innerText) => {
@@ -317,6 +339,7 @@ export class CrawlerHost extends RPCHost {
                 }
             } as FormattedPage;
         }
+        const imgDataUrlToObjectUrl = !Boolean(this.threadLocal.get('keepImgDataUrl'));
 
         let contentText = '';
         const imageSummary = {} as { [k: string]: string; };
@@ -328,14 +351,14 @@ export class CrawlerHost extends RPCHost {
             }
 
             let toBeTurnedToMd = snapshot.html;
-            let turnDownService = this.getTurndown({ url: nominalUrl });
+            let turnDownService = this.getTurndown({ url: nominalUrl, imgDataUrlToObjectUrl });
             if (mode !== 'markdown' && snapshot.parsed?.content) {
-                const par1 = turnDownService.turndown(toBeTurnedToMd);
+                const par1 = turnDownService.turndown(snapshot.html);
                 const par2 = turnDownService.turndown(snapshot.parsed.content);
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
-                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.href });
+                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.href, imgDataUrlToObjectUrl });
                     toBeTurnedToMd = snapshot.parsed.content;
                 }
             }
@@ -388,10 +411,24 @@ export class CrawlerHost extends RPCHost {
                     if (mapped) {
                         imageSummary[src] = mapped || alt;
 
+                        if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
+                            const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
+                            mappedUrl.protocol = 'blob:';
+
+                            return `![Image ${imgIdx}: ${mapped || alt}](${mappedUrl})`;
+                        }
+
                         return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
                     }
 
                     imageSummary[src] = alt || '';
+
+                    if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
+                        const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
+                        mappedUrl.protocol = 'blob:';
+
+                        return alt ? `![Image ${imgIdx}: ${alt}](${mappedUrl})` : `![Image ${imgIdx}](${mappedUrl})`;
+                    }
 
                     return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
                 }
@@ -402,7 +439,7 @@ export class CrawlerHost extends RPCHost {
                     contentText = turnDownService.turndown(toBeTurnedToMd).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href });
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href, imgDataUrlToObjectUrl });
                     try {
                         contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
                     } catch (err2) {
@@ -419,7 +456,7 @@ export class CrawlerHost extends RPCHost {
                     contentText = turnDownService.turndown(snapshot.html);
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href });
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href, imgDataUrlToObjectUrl });
                     try {
                         contentText = vanillaTurnDownService.turndown(snapshot.html);
                     } catch (err2) {
@@ -922,6 +959,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         this.threadLocal.set('withGeneratedAlt', opts.withGeneratedAlt);
         this.threadLocal.set('withLinksSummary', opts.withLinksSummary);
         this.threadLocal.set('withImagesSummary', opts.withImagesSummary);
+        this.threadLocal.set('keepImgDataUrl', opts.keepImgDataUrl);
         this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
         this.threadLocal.set('userAgent', opts.userAgent);
         if (opts.timeout) {

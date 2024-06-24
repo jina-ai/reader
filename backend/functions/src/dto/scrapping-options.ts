@@ -60,6 +60,13 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Keep-Img-Data-Url': {
+                    description: `Keep data-url as it instead of transforming them to object-url. (Only applicable when targeting markdown format)\n\n` +
+                        'Example `X-Keep-Img-Data-Url: true`'
+                    ,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Proxy-Url': {
                     description: `Specifies your custom proxy if you prefer to use one.\n\n` +
                         `Supported protocols: \n` +
@@ -147,6 +154,11 @@ export class CrawlerOptions extends AutoCastable {
     removeSelector?: string | string[];
 
     @Prop({
+        default: false,
+    })
+    keepImgDataUrl!: boolean;
+
+    @Prop({
         arrayOf: String,
     })
     setCookies?: CookieParam[];
@@ -211,6 +223,11 @@ export class CrawlerOptions extends AutoCastable {
         instance.waitForSelector ??= waitForSelector || instance.targetSelector;
         const overrideUserAgent = ctx?.req.get('x-user-agent');
         instance.userAgent ??= overrideUserAgent;
+
+        const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
+        if (keepImgDataUrl !== undefined) {
+            instance.keepImgDataUrl = Boolean(keepImgDataUrl);
+        }
 
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx?.req.get('x-set-cookie')?.split(', ') || (instance.setCookies as any as string[]);
