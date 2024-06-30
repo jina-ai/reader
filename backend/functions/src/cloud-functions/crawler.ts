@@ -551,10 +551,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     @CloudHTTPv2({
         runtime: {
             memory: '4GiB',
-            cpu: 4,
+            cpu: 2,
             timeoutSeconds: 300,
-            concurrency: 22,
-            maxInstances: 455,
+            concurrency: 16,
+            maxInstances: 625,
         },
         tags: ['Crawler'],
         httpMethod: ['get', 'post'],
