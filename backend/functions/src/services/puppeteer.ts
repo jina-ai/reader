@@ -52,6 +52,7 @@ export interface PageSnapshot {
     screenshot?: Buffer;
     imgs?: ImgBrief[];
     pdfs?: string[];
+    maxElemDepth?: number;
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
@@ -235,6 +236,32 @@ function briefPDFs() {
         return x.src === 'about:blank' ? document.location.href : x.src;
     });
 }
+function getMaxDepthUsingTreeWalker(root) {
+  let maxDepth = 0;
+  let currentDepth = 0;
+
+  const treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
+
+  while (true) {
+    maxDepth = Math.max(maxDepth, currentDepth);
+
+    if (treeWalker.firstChild()) {
+      currentDepth++;
+    } else {
+      while (!treeWalker.nextSibling() && currentDepth > 0) {
+        treeWalker.parentNode();
+        currentDepth--;
+      }
+
+      if (currentDepth <= 0) {
+        break;
+      }
+    }
+  }
+
+  return maxDepth + 1;
+}
+
 function giveSnapshot(stopActiveSnapshot) {
     if (stopActiveSnapshot) {
         window.haltSnapshot = true;
@@ -254,6 +281,7 @@ function giveSnapshot(stopActiveSnapshot) {
         parsed: parsed,
         imgs: [],
         pdfs: briefPDFs(),
+        maxElemDepth: getMaxDepthUsingTreeWalker(document.documentElement)
     };
     if (parsed && parsed.content) {
         const elem = document.createElement('div');
@@ -277,7 +305,7 @@ function giveSnapshot(stopActiveSnapshot) {
 
         const domainSet = new Set<string>();
         let reqCounter = 0;
-        const t0 = Date.now();
+        let t0: number | undefined;
         let halt = false;
 
         page.on('request', (req) => {
@@ -285,6 +313,7 @@ function giveSnapshot(stopActiveSnapshot) {
             if (halt) {
                 return req.abort('blockedbyclient', 1000);
             }
+            t0 ??= Date.now();
             const requestUrl = req.url();
             if (!requestUrl.startsWith("http:") && !requestUrl.startsWith("https:") && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
@@ -446,6 +475,10 @@ document.addEventListener('load', handlePageLoad);
             if (snapshot === s) {
                 return;
             }
+            if (s?.maxElemDepth && s.maxElemDepth > 256) {
+                page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: DOM tree too deep` });
+                return;
+            }
             snapshot = s;
             nextSnapshotDeferred.resolve(s);
             nextSnapshotDeferred = Defer();
@@ -516,7 +549,7 @@ document.addEventListener('load', handlePageLoad);
                     ckpt.push(delay(options.minIntervalMs));
                 }
                 let error;
-                await Promise.race(ckpt).catch((err)=> error = err);
+                await Promise.race(ckpt).catch((err) => error = err);
                 if (finalized) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;

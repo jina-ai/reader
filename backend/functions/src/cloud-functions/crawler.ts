@@ -881,7 +881,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
             yield* this.puppeteerControl.scrap(urlToCrawl, crawlOpts);
         } catch (err: any) {
-            if (cache) {
+            if (cache && !(err instanceof SecurityCompromiseError)) {
                 this.logger.warn(`Failed to scrap ${urlToCrawl}, but a stale cache is available. Falling back to cache`, { err: marshalErrorLike(err) });
                 yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts);
                 return;
