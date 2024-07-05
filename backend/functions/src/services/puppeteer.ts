@@ -550,7 +550,7 @@ document.addEventListener('load', handlePageLoad);
                 }
                 let error;
                 await Promise.race(ckpt).catch((err) => error = err);
-                if (finalized) {
+                if (finalized && !error) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
@@ -558,7 +558,7 @@ document.addEventListener('load', handlePageLoad);
                     screenshot = await page.screenshot();
                     lastHTML = snapshot.html;
                 }
-                if (snapshot || screenshot) {
+                if (snapshot) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                 }
                 if (error) {
