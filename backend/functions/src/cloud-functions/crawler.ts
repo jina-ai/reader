@@ -23,6 +23,7 @@ import { CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-optio
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { PDFExtractor } from '../services/pdf-extract';
 import { DomainBlockade } from '../db/domain-blockade';
+import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -77,6 +78,7 @@ export class CrawlerHost extends RPCHost {
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncContext,
+        protected fbHealthCheck: FirebaseRoundTripChecker,
     ) {
         super(...arguments);
 
