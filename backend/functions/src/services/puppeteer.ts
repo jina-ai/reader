@@ -558,7 +558,7 @@ document.addEventListener('load', handlePageLoad);
                     screenshot = await page.screenshot();
                     lastHTML = snapshot.html;
                 }
-                if (snapshot) {
+                if (snapshot || screenshot) {
                     yield { ...snapshot, screenshot } as PageSnapshot;
                 }
                 if (error) {
