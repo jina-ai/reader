@@ -318,6 +318,7 @@ export class SearcherHost extends RPCHost {
                         url: upstreamSearchResult.url,
                         title: upstreamSearchResult.title,
                         description: upstreamSearchResult.description,
+                        content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : ''
                     };
                 }
                 return this.crawler.formatSnapshot(mode, x, urls[i]).then((r) => {
