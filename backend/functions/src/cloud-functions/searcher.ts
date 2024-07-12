@@ -69,6 +69,7 @@ export class SearcherHost extends RPCHost {
             timeoutSeconds: 300,
             concurrency: 6,
             maxInstances: 200,
+            minInstances: 1,
         },
         tags: ['Searcher'],
         httpMethod: ['get', 'post'],

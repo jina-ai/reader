@@ -557,6 +557,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             timeoutSeconds: 300,
             concurrency: 32,
             maxInstances: 312,
+            minInstances: 1,
         },
         tags: ['Crawler'],
         httpMethod: ['get', 'post'],
