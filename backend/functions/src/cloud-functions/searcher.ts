@@ -10,7 +10,7 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
-import { BraveSearchService } from '../services/brave-search';
+import { BraveSearchExplicitOperatorsDto, BraveSearchService } from '../services/brave-search';
 import { CrawlerHost, ExtraScrappingOptions, FormattedPage } from './crawler';
 import { CookieParam } from 'puppeteer';
 
@@ -84,6 +84,7 @@ export class SearcherHost extends RPCHost {
         },
         auth: JinaEmbeddingsAuthDTO,
         crawlerOptions: CrawlerOptions,
+        braveSearchExplicitOperators: BraveSearchExplicitOperatorsDto,
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
@@ -153,7 +154,7 @@ export class SearcherHost extends RPCHost {
                 ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
             });
         }
-        const searchQuery = noSlashPath;
+        const searchQuery = braveSearchExplicitOperators.addTo(ctx.req.path.slice(1));
         const r = await this.cachedWebSearch({
             q: searchQuery,
             count: 10

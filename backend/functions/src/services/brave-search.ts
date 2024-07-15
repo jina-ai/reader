@@ -1,4 +1,4 @@
-import { AsyncService, DownstreamServiceFailureError, marshalErrorLike } from 'civkit';
+import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, marshalErrorLike } from 'civkit';
 import { singleton } from 'tsyringe';
 import { Logger } from '../shared/services/logger';
 import { SecretExposer } from '../shared/services/secrets';
@@ -75,4 +75,75 @@ export class BraveSearchService extends AsyncService {
 
     }
 
+}
+
+
+export class BraveSearchExplicitOperatorsDto extends AutoCastable {
+    @Prop({
+        arrayOf: String,
+        desc: `Returns web pages with a specific file extension. Example: to find the Honda GX120 Owner’s manual in PDF, type “Honda GX120 ownners manual ext:pdf”.`
+    })
+    ext?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns web pages created in the specified file type. Example: to find a web page created in PDF format about the evaluation of age-related cognitive changes, type “evaluation of age cognitive changes filetype:pdf”.`
+    })
+    filetype?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns web pages containing the specified term in the body of the page. Example: to find information about the Nvidia GeForce GTX 1080 Ti, making sure the page contains the keywords “founders edition” in the body, type “nvidia 1080 ti inbody:“founders edition””.`
+    })
+    inbody?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns webpages containing the specified term in the title of the page. Example: to find pages about SEO conferences making sure the results contain 2023 in the title, type “seo conference intitle:2023”.`
+    })
+    intitle?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns webpages containing the specified term either in the title or in the body of the page. Example: to find pages about the 2024 Oscars containing the keywords “best costume design” in the page, type “oscars 2024 inpage:“best costume design””.`
+    })
+    inpage?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns web pages written in the specified language. The language code must be in the ISO 639-1 two-letter code format. Example: to find information on visas only in Spanish, type “visas lang:es”.`
+    })
+    lang?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns web pages written in the specified language. The language code must be in the ISO 639-1 two-letter code format. Example: to find information on visas only in Spanish, type “visas lang:es”.`
+    })
+    loc?: string | string[];
+
+    @Prop({
+        arrayOf: String,
+        desc: `Returns web pages coming only from a specific web site. Example: to find information about Goggles only on Brave pages, type “goggles site:brave.com”.`
+    })
+    site?: string | string[];
+
+    addTo(searchTerm: string) {
+        const chunks = [];
+        for (const [key, value] of Object.entries(this)) {
+            if (value) {
+                const values = Array.isArray(value) ? value : [value];
+                const textValue = values.map((v) => `${key}:${v}`).join(' OR ');
+                if (textValue) {
+                    chunks.push(textValue);
+                }
+            }
+        }
+        const opPart = chunks.length > 1 ? chunks.map((x) => `(${x})`).join(' AND ') : chunks;
+
+        if (opPart.length) {
+            return [searchTerm, opPart].join(' ');
+        }
+
+        return searchTerm
+    }
 }
