@@ -45,6 +45,14 @@ Simply prepend `https://s.jina.ai/` to your search query. Note that if you are u
 
 Behind the scenes, Reader searches the web, fetches the top 5 results, visits each URL, and applies `r.jina.ai` to it. This is different from many `web search function-calling` in agent/RAG frameworks, which often return only the title, URL, and description provided by the search engine API. If you want to read one result more deeply, you have to fetch the content yourself from that URL. With Reader, `http://s.jina.ai` automatically fetches the content from the top 5 search result URLs for you (reusing the tech stack behind `http://r.jina.ai`). This means you don't have to handle browser rendering, blocking, or any issues related to JavaScript and CSS yourself.
 
+### Using `s.jina.ai` for in-site search
+Simply specifiy the `site` in the header such as:
+
+```bash
+curl https://s.jina.ai/When%20was%20Jina%20AI%20founded%3F \
+	-H "site: jina.ai"
+```
+
 ### [Interactive Code Snippet Builder](https://jina.ai/reader#apiform)
 
 We highly recommend using the code builder to explore different parameter combinations of the Reader API.
