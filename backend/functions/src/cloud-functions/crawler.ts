@@ -710,7 +710,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
                 chargeAmount = this.getChargeAmount(formatted);
 
-                return formatted;
+                if (crawlerOptions.timeout !== null) {
+                    return formatted;
+                }
             }
 
             if (!lastScrapped) {
@@ -731,14 +733,17 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
             const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
             chargeAmount = this.getChargeAmount(formatted);
-            if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
-                return assignTransferProtocolMeta(`${formatted}`,
-                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-                );
+            if (crawlerOptions.timeout !== null) {
+                if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+
+                    return assignTransferProtocolMeta(`${formatted}`,
+                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
+                    );
+                }
+
+                return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
             }
-
-            return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
         }
 
         if (!lastScrapped) {

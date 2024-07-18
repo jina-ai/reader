@@ -171,8 +171,10 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop({
         validate: (v: number) => v > 0 && v <= 180,
+        type: Number,
+        nullable: true,
     })
-    timeout?: number;
+    timeout?: number | null;
 
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
@@ -213,6 +215,8 @@ export class CrawlerOptions extends AutoCastable {
         let timeoutSeconds = parseInt(ctx?.req.get('x-timeout') || '');
         if (!isNaN(timeoutSeconds) && timeoutSeconds > 0 && timeoutSeconds <= 180) {
             instance.timeout = timeoutSeconds;
+        } else if (ctx?.req.get('x-timeout')) {
+            instance.timeout = null;
         }
 
         const removeSelector = ctx?.req.get('x-remove-selector')?.split(', ');
