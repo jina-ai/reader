@@ -710,7 +710,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
                 chargeAmount = this.getChargeAmount(formatted);
 
-                if (crawlerOptions.timeout !== null) {
+                if (crawlerOptions.timeout === undefined) {
                     return formatted;
                 }
             }
@@ -734,7 +734,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
             chargeAmount = this.getChargeAmount(formatted);
 
-            if (crawlerOptions.timeout !== null) {
+            if (crawlerOptions.timeout === undefined) {
                 if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
                     return assignTransferProtocolMeta(`${formatted}`,
