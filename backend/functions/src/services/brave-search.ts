@@ -1,4 +1,4 @@
-import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, marshalErrorLike } from 'civkit';
+import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, marshalErrorLike } from 'civkit';
 import { singleton } from 'tsyringe';
 import { Logger } from '../shared/services/logger';
 import { SecretExposer } from '../shared/services/secrets';
@@ -6,6 +6,7 @@ import { BraveSearchHTTP, WebSearchQueryParams } from '../shared/3rd-party/brave
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncContext } from '../shared';
 import { WebSearchOptionalHeaderOptions } from '../shared/3rd-party/brave-types';
+import type { Request, Response } from 'express';
 
 @singleton()
 export class BraveSearchService extends AsyncService {
@@ -145,5 +146,29 @@ export class BraveSearchExplicitOperatorsDto extends AutoCastable {
         }
 
         return searchTerm
+    }
+
+    static override from(input: any) {
+        const instance = super.from(input) as BraveSearchExplicitOperatorsDto;
+        const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
+            req: Request,
+            res: Response,
+        } | undefined;
+
+        const params = ['ext', 'filetype', 'inbody', 'intitle', 'inpage', 'lang', 'loc', 'site'];
+
+        for (const p of params) {
+            const customValue = ctx?.req.get(`x-${p}`) || ctx?.req.get(`${p}`);
+            if (!customValue) {
+                continue;
+            }
+
+            const filtered = customValue.split(', ').filter(Boolean)
+            if (filtered.length) {
+                Reflect.set(instance, p, filtered);
+            }
+        }
+
+        return instance;
     }
 }
