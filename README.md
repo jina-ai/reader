@@ -18,7 +18,7 @@ Or just visit these URLs (**Read**) https://r.jina.ai/https://github.com/jina-ai
 
 ## Updates
 
-- **2024-07-15**: To restrict the results of `s.jina.ai` to certain domain/website, you can set e.g. `-H site: jina.ai` in the header, which enables in-site search. For more options, [try our updated live-demo](https://jina.ai/reader/#apiform).
+- **2024-07-15**: To restrict the results of `s.jina.ai` to certain domain/website, you can set e.g. `site=jina.ai` in the query parameters, which enables in-site search. For more options, [try our updated live-demo](https://jina.ai/reader/#apiform).
 - **2024-07-01**: We have resolved a DDoS attack and other traffic abusing since June 27th. We also found a bug introduced on June 28th which may cause higher latency for some websites. The attack and the bug have been solved; if you have experienced high latency of r.jina.ai between June 27th-30th, it should back to normal now.
 - **2024-05-30**: Reader can now read abitrary PDF from any URL! Check out [this PDF result from NASA.gov](https://r.jina.ai/https://www.nasa.gov/wp-content/uploads/2023/01/55583main_vision_space_exploration2.pdf) vs [the original](https://www.nasa.gov/wp-content/uploads/2023/01/55583main_vision_space_exploration2.pdf).
 - **2024-05-15**: We introduced a new endpoint `s.jina.ai` that searches on the web and return top-5 results, each in a LLM-friendly format. [Read more about this new feature here](https://jina.ai/news/jina-reader-for-search-grounding-to-improve-factuality-of-llms).
@@ -46,11 +46,10 @@ Simply prepend `https://s.jina.ai/` to your search query. Note that if you are u
 Behind the scenes, Reader searches the web, fetches the top 5 results, visits each URL, and applies `r.jina.ai` to it. This is different from many `web search function-calling` in agent/RAG frameworks, which often return only the title, URL, and description provided by the search engine API. If you want to read one result more deeply, you have to fetch the content yourself from that URL. With Reader, `http://s.jina.ai` automatically fetches the content from the top 5 search result URLs for you (reusing the tech stack behind `http://r.jina.ai`). This means you don't have to handle browser rendering, blocking, or any issues related to JavaScript and CSS yourself.
 
 ### Using `s.jina.ai` for in-site search
-Simply specifiy the `site` in the header such as:
+Simply specify `site` in the query parameters such as:
 
 ```bash
-curl https://s.jina.ai/When%20was%20Jina%20AI%20founded%3F \
-	-H "site: jina.ai"
+curl 'https://s.jina.ai/When%20was%20Jina%20AI%20founded%3F?site=jina.ai&site=github.com'
 ```
 
 ### [Interactive Code Snippet Builder](https://jina.ai/reader#apiform)
