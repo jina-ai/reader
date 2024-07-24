@@ -34,8 +34,6 @@ Simply prepend `https://r.jina.ai/` to any URL. For example, to convert the URL 
 
 [https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence](https://r.jina.ai/https://en.wikipedia.org/wiki/Artificial_intelligence)
 
-All images in that page that lack `alt` tag are auto-captioned by a VLM (vision langauge model) and formatted as `!(Image [idx]: [VLM_caption])[img_URL]`. This should give your downstream text-only LLM *just enough* hints to include those images into reasoning, selecting, and summarization. 
-
 ### [Using `r.jina.ai` for a full website fetching (Google Colab)](https://colab.research.google.com/drive/1uoBy6_7BhxqpFQ45vuhgDDDGwstaCt4P#scrollTo=5LQjzJiT9ewT)
 
 ### Using `s.jina.ai` for web search
@@ -78,6 +76,32 @@ As you have already seen above, one can control the behavior of the Reader API u
   - By setting `x-target-selector` header to a CSS selector, the Reader API return the content within the matched element, instead of the full HTML. Setting this header is useful when the automatic content extraction fails to capture the desired content and you can manually select the correct target.
   - By setting `x-wait-for-selector` header to a CSS selector, the Reader API will wait until the matched element is rendered before returning the content. If you already specified `x-wait-for-selector`, this header can be omitted if you plan to wait for the same element.
 
+### Using `r.jina.ai` for single page application (SPA) fetching
+Many websites nowadays rely on JavaScript frameworks and client-side rendering. Usually known as Single Page Application (SPA). Thanks to [Puppeteer](https://github.com/puppeteer/puppeteer) and headless Chrome browser, Reader natively supports fetching these websites. However, due to specific approach some SPA are developed, there may be some extra precautions to take. 
+
+#### SPAs with hash-based routing
+By definition of the web standards, content come after `#` in a URL is not sent to the server. To mitigate this issue, use `POST` method with `url` parameter in body.
+
+```bash
+curl -X POST 'https://r.jina.ai/' -d 'url=https://example.com/#/route' 
+```
+
+#### SPAs with preloading contents
+Some SPAs, or even some websites that are not strictly SPAs, may show preload contents before later loading the main content dynamically. In this case, Reader may be capturing the preload content instead of the main content. To mitigate this issue, here are some possible solutions:
+
+##### Specifying `x-timeout` 
+When timeout is explicitly specified, Reader will not attempt to return early and will wait for network idle until the timeout is reached. This is useful when the target website will eventually come to a network idle. 
+
+```bash
+curl 'https://example.com/' -H 'x-timeout: 30'
+```
+
+##### Specifying `x-wait-for-selector` 
+When wait-for-selector is explicitly specified, Reader will wait for the appearance of the specified CSS selector until timeout is reached. This is useful when you know exactly what element to wait for. 
+
+```bash
+curl 'https://example.com/' -H 'x-wait-for-selector: #content'
+```
 
 ### Streaming mode
 
@@ -120,6 +144,14 @@ curl -H "Accept: application/json" https://r.jina.ai/https://en.m.wikipedia.org/
 ```
 
 JSON mode is probably more useful in `s.jina.ai` than `r.jina.ai`. For `s.jina.ai` with JSON mode, it returns 5 results in a list, each in the structure of `{'title', 'content', 'url'}`.
+
+### Generated alt
+
+All images in that page that lack `alt` tag can be auto-captioned by a VLM (vision langauge model) and formatted as `!(Image [idx]: [VLM_caption])[img_URL]`. This should give your downstream text-only LLM *just enough* hints to include those images into reasoning, selecting, and summarization. Use the x-with-generated-alt header to toggle the streaming mode:
+
+```bash
+curl -H "X-With-Generated-Alt: true" https://r.jina.ai/https://en.m.wikipedia.org/wiki/Main_Page
+```
 
 ## Install
 
