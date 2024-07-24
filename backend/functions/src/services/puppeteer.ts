@@ -12,6 +12,7 @@ import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
 import { SecurityCompromiseError, ServiceCrashedError } from '../shared/lib/errors';
 import { Readability } from '@mozilla/readability';
+import { TimeoutError } from 'puppeteer';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -370,9 +371,6 @@ const handlePageLoad = () => {
     if (window.haltSnapshot) {
         return;
     }
-    if (document.readyState === 'loading') {
-        return;
-    }
     const thisTextLength = (document.body.innerText || '').length;
     const deltaLength = Math.abs(thisTextLength - lastTextLength);
     if (10 * deltaLength < lastTextLength) {
@@ -383,7 +381,7 @@ const handlePageLoad = () => {
     window.reportSnapshot(r);
     lastTextLength = thisTextLength;
 };
-setInterval(handlePageLoad, 500);
+setInterval(handlePageLoad, 800);
 document.addEventListener('readystatechange', handlePageLoad);
 document.addEventListener('load', handlePageLoad);
 `);
@@ -495,62 +493,116 @@ document.addEventListener('load', handlePageLoad);
             );
         });
 
+        const timeout = options?.timeoutMs || 30_000;
+
         const gotoPromise = page.goto(url, {
             waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
-            timeout: options?.timeoutMs || 30_000
+            timeout,
         })
             .catch((err) => {
-                this.logger.warn(`Page ${sn}: Browsing of ${url} did not fully succeed`, { err: marshalErrorLike(err) });
+                if (err instanceof TimeoutError) {
+                    this.logger.warn(`Page ${sn}: Browsing of ${url} timed out`, { err: marshalErrorLike(err) });
+                    return new AssertionFailureError({
+                        message: `Failed to goto ${url}: ${err}`,
+                        cause: err,
+                    });
+                }
+
+                this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err: marshalErrorLike(err) });
                 return Promise.reject(new AssertionFailureError({
                     message: `Failed to goto ${url}: ${err}`,
                     cause: err,
                 }));
-            }).finally(async () => {
-                if (!snapshot?.html) {
-                    finalized = true;
-                    return;
-                }
-                snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                screenshot = await page.screenshot();
-                if ((!snapshot.title || !snapshot.parsed?.content) && !(snapshot.pdfs?.length)) {
-                    const salvaged = await this.salvage(url, page);
-                    if (salvaged) {
-                        snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                        screenshot = await page.screenshot();
+            }).then(async (stuff) => {
+                // This check is necessary because without snapshot, the condition of the page is unclear
+                // Calling evaluate directly may stall the process.
+                if (!snapshot) {
+                    if (stuff instanceof Error) {
+                        finalized = true;
+                        throw stuff;
                     }
                 }
-                finalized = true;
-                this.logger.info(`Page ${sn}: Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
-                this.emit(
-                    'crawled',
-                    { ...snapshot, screenshot },
-                    { ...options, url: parsedUrl }
-                );
-            });
-        if (options?.waitForSelector) {
-            const waitPromise = Array.isArray(options.waitForSelector) ? Promise.all(options.waitForSelector.map((x) => page.waitForSelector(x))) : page.waitForSelector(options.waitForSelector);
-            waitPromise
-                .then(async () => {
+                try {
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
                     screenshot = await page.screenshot();
-                    finalized = true;
-                    nextSnapshotDeferred.resolve(snapshot);
-                })
-                .catch((err) => {
-                    this.logger.warn(`Page ${sn}: Failed to wait for selector ${options.waitForSelector}`, { err: marshalErrorLike(err) });
-                });
+                } catch (err: any) {
+                    this.logger.warn(`Page ${sn}: Failed to finalize ${url}`, { err: marshalErrorLike(err) });
+                    if (stuff instanceof Error) {
+                        finalized = true;
+                        throw stuff;
+                    }
+                }
+                if (!snapshot?.html) {
+                    if (stuff instanceof Error) {
+                        finalized = true;
+                        throw stuff;
+                    }
+                }
+                try {
+                    if ((!snapshot?.title || !snapshot?.parsed?.content) && !(snapshot?.pdfs?.length)) {
+                        const salvaged = await this.salvage(url, page);
+                        if (salvaged) {
+                            snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
+                            screenshot = await page.screenshot();
+                        }
+                    }
+                } catch (err: any) {
+                    this.logger.warn(`Page ${sn}: Failed to salvage ${url}`, { err: marshalErrorLike(err) });
+                }
+
+                finalized = true;
+                if (snapshot?.html) {
+                    this.logger.info(`Page ${sn}: Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
+                    this.emit(
+                        'crawled',
+                        { ...snapshot, screenshot },
+                        { ...options, url: parsedUrl }
+                    );
+                }
+            });
+        let waitForPromise: Promise<any> | undefined;
+        if (options?.waitForSelector) {
+            const t0 = Date.now();
+            waitForPromise = nextSnapshotDeferred.promise.then(() => {
+                const t1 = Date.now();
+                const elapsed = t1 - t0;
+                const remaining = timeout - elapsed;
+                const thisTimeout = remaining > 100 ? remaining : 100;
+                const p = (Array.isArray(options.waitForSelector) ?
+                    Promise.all(options.waitForSelector.map((x) => page.waitForSelector(x, { timeout: thisTimeout }))) :
+                    page.waitForSelector(options.waitForSelector!, { timeout: thisTimeout }))
+                    .then(async () => {
+                        snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
+                        screenshot = await page.screenshot();
+                        finalized = true;
+                    })
+                    .catch((err) => {
+                        this.logger.warn(`Page ${sn}: Failed to wait for selector ${options.waitForSelector}`, { err: marshalErrorLike(err) });
+                        waitForPromise = undefined;
+                    });
+                return p as any;
+            });
         }
 
         try {
             let lastHTML = snapshot?.html;
             while (true) {
                 const ckpt = [nextSnapshotDeferred.promise, gotoPromise];
+                if (waitForPromise) {
+                    ckpt.push(waitForPromise);
+                }
                 if (options?.minIntervalMs) {
                     ckpt.push(delay(options.minIntervalMs));
                 }
                 let error;
                 await Promise.race(ckpt).catch((err) => error = err);
                 if (finalized && !error) {
+                    if (!snapshot && !screenshot) {
+                        if (error) {
+                            throw error;
+                        }
+                        throw new AssertionFailureError(`Could not extract any meaningful content from the page`);
+                    }
                     yield { ...snapshot, screenshot } as PageSnapshot;
                     break;
                 }
@@ -566,7 +618,7 @@ document.addEventListener('load', handlePageLoad);
                 }
             }
         } finally {
-            gotoPromise.finally(() => {
+            (waitForPromise ? Promise.allSettled([gotoPromise, waitForPromise]) : gotoPromise).finally(() => {
                 page.off('snapshot', hdl);
                 this.ditchPage(page);
             });
