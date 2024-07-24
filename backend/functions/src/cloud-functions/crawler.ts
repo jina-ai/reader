@@ -571,12 +571,14 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
-        crawlerOptions: CrawlerOptionsHeaderOnly,
+        crawlerOptionsHeaderOnly: CrawlerOptionsHeaderOnly,
+        crawlerOptionsParamsAllowed: CrawlerOptions,
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
         const noSlashURL = ctx.req.url.slice(1);
-        if (!noSlashURL) {
+        const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
+        if (!noSlashURL && !crawlerOptions.url) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
                 return this.getIndex(latestUser);
@@ -636,7 +638,17 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         let urlToCrawl;
         const normalizeUrl = (await pNormalizeUrl).default;
         try {
-            urlToCrawl = new URL(normalizeUrl(noSlashURL.trim(), { stripWWW: false, removeTrailingSlash: false, removeSingleSlash: false, sortQueryParameters: false }));
+            urlToCrawl = new URL(
+                normalizeUrl(
+                    (crawlerOptions.url || noSlashURL).trim(),
+                    {
+                        stripWWW: false,
+                        removeTrailingSlash: false,
+                        removeSingleSlash: false,
+                        sortQueryParameters: false,
+                    }
+                )
+            );
         } catch (err) {
             throw new ParamValidationError({
                 message: `${err}`,

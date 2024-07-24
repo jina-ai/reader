@@ -116,6 +116,9 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
 })
 export class CrawlerOptions extends AutoCastable {
 
+    @Prop()
+    url?: string;
+
     @Prop({
         default: 'default',
     })
