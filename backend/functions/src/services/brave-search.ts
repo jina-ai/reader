@@ -1,4 +1,4 @@
-import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, marshalErrorLike, retry } from 'civkit';
+import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, delay, marshalErrorLike } from 'civkit';
 import { singleton } from 'tsyringe';
 import { Logger } from '../shared/services/logger';
 import { SecretExposer } from '../shared/services/secrets';
@@ -31,7 +31,6 @@ export class BraveSearchService extends AsyncService {
         this.braveSearchHTTP = new BraveSearchHTTP(this.secretExposer.BRAVE_SEARCH_API_KEY);
     }
 
-    @retry(3, Math.ceil(500 + 500 * Math.random()))
     async webSearch(query: WebSearchQueryParams) {
         const ip = this.threadLocal.get('ip');
         const extraHeaders: WebSearchOptionalHeaderOptions = {};
@@ -65,16 +64,25 @@ export class BraveSearchService extends AsyncService {
             encoded.q = (Buffer.from(encoded.q).toString('ascii') === encoded.q) ? encoded.q : encodeURIComponent(encoded.q);
         }
 
-        try {
-            const r = await this.braveSearchHTTP.webSearch(encoded, { headers: extraHeaders as Record<string, string> });
+        let maxTries = 11;
 
-            return r.parsed;
-        } catch (err: any) {
-            this.logger.error(`Web search failed: ${err?.message}`, { err: marshalErrorLike(err) });
+        while (maxTries--) {
+            try {
+                const r = await this.braveSearchHTTP.webSearch(encoded, { headers: extraHeaders as Record<string, string> });
 
-            throw new DownstreamServiceFailureError({ message: `Search failed` });
+                return r.parsed;
+            } catch (err: any) {
+                this.logger.error(`Web search failed: ${err?.message}`, { err: marshalErrorLike(err) });
+                if (err?.status === 429) {
+                    await delay(500 + 1000 * Math.random());
+                    continue;
+                }
+
+                throw new DownstreamServiceFailureError({ message: `Search failed` });
+            }
         }
 
+        throw new DownstreamServiceFailureError({ message: `Search failed` });
     }
 
 }

@@ -5,7 +5,7 @@ import {
     objHashMd5B64Of,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect } from '../shared';
+import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, Param, RPCReflect } from '../shared';
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { Request, Response } from 'express';
@@ -83,6 +83,8 @@ export class SearcherHost extends RPCHost {
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
+        @Param('count', { default: 5, validate: (v) => v >= 3 && v <= 10 })
+        count: number,
         crawlerOptions: CrawlerOptions,
         braveSearchExplicitOperators: BraveSearchExplicitOperatorsDto,
     ) {
@@ -157,7 +159,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = braveSearchExplicitOperators.addTo(ctx.req.path.slice(1));
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            count: 10
+            count: Math.floor(count * 2)
         }, crawlerOptions.noCache);
 
         if (!r.web?.results.length) {
@@ -226,7 +228,7 @@ export class SearcherHost extends RPCHost {
                 if (_.some(scrapped, (x) => this.pageQualified(x))) {
                     setEarlyReturnTimer();
                 }
-                if (!this.searchResultsQualified(scrapped)) {
+                if (!this.searchResultsQualified(scrapped, count)) {
                     continue;
                 }
                 if (earlyReturnTimer) {
@@ -274,7 +276,7 @@ export class SearcherHost extends RPCHost {
                 setEarlyReturnTimer();
             }
 
-            if (!this.searchResultsQualified(scrapped)) {
+            if (!this.searchResultsQualified(scrapped, count)) {
                 continue;
             }
 
@@ -425,8 +427,8 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
             formattedPage.html;
     }
 
-    searchResultsQualified(results: FormattedPage[]) {
-        return _.every(results, (x) => this.pageQualified(x)) && results.length >= this.targetResultCount;
+    searchResultsQualified(results: FormattedPage[], targetResultCount = this.targetResultCount) {
+        return _.every(results, (x) => this.pageQualified(x)) && results.length >= targetResultCount;
     }
 
     async cachedWebSearch(query: WebSearchQueryParams, noCache: boolean = false) {

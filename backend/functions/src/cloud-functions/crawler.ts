@@ -776,7 +776,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
     getUrlDigest(urlToCrawl: URL) {
         const normalizedURL = new URL(urlToCrawl);
-        normalizedURL.hash = '';
+        if (!normalizedURL.hash.startsWith('/')) {
+            normalizedURL.hash = '';
+        }
         const normalizedUrl = normalizedURL.toString().toLowerCase();
         const digest = md5Hasher.hash(normalizedUrl.toString());
 
