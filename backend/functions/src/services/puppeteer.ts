@@ -653,7 +653,7 @@ document.addEventListener('load', handlePageLoad);
         targetSelector?: string | string[];
         removeSelector?: string | string[];
     }): PageSnapshot | undefined {
-        if (!options?.targetSelector && !options?.removeSelector) {
+        if (snapshot?.parsed && !options?.targetSelector && !options?.removeSelector) {
             return snapshot;
         }
         if (!snapshot?.html) {
@@ -663,15 +663,15 @@ document.addEventListener('load', handlePageLoad);
         const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
         const allNodes: Node[] = [];
 
-        if (Array.isArray(options.removeSelector)) {
+        if (Array.isArray(options?.removeSelector)) {
             for (const rl of options.removeSelector) {
                 jsdom.window.document.querySelectorAll(rl).forEach((x) => x.remove());
             }
-        } else if (options.removeSelector) {
+        } else if (options?.removeSelector) {
             jsdom.window.document.querySelectorAll(options.removeSelector).forEach((x) => x.remove());
         }
 
-        if (Array.isArray(options.targetSelector)) {
+        if (Array.isArray(options?.targetSelector)) {
             for (const x of options.targetSelector.map((x) => jsdom.window.document.querySelectorAll(x))) {
                 x.forEach((el) => {
                     if (!allNodes.includes(el)) {
@@ -679,7 +679,7 @@ document.addEventListener('load', handlePageLoad);
                     }
                 });
             }
-        } else if (options.targetSelector) {
+        } else if (options?.targetSelector) {
             jsdom.window.document.querySelectorAll(options.targetSelector).forEach((el) => {
                 if (!allNodes.includes(el)) {
                     allNodes.push(el);
@@ -738,6 +738,7 @@ document.addEventListener('load', handlePageLoad);
 
         const r = {
             ...snapshot,
+            title: snapshot.title || jsdom.window.document.title,
             parsed,
             html: rootDoc.documentElement.outerHTML,
             text: cleanedText,

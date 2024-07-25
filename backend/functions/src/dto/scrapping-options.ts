@@ -119,6 +119,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     url?: string;
 
+    @Prop()
+    html?: string;
+
     @Prop({
         default: 'default',
     })

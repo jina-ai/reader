@@ -686,7 +686,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions.cacheTolerance)) {
+                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions)) {
                     if (!scrapped) {
                         continue;
                     }
@@ -713,7 +713,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions.cacheTolerance)) {
+            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
                 if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
                     continue;
@@ -737,7 +737,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             return formatted;
         }
 
-        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions.cacheTolerance)) {
+        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions)) {
             lastScrapped = scrapped;
             if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
                 continue;
@@ -880,8 +880,22 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, cacheTolerance: number = this.cacheValidMs) {
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
+        if (crawlerOpts?.html) {
+            const fakeSnapshot = {
+                href: urlToCrawl.toString(),
+                html: crawlerOpts.html,
+                title: '',
+                text: '',
+            } as PageSnapshot;
+
+            yield this.puppeteerControl.narrowSnapshot(fakeSnapshot, crawlOpts);
+
+            return;
+        }
         let cache;
+
+        const cacheTolerance = crawlerOpts?.cacheTolerance || this.cacheValidMs;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
@@ -934,8 +948,8 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     }
 
 
-    async *scrapMany(urls: URL[], options?: ExtraScrappingOptions, cacheTolerance?: number) {
-        const iterators = urls.map((url) => this.cachedScrap(url, options, cacheTolerance));
+    async *scrapMany(urls: URL[], options?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
+        const iterators = urls.map((url) => this.cachedScrap(url, options, crawlerOpts));
 
         const results: (PageSnapshot | undefined)[] = iterators.map((_x) => undefined);
 

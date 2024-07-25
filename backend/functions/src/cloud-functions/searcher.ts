@@ -142,6 +142,8 @@ export class SearcherHost extends RPCHost {
             });
         }
 
+        delete crawlerOptions.html;
+
         const crawlOpts = this.crawler.configure(crawlerOptions);
         const cookies: CookieParam[] = [];
         const setCookieHeaders = ctx.req.headers['x-set-cookie'];
@@ -171,7 +173,7 @@ export class SearcherHost extends RPCHost {
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
-            crawlerOptions.cacheTolerance || this.pageCacheToleranceMs
+            { ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance || this.pageCacheToleranceMs }
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -308,13 +310,13 @@ export class SearcherHost extends RPCHost {
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
         searchResults?: WebSearchResult[],
         options?: ExtraScrappingOptions,
-        pageCacheTolerance?: number
+        crawlerOptions?: CrawlerOptions,
     ) {
         if (!searchResults) {
             return;
         }
         const urls = searchResults.map((x) => new URL(x.url));
-        for await (const scrapped of this.crawler.scrapMany(urls, options, pageCacheTolerance)) {
+        for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
             const mapped = scrapped.map((x, i) => {
                 const upstreamSearchResult = searchResults[i];
                 if (!x || (!x.parsed && mode !== 'markdown')) {
