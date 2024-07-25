@@ -173,7 +173,8 @@ export class SearcherHost extends RPCHost {
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
-            { ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance || this.pageCacheToleranceMs }
+            { ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance || this.pageCacheToleranceMs },
+            count,
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -311,6 +312,7 @@ export class SearcherHost extends RPCHost {
         searchResults?: WebSearchResult[],
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
+        count?: number,
     ) {
         if (!searchResults) {
             return;
@@ -337,20 +339,21 @@ export class SearcherHost extends RPCHost {
 
             const resultArray = await Promise.all(mapped) as FormattedPage[];
 
-            yield this.reOrganizeSearchResults(resultArray);
+            yield this.reOrganizeSearchResults(resultArray, count);
         }
     }
 
-    reOrganizeSearchResults(searchResults: FormattedPage[]) {
+    reOrganizeSearchResults(searchResults: FormattedPage[], count?: number) {
+        const targetResultCount = count || this.targetResultCount;
         const [qualifiedPages, unqualifiedPages] = _.partition(searchResults, (x) => this.pageQualified(x));
         const acceptSet = new Set(qualifiedPages);
 
-        const n = this.targetResultCount - qualifiedPages.length;
+        const n = targetResultCount - qualifiedPages.length;
         for (const x of unqualifiedPages.slice(0, n >= 0 ? n : 0)) {
             acceptSet.add(x);
         }
 
-        const filtered = searchResults.filter((x) => acceptSet.has(x)).slice(0, this.targetResultCount);
+        const filtered = searchResults.filter((x) => acceptSet.has(x)).slice(0, targetResultCount);
         filtered.toString = searchResults.toString;
 
         const resultArray = filtered.map((x, i) => {
