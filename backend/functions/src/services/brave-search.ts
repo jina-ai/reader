@@ -1,4 +1,4 @@
-import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, marshalErrorLike } from 'civkit';
+import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, marshalErrorLike, retry } from 'civkit';
 import { singleton } from 'tsyringe';
 import { Logger } from '../shared/services/logger';
 import { SecretExposer } from '../shared/services/secrets';
@@ -31,6 +31,7 @@ export class BraveSearchService extends AsyncService {
         this.braveSearchHTTP = new BraveSearchHTTP(this.secretExposer.BRAVE_SEARCH_API_KEY);
     }
 
+    @retry(3, Math.ceil(500 + 500 * Math.random()))
     async webSearch(query: WebSearchQueryParams) {
         const ip = this.threadLocal.get('ip');
         const extraHeaders: WebSearchOptionalHeaderOptions = {};
@@ -145,7 +146,7 @@ export class BraveSearchExplicitOperatorsDto extends AutoCastable {
             return [searchTerm, opPart].join(' ');
         }
 
-        return searchTerm
+        return searchTerm;
     }
 
     static override from(input: any) {
@@ -163,7 +164,7 @@ export class BraveSearchExplicitOperatorsDto extends AutoCastable {
                 continue;
             }
 
-            const filtered = customValue.split(', ').filter(Boolean)
+            const filtered = customValue.split(', ').filter(Boolean);
             if (filtered.length) {
                 Reflect.set(instance, p, filtered);
             }
