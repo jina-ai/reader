@@ -34,6 +34,7 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                         `- markdown\n` +
                         `- html\n` +
                         `- text\n` +
+                        `- pageshot\n` +
                         `- screenshot\n`
                     ,
                     in: 'header',

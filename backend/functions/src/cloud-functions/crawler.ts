@@ -45,6 +45,8 @@ export interface FormattedPage {
     text?: string;
     screenshotUrl?: string;
     screenshot?: Buffer;
+    pageshotUrl?: string;
+    pageshot?: Buffer;
     links?: { [k: string]: string; };
     images?: { [k: string]: string; };
 
@@ -282,8 +284,9 @@ export class CrawlerHost extends RPCHost {
         return mixin;
     }
 
-    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot', snapshot: PageSnapshot & {
+    async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot' | 'pageshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
+        pageshotUrl?: string;
     }, nominalUrl?: URL) {
         if (mode === 'screenshot') {
             if (snapshot.screenshot && !snapshot.screenshotUrl) {
@@ -302,6 +305,26 @@ export class CrawlerHost extends RPCHost {
                 screenshotUrl: snapshot.screenshotUrl,
                 toString() {
                     return this.screenshotUrl;
+                }
+            } as FormattedPage;
+        }
+        if (mode === 'pageshot') {
+            if (snapshot.pageshot && !snapshot.pageshotUrl) {
+                const fid = `instant-screenshots/${randomUUID()}`;
+                await this.firebaseObjectStorage.saveFile(fid, snapshot.pageshot, {
+                    metadata: {
+                        contentType: 'image/png',
+                    }
+                });
+                snapshot.pageshotUrl = await this.firebaseObjectStorage.signDownloadUrl(fid, Date.now() + this.urlValidMs);
+            }
+
+            return {
+                ...this.getGeneralSnapshotMixins(snapshot),
+                html: snapshot.html,
+                pageshotUrl: snapshot.pageshotUrl,
+                toString() {
+                    return this.pageshotUrl;
                 }
             } as FormattedPage;
         }
@@ -761,6 +784,12 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                         { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
                     );
                 }
+                if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
+
+                    return assignTransferProtocolMeta(`${formatted}`,
+                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
+                    );
+                }
 
                 return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
             }
@@ -776,6 +805,12 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
             return assignTransferProtocolMeta(`${formatted}`,
                 { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
+            );
+        }
+        if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
+
+            return assignTransferProtocolMeta(`${formatted}`,
+                { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
             );
         }
 
@@ -810,6 +845,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
         let snapshot: PageSnapshot | undefined;
         let screenshotUrl: string | undefined;
+        let pageshotUrl: string | undefined;
         const preparations = [
             this.firebaseObjectStorage.downloadFile(`snapshots/${cache._id}`).then((r) => {
                 snapshot = JSON.parse(r.toString('utf-8'));
@@ -817,6 +853,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             cache.screenshotAvailable ?
                 this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs).then((r) => {
                     screenshotUrl = r;
+                }) :
+                Promise.resolve(undefined),
+            cache.pageshotAvailable ?
+                this.firebaseObjectStorage.signDownloadUrl(`pageshots/${cache._id}`, Date.now() + this.urlValidMs).then((r) => {
+                    pageshotUrl = r;
                 }) :
                 Promise.resolve(undefined)
         ];
@@ -833,8 +874,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             snapshot: {
                 ...snapshot,
                 screenshot: undefined,
+                pageshot: undefined,
                 screenshotUrl,
-            } as PageSnapshot & { screenshotUrl?: string; }
+                pageshotUrl,
+            } as PageSnapshot & { screenshotUrl?: string; pageshotUrl?: string; }
         };
     }
 
@@ -877,6 +920,14 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 }
             });
             cache.screenshotAvailable = true;
+        }
+        if (snapshot.pageshot) {
+            await this.firebaseObjectStorage.saveFile(`pageshots/${cache._id}`, snapshot.pageshot, {
+                metadata: {
+                    contentType: 'image/png',
+                }
+            });
+            cache.pageshotAvailable = true;
         }
         await savingOfSnapshot;
         const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
@@ -1013,7 +1064,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,
             cookies: opts.setCookies,
-            favorScreenshot: opts.respondWith === 'screenshot',
+            favorScreenshot: ['screenshot', 'pageshot'].includes(opts.respondWith),
             removeSelector: opts.removeSelector,
             targetSelector: opts.targetSelector,
             waitForSelector: opts.waitForSelector,

@@ -46,6 +46,7 @@ export interface PageSnapshot {
     text: string;
     parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
+    pageshot?: Buffer;
     imgs?: ImgBrief[];
     pdfs?: string[];
     maxElemDepth?: number;
@@ -448,6 +449,7 @@ document.addEventListener('load', handlePageLoad);
 
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
+        let pageshot: Buffer | undefined;
         const page = await this.getNextPage();
         const sn = this.snMap.get(page);
         this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
@@ -524,7 +526,7 @@ document.addEventListener('load', handlePageLoad);
                 try {
                     const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                    screenshot = await page.screenshot({ fullPage: true });
+                    screenshot = await page.screenshot();
                     if (snapshot) {
                         snapshot.childFrames = await pSubFrameSnapshots;
                     }
@@ -547,7 +549,8 @@ document.addEventListener('load', handlePageLoad);
                         if (salvaged) {
                             const pSubFrameSnapshots = this.snapshotChildFrames(page);
                             snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                            screenshot = await page.screenshot({ fullPage: true });
+                            screenshot = await page.screenshot();
+                            pageshot = await page.screenshot({ fullPage: true });
                             if (snapshot) {
                                 snapshot.childFrames = await pSubFrameSnapshots;
                             }
@@ -562,7 +565,7 @@ document.addEventListener('load', handlePageLoad);
                     this.logger.info(`Page ${sn}: Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
                     this.emit(
                         'crawled',
-                        { ...snapshot, screenshot },
+                        { ...snapshot, screenshot, pageshot },
                         { ...options, url: parsedUrl }
                     );
                 }
@@ -581,7 +584,8 @@ document.addEventListener('load', handlePageLoad);
                     .then(async () => {
                         const pSubFrameSnapshots = this.snapshotChildFrames(page);
                         snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                        screenshot = await page.screenshot({ fullPage: true });
+                        screenshot = await page.screenshot();
+                        pageshot = await page.screenshot({ fullPage: true });
                         if (snapshot) {
                             snapshot.childFrames = await pSubFrameSnapshots;
                         }
@@ -614,15 +618,16 @@ document.addEventListener('load', handlePageLoad);
                         }
                         throw new AssertionFailureError(`Could not extract any meaningful content from the page`);
                     }
-                    yield { ...snapshot, screenshot } as PageSnapshot;
+                    yield { ...snapshot, screenshot, pageshot } as PageSnapshot;
                     break;
                 }
                 if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
-                    screenshot = await page.screenshot({ fullPage: true });
+                    screenshot = await page.screenshot();
+                    pageshot = await page.screenshot({ fullPage: true });
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {
-                    yield { ...snapshot, screenshot } as PageSnapshot;
+                    yield { ...snapshot, screenshot, pageshot } as PageSnapshot;
                 }
                 if (error) {
                     throw error;
