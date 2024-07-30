@@ -301,7 +301,7 @@ export class CrawlerHost extends RPCHost {
 
             return {
                 ...this.getGeneralSnapshotMixins(snapshot),
-                html: snapshot.html,
+                // html: snapshot.html,
                 screenshotUrl: snapshot.screenshotUrl,
                 toString() {
                     return this.screenshotUrl;
