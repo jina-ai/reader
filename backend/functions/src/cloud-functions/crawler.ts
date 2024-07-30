@@ -28,6 +28,7 @@ import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-
 const md5Hasher = new HashManager('md5', 'hex');
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
+    withIframe?: boolean;
     targetSelector?: string | string[];
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
@@ -907,7 +908,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         try {
-            if (crawlOpts?.targetSelector || crawlOpts?.removeSelector) {
+            if (crawlOpts?.targetSelector || crawlOpts?.removeSelector || crawlOpts?.withIframe) {
                 for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
                     yield this.puppeteerControl.narrowSnapshot(x, crawlOpts);
                 }
@@ -1011,6 +1012,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             waitForSelector: opts.waitForSelector,
             overrideUserAgent: opts.userAgent,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
+            withIframe: opts.withIframe,
         };
 
         return crawlOpts;

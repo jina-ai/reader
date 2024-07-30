@@ -54,6 +54,7 @@ export interface PageSnapshot {
     imgs?: ImgBrief[];
     pdfs?: string[];
     maxElemDepth?: number;
+    childFrames?: PageSnapshot[];
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
@@ -87,6 +88,100 @@ puppeteer.use(puppeteerBlockResources({
 puppeteer.use(puppeteerPageProxy({
     interceptResolutionPriority: 1,
 }));
+
+const SCRIPT_TO_INJECT_INTO_FRAME = `
+${READABILITY_JS}
+
+function briefImgs(elem) {
+    const imageTags = Array.from((elem || document).querySelectorAll('img[src],img[data-src]'));
+
+    return imageTags.map((x)=> {
+        let linkPreferredSrc = x.src;
+        if (linkPreferredSrc.startsWith('data:')) {
+            if (typeof x.dataset?.src === 'string' && !x.dataset.src.startsWith('data:')) {
+                linkPreferredSrc = x.dataset.src;
+            }
+        }
+
+        return {
+            src: new URL(linkPreferredSrc, document.location.href).toString(),
+            loaded: x.complete,
+            width: x.width,
+            height: x.height,
+            naturalWidth: x.naturalWidth,
+            naturalHeight: x.naturalHeight,
+            alt: x.alt || x.title,
+        };
+    });
+}
+function briefPDFs() {
+    const pdfTags = Array.from(document.querySelectorAll('embed[type="application/pdf"]'));
+
+    return pdfTags.map((x)=> {
+        return x.src === 'about:blank' ? document.location.href : x.src;
+    });
+}
+function getMaxDepthUsingTreeWalker(root) {
+  let maxDepth = 0;
+  let currentDepth = 0;
+
+  const treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
+
+  while (true) {
+    maxDepth = Math.max(maxDepth, currentDepth);
+
+    if (treeWalker.firstChild()) {
+      currentDepth++;
+    } else {
+      while (!treeWalker.nextSibling() && currentDepth > 0) {
+        treeWalker.parentNode();
+        currentDepth--;
+      }
+
+      if (currentDepth <= 0) {
+        break;
+      }
+    }
+  }
+
+  return maxDepth + 1;
+}
+
+function giveSnapshot(stopActiveSnapshot) {
+    if (stopActiveSnapshot) {
+        window.haltSnapshot = true;
+    }
+    let parsed;
+    try {
+        parsed = new Readability(document.cloneNode(true)).parse();
+    } catch (err) {
+        void 0;
+    }
+
+    const r = {
+        title: document.title,
+        href: document.location.href,
+        html: document.documentElement?.outerHTML,
+        text: document.body?.innerText,
+        parsed: parsed,
+        imgs: [],
+        pdfs: briefPDFs(),
+        maxElemDepth: getMaxDepthUsingTreeWalker(document.documentElement)
+    };
+    if (parsed && parsed.content) {
+        const elem = document.createElement('div');
+        elem.innerHTML = parsed.content;
+        r.imgs = briefImgs(elem);
+    } else {
+        const allImgs = briefImgs();
+        if (allImgs.length === 1) {
+            r.imgs = allImgs;
+        }
+    }
+
+    return r;
+}
+`;
 
 @singleton()
 export class PuppeteerControl extends AsyncService {
@@ -206,98 +301,7 @@ export class PuppeteerControl extends AsyncService {
             }
             page.emit('snapshot', snapshot);
         }));
-        preparations.push(page.evaluateOnNewDocument(READABILITY_JS));
-        preparations.push(page.evaluateOnNewDocument(`
-function briefImgs(elem) {
-    const imageTags = Array.from((elem || document).querySelectorAll('img[src],img[data-src]'));
-
-    return imageTags.map((x)=> {
-        let linkPreferredSrc = x.src;
-        if (linkPreferredSrc.startsWith('data:')) {
-            if (typeof x.dataset?.src === 'string' && !x.dataset.src.startsWith('data:')) {
-                linkPreferredSrc = x.dataset.src;
-            }
-        }
-
-        return {
-            src: new URL(linkPreferredSrc, document.location.href).toString(),
-            loaded: x.complete,
-            width: x.width,
-            height: x.height,
-            naturalWidth: x.naturalWidth,
-            naturalHeight: x.naturalHeight,
-            alt: x.alt || x.title,
-        };
-    });
-}
-function briefPDFs() {
-    const pdfTags = Array.from(document.querySelectorAll('embed[type="application/pdf"]'));
-
-    return pdfTags.map((x)=> {
-        return x.src === 'about:blank' ? document.location.href : x.src;
-    });
-}
-function getMaxDepthUsingTreeWalker(root) {
-  let maxDepth = 0;
-  let currentDepth = 0;
-
-  const treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
-
-  while (true) {
-    maxDepth = Math.max(maxDepth, currentDepth);
-
-    if (treeWalker.firstChild()) {
-      currentDepth++;
-    } else {
-      while (!treeWalker.nextSibling() && currentDepth > 0) {
-        treeWalker.parentNode();
-        currentDepth--;
-      }
-
-      if (currentDepth <= 0) {
-        break;
-      }
-    }
-  }
-
-  return maxDepth + 1;
-}
-
-function giveSnapshot(stopActiveSnapshot) {
-    if (stopActiveSnapshot) {
-        window.haltSnapshot = true;
-    }
-    let parsed;
-    try {
-        parsed = new Readability(document.cloneNode(true)).parse();
-    } catch (err) {
-        void 0;
-    }
-
-    const r = {
-        title: document.title,
-        href: document.location.href,
-        html: document.documentElement?.outerHTML,
-        text: document.body?.innerText,
-        parsed: parsed,
-        imgs: [],
-        pdfs: briefPDFs(),
-        maxElemDepth: getMaxDepthUsingTreeWalker(document.documentElement)
-    };
-    if (parsed && parsed.content) {
-        const elem = document.createElement('div');
-        elem.innerHTML = parsed.content;
-        r.imgs = briefImgs(elem);
-    } else {
-        const allImgs = briefImgs();
-        if (allImgs.length === 1) {
-            r.imgs = allImgs;
-        }
-    }
-
-    return r;
-}
-`));
+        preparations.push(page.evaluateOnNewDocument(SCRIPT_TO_INJECT_INTO_FRAME));
         preparations.push(page.setRequestInterception(true));
 
         await Promise.all(preparations);
@@ -523,8 +527,12 @@ document.addEventListener('load', handlePageLoad);
                     }
                 }
                 try {
+                    const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                    screenshot = await page.screenshot();
+                    screenshot = await page.screenshot({ fullPage: true });
+                    if (snapshot) {
+                        snapshot.childFrames = await pSubFrameSnapshots;
+                    }
                 } catch (err: any) {
                     this.logger.warn(`Page ${sn}: Failed to finalize ${url}`, { err: marshalErrorLike(err) });
                     if (stuff instanceof Error) {
@@ -542,8 +550,12 @@ document.addEventListener('load', handlePageLoad);
                     if ((!snapshot?.title || !snapshot?.parsed?.content) && !(snapshot?.pdfs?.length)) {
                         const salvaged = await this.salvage(url, page);
                         if (salvaged) {
+                            const pSubFrameSnapshots = this.snapshotChildFrames(page);
                             snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                            screenshot = await page.screenshot();
+                            screenshot = await page.screenshot({ fullPage: true });
+                            if (snapshot) {
+                                snapshot.childFrames = await pSubFrameSnapshots;
+                            }
                         }
                     }
                 } catch (err: any) {
@@ -572,8 +584,12 @@ document.addEventListener('load', handlePageLoad);
                     Promise.all(options.waitForSelector.map((x) => page.waitForSelector(x, { timeout: thisTimeout }))) :
                     page.waitForSelector(options.waitForSelector!, { timeout: thisTimeout }))
                     .then(async () => {
+                        const pSubFrameSnapshots = this.snapshotChildFrames(page);
                         snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                        screenshot = await page.screenshot();
+                        screenshot = await page.screenshot({ fullPage: true });
+                        if (snapshot) {
+                            snapshot.childFrames = await pSubFrameSnapshots;
+                        }
                         finalized = true;
                     })
                     .catch((err) => {
@@ -607,7 +623,7 @@ document.addEventListener('load', handlePageLoad);
                     break;
                 }
                 if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
-                    screenshot = await page.screenshot();
+                    screenshot = await page.screenshot({ fullPage: true });
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {
@@ -649,9 +665,30 @@ document.addEventListener('load', handlePageLoad);
         return true;
     }
 
+    async snapshotChildFrames(page: Page): Promise<PageSnapshot[]> {
+        const childFrames = page.mainFrame().childFrames();
+        const r = await Promise.all(childFrames.map(async (x) => {
+            const thisUrl = x.url();
+            if (!thisUrl || thisUrl === 'about:blank') {
+                return undefined;
+            }
+            try {
+                await x.evaluate(SCRIPT_TO_INJECT_INTO_FRAME);
+
+                return await x.evaluate(`giveSnapshot()`);
+            } catch (err) {
+                this.logger.warn(`Failed to snapshot child frame ${thisUrl}`, { err });
+                return undefined;
+            }
+        })) as PageSnapshot[];
+
+        return r.filter(Boolean);
+    }
+
     narrowSnapshot(snapshot: PageSnapshot | undefined, options?: {
         targetSelector?: string | string[];
         removeSelector?: string | string[];
+        withIframe?: boolean;
     }): PageSnapshot | undefined {
         if (snapshot?.parsed && !options?.targetSelector && !options?.removeSelector) {
             return snapshot;
@@ -662,9 +699,25 @@ document.addEventListener('load', handlePageLoad);
 
         const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
         const allNodes: Node[] = [];
+        if (options?.withIframe) {
+            jsdom.window.document.querySelectorAll('iframe[src]').forEach((x) => {
+                const src = x.getAttribute('src');
+                const thisSnapshot = snapshot.childFrames?.find((f) => f.href === src);
+                if (thisSnapshot?.html) {
+                    x.innerHTML = thisSnapshot.html;
+                    x.querySelectorAll('script, style').forEach((s) => s.remove());
+                    x.querySelectorAll('[src]').forEach((el) => {
+                        el.setAttribute('src', new URL(el.getAttribute('src')!, src!).toString());
+                    });
+                    x.querySelectorAll('[href]').forEach((el) => {
+                        el.setAttribute('href', new URL(el.getAttribute('href')!, src!).toString());
+                    });
+                }
+            });
+        }
 
         if (Array.isArray(options?.removeSelector)) {
-            for (const rl of options.removeSelector) {
+            for (const rl of options!.removeSelector) {
                 jsdom.window.document.querySelectorAll(rl).forEach((x) => x.remove());
             }
         } else if (options?.removeSelector) {
@@ -672,7 +725,7 @@ document.addEventListener('load', handlePageLoad);
         }
 
         if (Array.isArray(options?.targetSelector)) {
-            for (const x of options.targetSelector.map((x) => jsdom.window.document.querySelectorAll(x))) {
+            for (const x of options!.targetSelector.map((x) => jsdom.window.document.querySelectorAll(x))) {
                 x.forEach((el) => {
                     if (!allNodes.includes(el)) {
                         allNodes.push(el);

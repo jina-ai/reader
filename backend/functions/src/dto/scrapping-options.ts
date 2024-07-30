@@ -165,6 +165,11 @@ export class CrawlerOptions extends AutoCastable {
     keepImgDataUrl!: boolean;
 
     @Prop({
+        default: false,
+    })
+    withIframe!: boolean;
+
+    @Prop({
         arrayOf: String,
     })
     setCookies?: CookieParam[];
@@ -237,6 +242,13 @@ export class CrawlerOptions extends AutoCastable {
         const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
         if (keepImgDataUrl !== undefined) {
             instance.keepImgDataUrl = Boolean(keepImgDataUrl);
+        }
+        const withIframe = ctx?.req.get('x-with-iframe');
+        if (withIframe !== undefined) {
+            instance.withIframe = Boolean(withIframe);
+        }
+        if (instance.withIframe) {
+            instance.timeout ??= null;
         }
 
         const cookies: CookieParam[] = [];
