@@ -173,7 +173,7 @@ export class SearcherHost extends RPCHost {
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
-            { ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance || this.pageCacheToleranceMs },
+            { ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs },
             count,
         );
 

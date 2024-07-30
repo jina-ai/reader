@@ -24,6 +24,7 @@ import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-a
 import { PDFExtractor } from '../services/pdf-extract';
 import { DomainBlockade } from '../db/domain-blockade';
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
+import { JSDomControl } from '../services/jsdom';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -74,6 +75,7 @@ export class CrawlerHost extends RPCHost {
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
+        protected jsdomControl: JSDomControl,
         protected altTextService: AltTextService,
         protected pdfExtractor: PDFExtractor,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
@@ -247,7 +249,7 @@ export class CrawlerHost extends RPCHost {
     }
 
     getGeneralSnapshotMixins(snapshot: PageSnapshot) {
-        const inferred = this.puppeteerControl.inferSnapshot(snapshot);
+        const inferred = this.jsdomControl.inferSnapshot(snapshot);
         const mixin: any = {};
         if (this.threadLocal.get('withImagesSummary')) {
             const imageSummary = {} as { [k: string]: string; };
@@ -296,6 +298,7 @@ export class CrawlerHost extends RPCHost {
 
             return {
                 ...this.getGeneralSnapshotMixins(snapshot),
+                html: snapshot.html,
                 screenshotUrl: snapshot.screenshotUrl,
                 toString() {
                     return this.screenshotUrl;
@@ -353,16 +356,20 @@ export class CrawlerHost extends RPCHost {
                 break;
             }
 
-            let toBeTurnedToMd = snapshot.html;
+            const jsDomElementOfHTML = this.jsdomControl.snippetToElement(snapshot.html, snapshot.href);
+            let toBeTurnedToMd = jsDomElementOfHTML;
             let turnDownService = this.getTurndown({ url: nominalUrl, imgDataUrlToObjectUrl });
             if (mode !== 'markdown' && snapshot.parsed?.content) {
-                const par1 = turnDownService.turndown(snapshot.html);
-                const par2 = turnDownService.turndown(snapshot.parsed.content);
+                const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
+                const par1 = turnDownService.turndown(jsDomElementOfHTML);
+                const par2 = snapshot.parsed.content ? turnDownService.turndown(jsDomElementOfParsed) : '';
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
                     turnDownService = this.getTurndown({ noRules: true, url: snapshot.href, imgDataUrlToObjectUrl });
-                    toBeTurnedToMd = snapshot.parsed.content;
+                    if (snapshot.parsed.content) {
+                        toBeTurnedToMd = jsDomElementOfParsed;
+                    }
                 }
             }
 
@@ -453,7 +460,7 @@ export class CrawlerHost extends RPCHost {
 
             if (
                 !contentText || (contentText.startsWith('<') && contentText.endsWith('>'))
-                && toBeTurnedToMd !== snapshot.html
+                && toBeTurnedToMd !== jsDomElementOfHTML
             ) {
                 try {
                     contentText = turnDownService.turndown(snapshot.html);
@@ -533,7 +540,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            formatted.links = _.invert(this.puppeteerControl.inferSnapshot(snapshot).links || {});
+            formatted.links = _.invert(this.jsdomControl.inferSnapshot(snapshot).links || {});
         }
 
         return formatted as FormattedPage;
@@ -890,19 +897,19 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 text: '',
             } as PageSnapshot;
 
-            yield this.puppeteerControl.narrowSnapshot(fakeSnapshot, crawlOpts);
+            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
 
             return;
         }
         let cache;
 
-        const cacheTolerance = crawlerOpts?.cacheTolerance || this.cacheValidMs;
+        const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
         if (cacheTolerance && !crawlOpts?.cookies?.length) {
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
         if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
-            yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts);
+            yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
 
             return;
         }
@@ -910,7 +917,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         try {
             if (crawlOpts?.targetSelector || crawlOpts?.removeSelector || crawlOpts?.withIframe) {
                 for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
-                    yield this.puppeteerControl.narrowSnapshot(x, crawlOpts);
+                    yield this.jsdomControl.narrowSnapshot(x, crawlOpts);
                 }
 
                 return;
@@ -920,7 +927,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         } catch (err: any) {
             if (cache && !(err instanceof SecurityCompromiseError)) {
                 this.logger.warn(`Failed to scrap ${urlToCrawl}, but a stale cache is available. Falling back to cache`, { err: marshalErrorLike(err) });
-                yield this.puppeteerControl.narrowSnapshot(cache.snapshot, crawlOpts);
+                yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
                 return;
             }
             throw err;
@@ -1051,5 +1058,4 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
         return this.formatSnapshot(mode, lastSnapshot, url);
     }
-
 }
