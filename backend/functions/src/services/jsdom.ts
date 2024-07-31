@@ -39,6 +39,7 @@ export class JSDomControl extends AsyncService {
         const t0 = Date.now();
         const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
         const allNodes: Node[] = [];
+        jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
         if (options?.withIframe) {
             jsdom.window.document.querySelectorAll('iframe[src],frame[src]').forEach((x) => {
                 const src = x.getAttribute('src');
@@ -151,6 +152,7 @@ export class JSDomControl extends AsyncService {
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {
             const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
+            jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
             const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
                 .map((x: any) => [x.getAttribute('href'), x.textContent.replace(/\s+/g, ' ').trim()])
                 .map(([href, text]) => {
