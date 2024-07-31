@@ -4,6 +4,7 @@ import { Logger } from '../shared/services/logger';
 import { ExtendedSnapshot, PageSnapshot } from './puppeteer';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { Readability } from '@mozilla/readability';
+import TurndownService from 'turndown';
 
 const virtualConsole = new VirtualConsole();
 virtualConsole.on('error', () => void 0);
@@ -35,7 +36,7 @@ export class JSDomControl extends AsyncService {
         if (!snapshot?.html) {
             return snapshot;
         }
-
+        const t0 = Date.now();
         const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
         const allNodes: Node[] = [];
         if (options?.withIframe) {
@@ -137,10 +138,16 @@ export class JSDomControl extends AsyncService {
             imgs: snapshot.imgs?.filter((x) => imageSet.has(x.src)) || [],
         } as PageSnapshot;
 
+        const dt = Date.now() - t0;
+        if (dt > 1000) {
+            this.logger.warn(`Performance issue: Narrowing snapshot took ${dt}ms`, { url: snapshot.href, dt });
+        }
+
         return r;
     }
 
     inferSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
+        const t0 = Date.now();
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {
             const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
@@ -191,6 +198,11 @@ export class JSDomControl extends AsyncService {
             void 0;
         }
 
+        const dt = Date.now() - t0;
+        if (dt > 1000) {
+            this.logger.warn(`Performance issue: Inferring snapshot took ${dt}ms`, { url: snapshot.href, dt });
+        }
+
         return extendedSnapshot;
     }
 
@@ -198,6 +210,19 @@ export class JSDomControl extends AsyncService {
         const parsed = new JSDOM(snippet || '', { url, virtualConsole });
 
         return parsed.window.document.documentElement;
+    }
+
+    runTurndown(turndownService: TurndownService, html: TurndownService.Node | string) {
+        const t0 = Date.now();
+
+        try {
+            return turndownService.turndown(html);
+        } finally {
+            const dt = Date.now() - t0;
+            if (dt > 1000) {
+                this.logger.warn(`Performance issue: Turndown took ${dt}ms`, { dt });
+            }
+        }
     }
 }
 

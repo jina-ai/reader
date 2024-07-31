@@ -251,9 +251,10 @@ export class CrawlerHost extends RPCHost {
     }
 
     getGeneralSnapshotMixins(snapshot: PageSnapshot) {
-        const inferred = this.jsdomControl.inferSnapshot(snapshot);
+        let inferred;
         const mixin: any = {};
         if (this.threadLocal.get('withImagesSummary')) {
+            inferred ??= this.jsdomControl.inferSnapshot(snapshot);
             const imageSummary = {} as { [k: string]: string; };
             const imageIdxTrack = new Map<string, number[]>();
 
@@ -278,6 +279,7 @@ export class CrawlerHost extends RPCHost {
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
+            inferred ??= this.jsdomControl.inferSnapshot(snapshot);
             mixin.links = _.invert(inferred.links || {});
         }
 
@@ -384,8 +386,8 @@ export class CrawlerHost extends RPCHost {
             let turnDownService = this.getTurndown({ url: nominalUrl, imgDataUrlToObjectUrl });
             if (mode !== 'markdown' && snapshot.parsed?.content) {
                 const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
-                const par1 = turnDownService.turndown(jsDomElementOfHTML);
-                const par2 = snapshot.parsed.content ? turnDownService.turndown(jsDomElementOfParsed) : '';
+                const par1 = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
+                const par2 = snapshot.parsed.content ? this.jsdomControl.runTurndown(turnDownService, jsDomElementOfParsed) : '';
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
@@ -469,12 +471,12 @@ export class CrawlerHost extends RPCHost {
 
             if (toBeTurnedToMd) {
                 try {
-                    contentText = turnDownService.turndown(toBeTurnedToMd).trim();
+                    contentText = this.jsdomControl.runTurndown(turnDownService, toBeTurnedToMd).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
                     const vanillaTurnDownService = this.getTurndown({ url: snapshot.href, imgDataUrlToObjectUrl });
                     try {
-                        contentText = vanillaTurnDownService.turndown(toBeTurnedToMd).trim();
+                        contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, toBeTurnedToMd).trim();
                     } catch (err2) {
                         this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }
@@ -486,12 +488,12 @@ export class CrawlerHost extends RPCHost {
                 && toBeTurnedToMd !== jsDomElementOfHTML
             ) {
                 try {
-                    contentText = turnDownService.turndown(snapshot.html);
+                    contentText = this.jsdomControl.runTurndown(turnDownService, snapshot.html);
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
                     const vanillaTurnDownService = this.getTurndown({ url: snapshot.href, imgDataUrlToObjectUrl });
                     try {
-                        contentText = vanillaTurnDownService.turndown(snapshot.html);
+                        contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, snapshot.html);
                     } catch (err2) {
                         this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }
@@ -959,7 +961,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
-        if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && cache?.screenshotAvailable))) {
+        if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && (cache.screenshotAvailable && cache.pageshotAvailable)))) {
             yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
 
             return;
