@@ -126,7 +126,10 @@ function getMaxDepthAndCountUsingTreeWalker(root) {
   const treeWalker = document.createTreeWalker(
     root,
     NodeFilter.SHOW_ELEMENT,
-    (node) => (node.nodeName.toLowerCase() === 'svg' || node.nodeName.toLowerCase() === 'code') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    (node) => {
+      const nodeName = node.nodeName.toLowerCase();
+      return (nodeName === 'svg' || nodeName === 'code') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
     false
   );
 
