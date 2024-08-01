@@ -490,7 +490,7 @@ document.addEventListener('load', handlePageLoad);
                 page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: DOM tree too deep` });
                 return;
             }
-            if (s?.elemCount && s.elemCount > 15_000) {
+            if (s?.elemCount && s.elemCount > 20_000) {
                 page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: too many DOM elements` });
                 return;
             }
