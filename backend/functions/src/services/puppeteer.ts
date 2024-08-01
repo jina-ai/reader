@@ -50,6 +50,7 @@ export interface PageSnapshot {
     imgs?: ImgBrief[];
     pdfs?: string[];
     maxElemDepth?: number;
+    elemCount?: number;
     childFrames?: PageSnapshot[];
 }
 
@@ -117,14 +118,21 @@ function briefPDFs() {
         return x.src === 'about:blank' ? document.location.href : x.src;
     });
 }
-function getMaxDepthUsingTreeWalker(root) {
+function getMaxDepthAndCountUsingTreeWalker(root) {
   let maxDepth = 0;
   let currentDepth = 0;
+  let elementCount = 0;
 
-  const treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null, false);
+  const treeWalker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT,
+    (node) => (node.nodeName.toLowerCase() === 'svg') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    false
+  );
 
   while (true) {
     maxDepth = Math.max(maxDepth, currentDepth);
+    elementCount++; // Increment the count for the current node
 
     if (treeWalker.firstChild()) {
       currentDepth++;
@@ -140,7 +148,10 @@ function getMaxDepthUsingTreeWalker(root) {
     }
   }
 
-  return maxDepth + 1;
+  return {
+    maxDepth: maxDepth + 1,
+    elementCount: elementCount
+  };
 }
 
 function giveSnapshot(stopActiveSnapshot) {
@@ -153,7 +164,7 @@ function giveSnapshot(stopActiveSnapshot) {
     } catch (err) {
         void 0;
     }
-
+    const domAnalysis = getMaxDepthAndCountUsingTreeWalker(document.documentElement);
     const r = {
         title: document.title,
         href: document.location.href,
@@ -162,7 +173,8 @@ function giveSnapshot(stopActiveSnapshot) {
         parsed: parsed,
         imgs: [],
         pdfs: briefPDFs(),
-        maxElemDepth: getMaxDepthUsingTreeWalker(document.documentElement)
+        maxElemDepth: domAnalysis.maxDepth,
+        elemCount: domAnalysis.elementCount,
     };
     if (parsed && parsed.content) {
         const elem = document.createElement('div');
@@ -476,6 +488,10 @@ document.addEventListener('load', handlePageLoad);
             }
             if (s?.maxElemDepth && s.maxElemDepth > 256) {
                 page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: DOM tree too deep` });
+                return;
+            }
+            if (s?.elemCount && s.elemCount > 15_000) {
+                page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: too many DOM elements` });
                 return;
             }
             snapshot = s;
