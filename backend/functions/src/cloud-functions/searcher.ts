@@ -334,6 +334,15 @@ export class SearcherHost extends RPCHost {
                     r.description = upstreamSearchResult.description;
 
                     return r;
+                }).catch((err)=> {
+                    this.logger.error(`Failed to format snapshot for ${urls[i].href}`, { err: marshalErrorLike(err) });
+
+                    return {
+                        url: upstreamSearchResult.url,
+                        title: upstreamSearchResult.title,
+                        description: upstreamSearchResult.description,
+                        content: x.text,
+                    };
                 });
             });
 

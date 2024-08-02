@@ -375,9 +375,19 @@ export class CrawlerHost extends RPCHost {
         let contentText = '';
         const imageSummary = {} as { [k: string]: string; };
         const imageIdxTrack = new Map<string, number[]>();
+        const uid = this.threadLocal.get('uid');
         do {
             if (pdfMode) {
                 contentText = snapshot.parsed?.content || snapshot.text;
+                break;
+            }
+
+            if (
+                snapshot.maxElemDepth! > 256 ||
+                (!uid && snapshot.elemCount! > 10_000) ||
+                snapshot.text.length > 70_000
+            ) {
+                contentText = snapshot.text;
                 break;
             }
 

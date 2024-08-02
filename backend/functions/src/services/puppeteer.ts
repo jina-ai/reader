@@ -11,7 +11,6 @@ import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
 import { SecurityCompromiseError, ServiceCrashedError } from '../shared/lib/errors';
 import { TimeoutError } from 'puppeteer';
-import { AsyncContext } from '../shared';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -129,7 +128,7 @@ function getMaxDepthAndCountUsingTreeWalker(root) {
     NodeFilter.SHOW_ELEMENT,
     (node) => {
       const nodeName = node.nodeName.toLowerCase();
-      return (nodeName === 'svg' || nodeName === 'code') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      return (nodeName === 'svg') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
     },
     false
   );
@@ -215,7 +214,6 @@ export class PuppeteerControl extends AsyncService {
 
     constructor(
         protected globalLogger: Logger,
-        protected threadLocal: AsyncContext,
     ) {
         super(...arguments);
         this.setMaxListeners(2 * Math.floor(os.totalmem() / (256 * 1024 * 1024)) + 1); 148 - 95;
@@ -491,17 +489,13 @@ document.addEventListener('load', handlePageLoad);
             if (snapshot === s) {
                 return;
             }
+            snapshot = s;
             if (s?.maxElemDepth && s.maxElemDepth > 256) {
-                page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: DOM tree too deep` });
                 return;
             }
-            if (s?.elemCount && s.elemCount > 20_000) {
-                if (!this.threadLocal.get('uid')) {
-                    page.emit('abuse', { url, page, sn, reason: `DoS attack suspected: too many DOM elements` });
-                    return;
-                }
+            if (s?.elemCount && s.elemCount > 10_000) {
+                return;
             }
-            snapshot = s;
             nextSnapshotDeferred.resolve(s);
             nextSnapshotDeferred = Defer();
             this.once('crippled', crippleListener);
