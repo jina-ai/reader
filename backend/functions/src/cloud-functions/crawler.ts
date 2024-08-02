@@ -387,6 +387,7 @@ export class CrawlerHost extends RPCHost {
                 (!uid && snapshot.elemCount! > 10_000) ||
                 snapshot.elemCount! > 70_000
             ) {
+                this.logger.warn('Degrading to text to protect the server', { url: snapshot.href });
                 contentText = snapshot.text;
                 break;
             }
