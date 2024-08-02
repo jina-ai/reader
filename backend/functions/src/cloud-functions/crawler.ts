@@ -385,7 +385,7 @@ export class CrawlerHost extends RPCHost {
             if (
                 snapshot.maxElemDepth! > 256 ||
                 (!uid && snapshot.elemCount! > 10_000) ||
-                snapshot.text.length > 70_000
+                snapshot.elemCount! > 70_000
             ) {
                 contentText = snapshot.text;
                 break;
