@@ -644,10 +644,17 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [RateLimitDesc.from({
-                occurrence: 200,
-                periodSeconds: 60
-            })];
+            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
+                parseInt(user.metadata?.speed_level) >= 2 ?
+                    RateLimitDesc.from({
+                        occurrence: 1000,
+                        periodSeconds: 60
+                    }) :
+                    RateLimitDesc.from({
+                        occurrence: 200,
+                        periodSeconds: 60
+                    })
+            ];
 
             const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
                 rpcReflect, uid, [rpcReflect.name.toUpperCase()],

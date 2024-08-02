@@ -109,10 +109,17 @@ export class SearcherHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [RateLimitDesc.from({
-                occurrence: 40,
-                periodSeconds: 60
-            })];
+            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
+                parseInt(user.metadata?.speed_level) >= 2 ?
+                    RateLimitDesc.from({
+                        occurrence: 200,
+                        periodSeconds: 60
+                    }) :
+                    RateLimitDesc.from({
+                        occurrence: 40,
+                        periodSeconds: 60
+                    })
+            ];
 
             const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
                 rpcReflect, uid, [rpcReflect.name.toUpperCase()],
@@ -334,7 +341,7 @@ export class SearcherHost extends RPCHost {
                     r.description = upstreamSearchResult.description;
 
                     return r;
-                }).catch((err)=> {
+                }).catch((err) => {
                     this.logger.error(`Failed to format snapshot for ${urls[i].href}`, { err: marshalErrorLike(err) });
 
                     return {
