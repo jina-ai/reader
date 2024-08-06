@@ -394,7 +394,7 @@ export class CrawlerHost extends RPCHost {
 
             const jsDomElementOfHTML = this.jsdomControl.snippetToElement(snapshot.html, snapshot.href);
             let toBeTurnedToMd = jsDomElementOfHTML;
-            let turnDownService = this.getTurndown({ url: nominalUrl, imgDataUrlToObjectUrl });
+            let turnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
             if (mode !== 'markdown' && snapshot.parsed?.content) {
                 const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
                 const par1 = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
@@ -402,7 +402,7 @@ export class CrawlerHost extends RPCHost {
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
-                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.href, imgDataUrlToObjectUrl });
+                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
                     if (snapshot.parsed.content) {
                         toBeTurnedToMd = jsDomElementOfParsed;
                     }
@@ -440,7 +440,7 @@ export class CrawlerHost extends RPCHost {
 
                     let src;
                     try {
-                        src = new URL(linkPreferredSrc, nominalUrl).toString();
+                        src = new URL(linkPreferredSrc, snapshot.rebase || nominalUrl).toString();
                     } catch (_err) {
                         void 0;
                     }
@@ -485,7 +485,7 @@ export class CrawlerHost extends RPCHost {
                     contentText = this.jsdomControl.runTurndown(turnDownService, toBeTurnedToMd).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href, imgDataUrlToObjectUrl });
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, toBeTurnedToMd).trim();
                     } catch (err2) {
@@ -502,7 +502,7 @@ export class CrawlerHost extends RPCHost {
                     contentText = this.jsdomControl.runTurndown(turnDownService, snapshot.html);
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.href, imgDataUrlToObjectUrl });
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, snapshot.html);
                     } catch (err2) {

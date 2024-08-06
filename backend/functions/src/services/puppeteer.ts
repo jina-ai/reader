@@ -42,6 +42,7 @@ export interface ReadabilityParsed {
 export interface PageSnapshot {
     title: string;
     href: string;
+    rebase?: string;
     html: string;
     text: string;
     parsed?: Partial<ReadabilityParsed> | null;
@@ -101,7 +102,7 @@ function briefImgs(elem) {
         }
 
         return {
-            src: new URL(linkPreferredSrc, document.location.href).toString(),
+            src: new URL(linkPreferredSrc, document.baseURI).toString(),
             loaded: x.complete,
             width: x.width,
             height: x.height,
@@ -179,6 +180,9 @@ function giveSnapshot(stopActiveSnapshot) {
         maxElemDepth: domAnalysis.maxDepth,
         elemCount: domAnalysis.elementCount,
     };
+    if (document.baseURI !== r.href) {
+        r.rebase = document.baseURI;
+    }
     if (parsed && parsed.content) {
         const elem = document.createElement('div');
         elem.innerHTML = parsed.content;

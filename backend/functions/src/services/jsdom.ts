@@ -121,7 +121,7 @@ export class JSDomControl extends AsyncService {
             .flat()
             .map((x) => {
                 try {
-                    return new URL(x, snapshot.href).toString();
+                    return new URL(x, snapshot.rebase || snapshot.href).toString();
                 } catch (err) {
                     return null;
                 }
@@ -160,7 +160,7 @@ export class JSDomControl extends AsyncService {
                         return undefined;
                     }
                     try {
-                        const parsed = new URL(href, snapshot.href);
+                        const parsed = new URL(href, snapshot.rebase || snapshot.href);
                         if (parsed.protocol === 'file:' || parsed.protocol === 'javascript:') {
                             return undefined;
                         }
@@ -188,7 +188,7 @@ export class JSDomControl extends AsyncService {
                     }
 
                     return {
-                        src: new URL(linkPreferredSrc, snapshot.href).toString(),
+                        src: new URL(linkPreferredSrc, snapshot.rebase || snapshot.href).toString(),
                         width: parseInt(x.getAttribute('width') || '0'),
                         height: parseInt(x.getAttribute('height') || '0'),
                         alt: x.getAttribute('alt') || x.getAttribute('title'),
