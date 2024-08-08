@@ -1036,14 +1036,18 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         let concluded = false;
 
         const handler = async (it: AsyncGenerator<PageSnapshot | undefined>, idx: number) => {
-            for await (const x of it) {
-                results[idx] = x;
+            try {
+                for await (const x of it) {
+                    results[idx] = x;
 
-                if (x) {
-                    nextDeferred.resolve();
-                    nextDeferred = Defer();
+                    if (x) {
+                        nextDeferred.resolve();
+                        nextDeferred = Defer();
+                    }
+
                 }
-
+            } catch (err: any) {
+                this.logger.warn(`Failed to scrap ${urls[idx]}`, { err: marshalErrorLike(err) });
             }
         };
 
