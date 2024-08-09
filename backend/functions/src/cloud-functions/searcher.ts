@@ -168,7 +168,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = braveSearchExplicitOperators.addTo(ctx.req.path.slice(1));
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            count: Math.floor(count * 2)
+            count: Math.floor(count + 2)
         }, crawlerOptions.noCache);
 
         if (!r.web?.results.length) {
