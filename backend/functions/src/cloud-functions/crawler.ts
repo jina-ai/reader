@@ -151,7 +151,7 @@ export class CrawlerHost extends RPCHost {
         } as any);
         if (!options?.noRules) {
             turnDownService.addRule('remove-irrelevant', {
-                filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea'],
+                filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea', 'select'],
                 replacement: () => ''
             });
             turnDownService.addRule('truncate-svg', {
