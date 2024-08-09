@@ -325,6 +325,7 @@ export class SearcherHost extends RPCHost {
             return;
         }
         const urls = searchResults.map((x) => new URL(x.url));
+        const snapshotMap = new WeakMap();
         for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
             const mapped = scrapped.map((x, i) => {
                 const upstreamSearchResult = searchResults[i];
@@ -336,9 +337,13 @@ export class SearcherHost extends RPCHost {
                         content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : ''
                     };
                 }
+                if (snapshotMap.has(x)) {
+                    return snapshotMap.get(x);
+                }
                 return this.crawler.formatSnapshot(mode, x, urls[i]).then((r) => {
                     r.title ??= upstreamSearchResult.title;
                     r.description = upstreamSearchResult.description;
+                    snapshotMap.set(x, r);
 
                     return r;
                 }).catch((err) => {
