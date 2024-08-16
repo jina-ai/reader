@@ -266,6 +266,7 @@ export class CrawlerOptions extends AutoCastable {
                 ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
             });
         }
+        instance.setCookies = cookies;
 
         const proxyUrl = ctx?.req.get('x-proxy-url');
         instance.proxyUrl ??= proxyUrl;

@@ -476,7 +476,14 @@ document.addEventListener('load', handlePageLoad);
             await page.useProxy(options.proxyUrl);
         }
         if (options?.cookies) {
-            await page.setCookie(...options.cookies);
+            const mapped = options.cookies.map((x) => {
+                if (x.domain || x.url) {
+                    return x;
+                }
+
+                return { ...x, url: parsedUrl.toString() };
+            });
+            await page.setCookie(...mapped);
         }
         if (options?.overrideUserAgent) {
             await page.setUserAgent(options.overrideUserAgent);

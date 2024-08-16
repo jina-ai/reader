@@ -12,9 +12,6 @@ import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { BraveSearchExplicitOperatorsDto, BraveSearchService } from '../services/brave-search';
 import { CrawlerHost, ExtraScrappingOptions, FormattedPage } from './crawler';
-import { CookieParam } from 'puppeteer';
-
-import { parseString as parseSetCookieString } from 'set-cookie-parser';
 import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
 import { SearchResult } from '../db/searched';
 import { WebSearchApiResponse, SearchResult as WebSearchResult } from '../shared/3rd-party/brave-types';
@@ -152,19 +149,6 @@ export class SearcherHost extends RPCHost {
         delete crawlerOptions.html;
 
         const crawlOpts = this.crawler.configure(crawlerOptions);
-        const cookies: CookieParam[] = [];
-        const setCookieHeaders = ctx.req.headers['x-set-cookie'];
-        if (Array.isArray(setCookieHeaders)) {
-            for (const setCookie of setCookieHeaders) {
-                cookies.push({
-                    ...parseSetCookieString(setCookie, { decodeValues: false }) as CookieParam,
-                });
-            }
-        } else if (setCookieHeaders) {
-            cookies.push({
-                ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
-            });
-        }
         const searchQuery = braveSearchExplicitOperators.addTo(ctx.req.path.slice(1));
         const r = await this.cachedWebSearch({
             q: searchQuery,
