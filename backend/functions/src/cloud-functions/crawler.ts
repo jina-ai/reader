@@ -49,6 +49,11 @@ export interface FormattedPage {
     pageshot?: Buffer;
     links?: { [k: string]: string; };
     images?: { [k: string]: string; };
+    usage?: {
+        total_tokens?: number;
+        totalTokens?: number;
+        tokens?: number;
+    };
 
     toString: () => string;
 }
@@ -743,7 +748,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
-                    chargeAmount = this.getChargeAmount(formatted);
+                    chargeAmount = this.assignChargeAmount(formatted);
                     sseStream.write({
                         event: 'data',
                         data: formatted,
@@ -771,7 +776,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 }
 
                 const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
-                chargeAmount = this.getChargeAmount(formatted);
+                chargeAmount = this.assignChargeAmount(formatted);
 
                 if (crawlerOptions.timeout === undefined) {
                     return formatted;
@@ -783,7 +788,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
 
             const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, urlToCrawl);
-            chargeAmount = this.getChargeAmount(formatted);
+            chargeAmount = this.assignChargeAmount(formatted);
 
             return formatted;
         }
@@ -795,7 +800,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
 
             const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
-            chargeAmount = this.getChargeAmount(formatted);
+            chargeAmount = this.assignChargeAmount(formatted);
 
             if (crawlerOptions.timeout === undefined) {
                 if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
@@ -820,7 +825,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, urlToCrawl);
-        chargeAmount = this.getChargeAmount(formatted);
+        chargeAmount = this.assignChargeAmount(formatted);
         if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
             return assignTransferProtocolMeta(`${formatted}`,
@@ -1005,25 +1010,31 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
     }
 
-    getChargeAmount(formatted: FormattedPage) {
+    assignChargeAmount(formatted: FormattedPage) {
         if (!formatted) {
             return undefined;
         }
 
         const textContent = formatted?.content || formatted?.description || formatted?.text || formatted?.html;
+        let amount;
+        do {
+            if (typeof textContent === 'string') {
+                amount = estimateToken(textContent);
+                break;
+            }
 
-        if (typeof textContent === 'string') {
-            return estimateToken(textContent);
-        }
+            const imageContent = formatted.screenshotUrl || formatted.screenshot;
 
-        const imageContent = formatted.screenshotUrl || formatted.screenshot;
+            if (imageContent) {
+                // OpenAI image token count for 1024x1024 image
+                amount = 765;
+                break;
+            }
+        } while (false);
 
-        if (imageContent) {
-            // OpenAI image token count for 1024x1024 image
-            return 765;
-        }
+        Object.assign(formatted, { usage: { tokens: amount } });
 
-        return undefined;
+        return amount;
     }
 
 

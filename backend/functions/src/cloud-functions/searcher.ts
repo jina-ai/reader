@@ -178,7 +178,7 @@ export class SearcherHost extends RPCHost {
                         continue;
                     }
 
-                    chargeAmount = this.getChargeAmount(scrapped);
+                    chargeAmount = this.assignChargeAmount(scrapped);
                     sseStream.write({
                         event: 'data',
                         data: scrapped,
@@ -211,7 +211,7 @@ export class SearcherHost extends RPCHost {
                     if (!lastScrapped) {
                         return;
                     }
-                    chargeAmount = this.getChargeAmount(lastScrapped);
+                    chargeAmount = this.assignChargeAmount(lastScrapped);
                     rpcReflect.return(lastScrapped);
                     earlyReturn = true;
                 }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
@@ -228,7 +228,7 @@ export class SearcherHost extends RPCHost {
                 if (earlyReturnTimer) {
                     clearTimeout(earlyReturnTimer);
                 }
-                chargeAmount = this.getChargeAmount(scrapped);
+                chargeAmount = this.assignChargeAmount(scrapped);
 
                 return scrapped;
             }
@@ -242,7 +242,7 @@ export class SearcherHost extends RPCHost {
             }
 
             if (!earlyReturn) {
-                chargeAmount = this.getChargeAmount(lastScrapped);
+                chargeAmount = this.assignChargeAmount(lastScrapped);
             }
 
             return lastScrapped;
@@ -257,7 +257,7 @@ export class SearcherHost extends RPCHost {
                 if (!lastScrapped) {
                     return;
                 }
-                chargeAmount = this.getChargeAmount(lastScrapped);
+                chargeAmount = this.assignChargeAmount(lastScrapped);
                 rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
                 earlyReturn = true;
             }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
@@ -278,7 +278,7 @@ export class SearcherHost extends RPCHost {
                 clearTimeout(earlyReturnTimer);
             }
 
-            chargeAmount = this.getChargeAmount(scrapped);
+            chargeAmount = this.assignChargeAmount(scrapped);
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
@@ -292,7 +292,7 @@ export class SearcherHost extends RPCHost {
         }
 
         if (!earlyReturn) {
-            chargeAmount = this.getChargeAmount(lastScrapped);
+            chargeAmount = this.assignChargeAmount(lastScrapped);
         }
 
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
@@ -423,9 +423,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
         return resultArray;
     }
 
-    getChargeAmount(formatted: FormattedPage[]) {
+    assignChargeAmount(formatted: FormattedPage[]) {
         return _.sum(
-            formatted.map((x) => this.crawler.getChargeAmount(x) || 0)
+            formatted.map((x) => this.crawler.assignChargeAmount(x) || 0)
         );
     }
 
