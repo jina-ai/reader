@@ -111,6 +111,11 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Locale': {
+                    description: 'Specify browser locale for the page.',
+                    in: 'header',
+                    schema: { type: 'string' }
+                }
             }
         }
     }
@@ -188,6 +193,9 @@ export class CrawlerOptions extends AutoCastable {
     })
     timeout?: number | null;
 
+    @Prop()
+    locale?: string;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -198,6 +206,11 @@ export class CrawlerOptions extends AutoCastable {
         const customMode = ctx?.req.get('x-respond-with') || ctx?.req.get('x-return-format');
         if (customMode !== undefined) {
             instance.respondWith = customMode;
+        }
+
+        const locale = ctx?.req.get('x-locale');
+        if (locale !== undefined) {
+            instance.locale = locale;
         }
 
         const withGeneratedAlt = ctx?.req.get('x-with-generated-alt');

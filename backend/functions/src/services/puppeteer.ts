@@ -68,6 +68,7 @@ export interface ScrappingOptions {
     minIntervalMs?: number;
     overrideUserAgent?: string;
     timeoutMs?: number;
+    locale?: string;
 }
 
 
@@ -472,6 +473,27 @@ document.addEventListener('load', handlePageLoad);
         const page = await this.getNextPage();
         const sn = this.snMap.get(page);
         this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
+
+        this.logger.info(`Locale setting: ${options?.locale}`);
+        if (options?.locale) {
+            await page.setExtraHTTPHeaders({
+                'Accept-Language': options?.locale
+            });
+
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, "language", {
+                    get: function() {
+                        return options?.locale;
+                    }
+                });
+                Object.defineProperty(navigator, "languages", {
+                    get: function() {
+                        return [options?.locale];
+                    }
+                });
+            })
+        }
+
         if (options?.proxyUrl) {
             await page.useProxy(options.proxyUrl);
         }

@@ -1106,6 +1106,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             overrideUserAgent: opts.userAgent,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
+            locale: opts.locale,
         };
 
         return crawlOpts;
