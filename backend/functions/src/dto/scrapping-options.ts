@@ -115,6 +115,11 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     description: 'Specify browser locale for the page.',
                     in: 'header',
                     schema: { type: 'string' }
+                },
+                'X-Referer': {
+                    description: 'Specify referer for the page.',
+                    in: 'header',
+                    schema: { type: 'string' }
                 }
             }
         }
@@ -201,6 +206,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     locale?: string;
 
+    @Prop()
+    referer?: string;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -216,6 +224,11 @@ export class CrawlerOptions extends AutoCastable {
         const locale = ctx?.req.get('x-locale');
         if (locale !== undefined) {
             instance.locale = locale;
+        }
+
+        const referer = ctx?.req.get('x-referer');
+        if (referer !== undefined) {
+            instance.referer = referer;
         }
 
         const withGeneratedAlt = ctx?.req.get('x-with-generated-alt');

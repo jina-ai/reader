@@ -1123,6 +1123,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
             locale: opts.locale,
+            referer: opts.referer,
         };
 
         return crawlOpts;

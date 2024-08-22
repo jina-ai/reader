@@ -4,7 +4,7 @@ import { container, singleton } from 'tsyringe';
 import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
-import type { Browser, CookieParam, Page } from 'puppeteer';
+import type { Browser, CookieParam, GoToOptions, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
@@ -69,6 +69,7 @@ export interface ScrappingOptions {
     overrideUserAgent?: string;
     timeoutMs?: number;
     locale?: string;
+    referer?: string;
 }
 
 
@@ -545,11 +546,16 @@ document.addEventListener('load', handlePageLoad);
         });
 
         const timeout = options?.timeoutMs || 30_000;
-
-        const gotoPromise = page.goto(url, {
+        const goToOptions: GoToOptions = {
             waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
             timeout,
-        })
+        };
+
+        if (options?.referer) {
+            goToOptions.referer = options.referer;
+        }
+
+        const gotoPromise = page.goto(url, goToOptions)
             .catch((err) => {
                 if (err instanceof TimeoutError) {
                     this.logger.warn(`Page ${sn}: Browsing of ${url} timed out`, { err: marshalErrorLike(err) });
