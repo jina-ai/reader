@@ -8,6 +8,7 @@ import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
 import { FirebaseStorageBucketControl } from '../shared';
 import { randomUUID } from 'crypto';
+import { PDFDocumentLoadingTask } from 'pdfjs-dist';
 const utc = require('dayjs/plugin/utc');  // Import the UTC plugin
 dayjs.extend(utc);  // Extend dayjs with the UTC plugin
 const timezone = require('dayjs/plugin/timezone');
@@ -62,12 +63,45 @@ export class PDFExtractor extends AsyncService {
         this.emit('ready');
     }
 
+    isDataUrl(url: string) {
+        return /^data:.+\/(.+);base64,(.*)$/.test(url);
+    }
+
+    parseDataUrl(url: string) {
+        const matches = url.match(/^data:.+\/(.+);base64,(.*)$/);
+        if (!matches || matches.length !== 3) {
+            throw new Error('Invalid data URL');
+        }
+
+        if (matches[1] !== 'pdf') {
+            throw new Error('Invalid data URL type');
+        }
+
+        return {
+            type: matches[1],
+            data: matches[2]
+        }
+    }
+
     async extract(url: string | URL) {
-        const loadingTask = this.pdfjs.getDocument({
-            url,
-            disableFontFace: true,
-            verbosity: 0
-        });
+        let loadingTask: PDFDocumentLoadingTask;
+
+        if (typeof url === 'string' && this.isDataUrl(url)) {
+            const { data } = this.parseDataUrl(url);
+
+            loadingTask = this.pdfjs.getDocument({
+                data: atob(decodeURIComponent(data)),
+                disableFontFace: true,
+                verbosity: 0
+            });
+        } else {
+            loadingTask = this.pdfjs.getDocument({
+                url,
+                disableFontFace: true,
+                verbosity: 0
+            });
+        }
+
 
         const doc = await loadingTask.promise;
         const meta = await doc.getMetadata();
@@ -237,6 +271,11 @@ export class PDFExtractor extends AsyncService {
 
         const digest = md5Hasher.hash(url.toString());
 
+        const data = url;
+        if (typeof url === 'string' && this.isDataUrl(url)) {
+            url = `dataurl://digest:${digest}`;
+        }
+
         const cache: PDFContent | undefined = (await PDFContent.fromFirestoreQuery(PDFContent.COLLECTION.where('urlDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
         if (cache) {
@@ -275,7 +314,7 @@ export class PDFExtractor extends AsyncService {
         let extracted;
 
         try {
-            extracted = await this.extract(url);
+            extracted = await this.extract(data);
 
             const theID = randomUUID();
             await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,

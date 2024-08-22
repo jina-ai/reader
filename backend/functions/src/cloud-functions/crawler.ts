@@ -977,6 +977,22 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
             return;
         }
+
+        if (crawlerOpts?.pdf) {
+            const pdfDataUrl = `data:application/pdf;base64,${encodeURIComponent(crawlerOpts.pdf)}`;
+            const fakeSnapshot = {
+                href: urlToCrawl.toString(),
+                html: `<!DOCTYPE html><html><head></head><body style="height: 100%; width: 100%; overflow: hidden; margin:0px; background-color: rgb(82, 86, 89);"><embed style="position:absolute; left: 0; top: 0;" width="100%" height="100%" src="${pdfDataUrl}"></body></html>`,
+                title: '',
+                text: '',
+                pdfs: [pdfDataUrl],
+            } as PageSnapshot;
+
+            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
+
+            return;
+        }
+
         let cache;
 
         const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
