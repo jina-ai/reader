@@ -1,7 +1,7 @@
 import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency, Deferred } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, GoToOptions, Page } from 'puppeteer';
@@ -208,6 +208,7 @@ export class PuppeteerControl extends AsyncService {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     private __healthCheckInterval?: NodeJS.Timeout;
+    private __reqCapInterval?: NodeJS.Timeout;
 
     __loadedPage: Page[] = [];
 
@@ -215,6 +216,10 @@ export class PuppeteerControl extends AsyncService {
     snMap = new WeakMap<Page, number>();
     livePages = new Set<Page>();
     lastPageCratedAt: number = 0;
+
+    rpsCap: number = 300;
+    lastReqSentAt: number = 0;
+    requestDeferredQueue: Deferred<boolean>[] = [];
 
     circuitBreakerHosts: Set<string> = new Set();
 
@@ -238,6 +243,10 @@ export class PuppeteerControl extends AsyncService {
         if (this.__healthCheckInterval) {
             clearInterval(this.__healthCheckInterval);
             this.__healthCheckInterval = undefined;
+        }
+        if (this.__reqCapInterval) {
+            clearInterval(this.__reqCapInterval);
+            this.__reqCapInterval = undefined;
         }
         await this.dependencyReady();
 
@@ -267,7 +276,7 @@ export class PuppeteerControl extends AsyncService {
 
         this.emit('ready');
 
-        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000);
+        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000).unref();
         this.newPage().then((r) => this.__loadedPage.push(r));
     }
 
@@ -301,6 +310,21 @@ export class PuppeteerControl extends AsyncService {
         this.logger.warn(`Browser killed`);
     }
 
+    reqCapRoutine() {
+        const now = Date.now();
+        const numToPass = Math.round((now - this.lastReqSentAt) / 1000 * this.rpsCap);
+        this.requestDeferredQueue.splice(0, numToPass).forEach((x) => x.resolve(true));
+        this.lastReqSentAt = now;
+        if (!this.requestDeferredQueue.length) {
+            if (this.__reqCapInterval) {
+                clearInterval(this.__reqCapInterval);
+                this.__reqCapInterval = undefined;
+            }
+        } else if (!this.__reqCapInterval) {
+            this.__reqCapInterval = setInterval(() => this.reqCapRoutine(), 1000 / this.rpsCap).unref();
+        }
+    }
+
     async newPage() {
         await this.serviceReady();
         const dedicatedContext = await this.browser.createBrowserContext();
@@ -330,7 +354,7 @@ export class PuppeteerControl extends AsyncService {
         let t0: number | undefined;
         let halt = false;
 
-        page.on('request', (req) => {
+        page.on('request', async (req) => {
             reqCounter++;
             if (halt) {
                 return req.abort('blockedbyclient', 1000);
@@ -378,6 +402,15 @@ export class PuppeteerControl extends AsyncService {
 
                 return req.abort('blockedbyclient', 1000);
             }
+
+            const d = Defer();
+            this.requestDeferredQueue.push(d);
+            process.nextTick(() => this.reqCapRoutine());
+            await d.promise;
+
+            if (req.isInterceptResolutionHandled()) {
+                return;
+            };
 
             const continueArgs = req.continueRequestOverrides
                 ? [req.continueRequestOverrides(), 0] as const
@@ -483,16 +516,16 @@ document.addEventListener('load', handlePageLoad);
 
             await page.evaluateOnNewDocument(() => {
                 Object.defineProperty(navigator, "language", {
-                    get: function() {
+                    get: function () {
                         return options?.locale;
                     }
                 });
                 Object.defineProperty(navigator, "languages", {
-                    get: function() {
+                    get: function () {
                         return [options?.locale];
                     }
                 });
-            })
+            });
         }
 
         if (options?.proxyUrl) {

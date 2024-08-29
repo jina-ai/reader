@@ -753,6 +753,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                         event: 'data',
                         data: formatted,
                     });
+                    if (chargeAmount && scrapped.pdfs?.length) {
+                        break;
+                    }
                 }
             } catch (err: any) {
                 this.logger.error(`Failed to crawl ${urlToCrawl}`, { err: marshalErrorLike(err) });
@@ -779,6 +782,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 chargeAmount = this.assignChargeAmount(formatted);
 
                 if (crawlerOptions.timeout === undefined) {
+                    return formatted;
+                }
+
+                if (chargeAmount && scrapped.pdfs?.length) {
                     return formatted;
                 }
             }
