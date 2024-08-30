@@ -100,6 +100,9 @@ export class CrawlerHost extends RPCHost {
                 // Potential privacy issue, dont cache if cookies are used
                 return;
             }
+            if (options.locale) {
+                Reflect.set(snapshot, 'locale', options.locale);
+            }
 
             await this.setToCache(options.url, snapshot);
         });
@@ -1025,7 +1028,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
-        if (cache?.isFresh && (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && (cache.screenshotAvailable && cache.pageshotAvailable)))) {
+        if (cache?.isFresh &&
+            (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && (cache.screenshotAvailable && cache.pageshotAvailable))) &&
+            (_.get(cache.snapshot, 'locale') === crawlOpts?.locale)
+        ) {
             yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
 
             return;
