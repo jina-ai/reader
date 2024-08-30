@@ -625,9 +625,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const noSlashURL = ctx.req.url.slice(1);
         const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
-        if (!noSlashURL && !crawlerOptions.url) {
+
+        const targetUrl = await this.getTargetUrl(ctx.req.url, crawlerOptions);
+        if (!targetUrl) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
                 return this.getIndex(latestUser);
@@ -691,48 +692,20 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             });
         }
 
-        let urlToCrawl;
-        const normalizeUrl = (await pNormalizeUrl).default;
-        try {
-            urlToCrawl = new URL(
-                normalizeUrl(
-                    (crawlerOptions.url || noSlashURL).trim(),
-                    {
-                        stripWWW: false,
-                        removeTrailingSlash: false,
-                        removeSingleSlash: false,
-                        sortQueryParameters: false,
-                    }
-                )
-            );
-        } catch (err) {
-            throw new ParamValidationError({
-                message: `${err}`,
-                path: 'url'
-            });
-        }
-        if (urlToCrawl.protocol !== 'http:' && urlToCrawl.protocol !== 'https:') {
-            throw new ParamValidationError({
-                message: `Invalid protocol ${urlToCrawl.protocol}`,
-                path: 'url'
-            });
-        }
-
         if (!uid) {
-            if (urlToCrawl.protocol === 'http:' && (!urlToCrawl.pathname || urlToCrawl.pathname === '/') &&
+            if (targetUrl.protocol === 'http:' && (!targetUrl.pathname || targetUrl.pathname === '/') &&
                 crawlerOptions.respondWith !== 'default') {
                 throw new SecurityCompromiseError(`Your request is categorized as abuse. Please don't abuse our service. If you are sure you are not abusing, please authenticate yourself with an API key.`);
             }
             const blockade = (await DomainBlockade.fromFirestoreQuery(
                 DomainBlockade.COLLECTION
-                    .where('domain', '==', urlToCrawl.hostname.toLowerCase())
+                    .where('domain', '==', targetUrl.hostname.toLowerCase())
                     .where('expireAt', '>=', new Date())
                     .limit(1)
             ))[0];
             if (blockade) {
-                throw new SecurityCompromiseError(`Domain ${urlToCrawl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
+                throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
-
         }
         const crawlOpts = this.configure(crawlerOptions);
 
@@ -742,12 +715,12 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions)) {
+                for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
                     if (!scrapped) {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
+                    const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl);
                     chargeAmount = this.assignChargeAmount(formatted);
                     sseStream.write({
                         event: 'data',
@@ -758,7 +731,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     }
                 }
             } catch (err: any) {
-                this.logger.error(`Failed to crawl ${urlToCrawl}`, { err: marshalErrorLike(err) });
+                this.logger.error(`Failed to crawl ${targetUrl}`, { err: marshalErrorLike(err) });
                 sseStream.write({
                     event: 'error',
                     data: marshalErrorLike(err),
@@ -772,13 +745,13 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions)) {
+            for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
                 if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
+                const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl);
                 chargeAmount = this.assignChargeAmount(formatted);
 
                 if (crawlerOptions.timeout === undefined) {
@@ -791,22 +764,22 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
 
             if (!lastScrapped) {
-                throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
+                throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
             }
 
-            const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, urlToCrawl);
+            const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl);
             chargeAmount = this.assignChargeAmount(formatted);
 
             return formatted;
         }
 
-        for await (const scrapped of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOptions)) {
+        for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
             lastScrapped = scrapped;
             if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
                 continue;
             }
 
-            const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, urlToCrawl);
+            const formatted = await this.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl);
             chargeAmount = this.assignChargeAmount(formatted);
 
             if (crawlerOptions.timeout === undefined) {
@@ -828,10 +801,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         if (!lastScrapped) {
-            throw new AssertionFailureError(`No content available for URL ${urlToCrawl}`);
+            throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
 
-        const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, urlToCrawl);
+        const formatted = await this.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl);
         chargeAmount = this.assignChargeAmount(formatted);
         if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
@@ -847,6 +820,51 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         return assignTransferProtocolMeta(`${formatted}`, { contentType: 'text/plain', envelope: null });
+    }
+
+    async getTargetUrl(originPath: string, crawlerOptions: CrawlerOptions) {
+        let url: string;
+
+        const targetUrlFromGet = originPath.slice(1);
+        if (crawlerOptions.pdf) {
+            url = `file://pdf.${md5Hasher.hash(crawlerOptions.pdf)}`;
+        } else if (targetUrlFromGet) {
+            url = targetUrlFromGet.trim();
+        } else if (crawlerOptions.url) {
+            url = crawlerOptions.url.trim();
+        } else {
+            return null;
+        }
+
+        let result: URL;
+        const normalizeUrl = (await pNormalizeUrl).default;
+        try {
+            result = new URL(
+                normalizeUrl(
+                    url,
+                    {
+                        stripWWW: false,
+                        removeTrailingSlash: false,
+                        removeSingleSlash: false,
+                        sortQueryParameters: false,
+                    }
+                )
+            );
+        } catch (err) {
+            throw new ParamValidationError({
+                message: `${err}`,
+                path: 'url'
+            });
+        }
+
+        if (!['http:', 'https:', 'file:'].includes(result.protocol)) {
+            throw new ParamValidationError({
+                message: `Invalid protocol ${result.protocol}`,
+                path: 'url'
+            });
+        }
+
+        return result;
     }
 
     getUrlDigest(urlToCrawl: URL) {
