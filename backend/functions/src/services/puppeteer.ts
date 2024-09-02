@@ -1,7 +1,7 @@
 import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency, Deferred } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency, Deferred, perNextTick } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, GoToOptions, Page } from 'puppeteer';
@@ -310,11 +310,14 @@ export class PuppeteerControl extends AsyncService {
         this.logger.warn(`Browser killed`);
     }
 
+    @perNextTick()
     reqCapRoutine() {
         const now = Date.now();
         const numToPass = Math.round((now - this.lastReqSentAt) / 1000 * this.rpsCap);
         this.requestDeferredQueue.splice(0, numToPass).forEach((x) => x.resolve(true));
-        this.lastReqSentAt = now;
+        if (numToPass) {
+            this.lastReqSentAt = now;
+        }
         if (!this.requestDeferredQueue.length) {
             if (this.__reqCapInterval) {
                 clearInterval(this.__reqCapInterval);
@@ -403,10 +406,12 @@ export class PuppeteerControl extends AsyncService {
                 return req.abort('blockedbyclient', 1000);
             }
 
-            const d = Defer();
-            this.requestDeferredQueue.push(d);
-            process.nextTick(() => this.reqCapRoutine());
-            await d.promise;
+            if (requestUrl.startsWith('http')) {
+                const d = Defer();
+                this.requestDeferredQueue.push(d);
+                this.reqCapRoutine();
+                await d.promise;
+            }
 
             if (req.isInterceptResolutionHandled()) {
                 return;
