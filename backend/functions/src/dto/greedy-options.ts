@@ -30,21 +30,21 @@ export class GreedyCrawlerOptions extends AutoCastable {
         default: false,
         desc: 'Use sitemap to crawl the website.',
     })
-    useSitemap?: boolean;
+    useSitemap!: boolean;
 
     @Prop({
         default: 5,
         desc: 'Max deep level to crawl.',
         validate: (v: number) => v >= 0 && v <= 10,
     })
-    deepLevel?: number;
+    deepLevel!: number;
 
     @Prop({
         default: 10,
         desc: 'Max number of pages to crawl.',
         validate: (v: number) => v >= 0 && v <= 1000,
     })
-    maxPageCount?: number;
+    maxPageCount!: number;
 
     static override from(input: any) {
         const instance = super.from(input) as GreedyCrawlerOptions;
@@ -56,15 +56,11 @@ export class GreedyCrawlerOptions extends AutoCastable {
         let deepLevel = parseInt(ctx?.req.get('x-deep-level') || '');
         if (!isNaN(deepLevel) && deepLevel > 0) {
             instance.deepLevel = deepLevel <= 10 ? deepLevel : 10;
-        } else {
-            instance.deepLevel = 5;
         }
 
         let maxPageCount = parseInt(ctx?.req.get('x-max-page-count') || '');
         if (!isNaN(maxPageCount) && maxPageCount > 0) {
             instance.maxPageCount = maxPageCount <= 1000 ? maxPageCount : 1000;
-        } else {
-            instance.maxPageCount = 10;
         }
 
         const useSitemap = ctx?.req.get('x-use-sitemap');

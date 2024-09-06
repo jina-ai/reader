@@ -29,7 +29,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     keepImgDataUrl?: boolean;
 }
 
-const indexProto = {
+export const indexProto = {
     toString: function (): string {
         return _(this)
             .toPairs()
