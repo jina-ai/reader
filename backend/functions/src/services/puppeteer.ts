@@ -1,7 +1,7 @@
 import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, maxConcurrency, Deferred, perNextTick } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, GoToOptions, Page } from 'puppeteer';
@@ -207,7 +207,6 @@ export class PuppeteerControl extends AsyncService {
     browser!: Browser;
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    private __healthCheckInterval?: NodeJS.Timeout;
     private __reqCapInterval?: NodeJS.Timeout;
 
     __loadedPage: Page[] = [];
@@ -217,7 +216,7 @@ export class PuppeteerControl extends AsyncService {
     livePages = new Set<Page>();
     lastPageCratedAt: number = 0;
 
-    rpsCap: number = 300;
+    rpsCap: number = 500;
     lastReqSentAt: number = 0;
     requestDeferredQueue: Deferred<boolean>[] = [];
 
@@ -235,15 +234,7 @@ export class PuppeteerControl extends AsyncService {
         });
     }
 
-    briefPages() {
-        this.logger.info(`Status: ${this.livePages.size} pages alive: ${Array.from(this.livePages).map((x) => this.snMap.get(x)).sort().join(', ')}; ${this.__loadedPage.length} idle pages: ${this.__loadedPage.map((x) => this.snMap.get(x)).sort().join(', ')}`);
-    }
-
     override async init() {
-        if (this.__healthCheckInterval) {
-            clearInterval(this.__healthCheckInterval);
-            this.__healthCheckInterval = undefined;
-        }
         if (this.__reqCapInterval) {
             clearInterval(this.__reqCapInterval);
             this.__reqCapInterval = undefined;
@@ -276,38 +267,7 @@ export class PuppeteerControl extends AsyncService {
 
         this.emit('ready');
 
-        this.__healthCheckInterval = setInterval(() => this.healthCheck(), 30_000).unref();
         this.newPage().then((r) => this.__loadedPage.push(r));
-    }
-
-    @maxConcurrency(1)
-    async healthCheck() {
-        if (Date.now() - this.lastPageCratedAt <= 10_000) {
-            this.briefPages();
-            return;
-        }
-        const healthyPage = await this.newPage().catch((err) => {
-            this.logger.warn(`Health check failed`, { err: marshalErrorLike(err) });
-            return null;
-        });
-
-        if (healthyPage) {
-            this.__loadedPage.push(healthyPage);
-
-            if (this.__loadedPage.length > 3) {
-                this.ditchPage(this.__loadedPage.shift()!);
-            }
-
-            this.briefPages();
-
-            return;
-        }
-
-        this.logger.warn(`Trying to clean up...`);
-        this.browser.process()?.kill('SIGKILL');
-        Reflect.deleteProperty(this, 'browser');
-        this.emit('crippled');
-        this.logger.warn(`Browser killed`);
     }
 
     @perNextTick()
@@ -620,7 +580,7 @@ document.addEventListener('load', handlePageLoad);
                 try {
                     const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                    screenshot = await page.screenshot();
+                    screenshot = Buffer.from(await page.screenshot());
                     if (snapshot) {
                         snapshot.childFrames = await pSubFrameSnapshots;
                     }
@@ -643,8 +603,8 @@ document.addEventListener('load', handlePageLoad);
                         if (salvaged) {
                             const pSubFrameSnapshots = this.snapshotChildFrames(page);
                             snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                            screenshot = await page.screenshot();
-                            pageshot = await page.screenshot({ fullPage: true });
+                            screenshot = Buffer.from(await page.screenshot());
+                            pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
                             if (snapshot) {
                                 snapshot.childFrames = await pSubFrameSnapshots;
                             }
@@ -678,8 +638,8 @@ document.addEventListener('load', handlePageLoad);
                     .then(async () => {
                         const pSubFrameSnapshots = this.snapshotChildFrames(page);
                         snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                        screenshot = await page.screenshot();
-                        pageshot = await page.screenshot({ fullPage: true });
+                        screenshot = Buffer.from(await page.screenshot());
+                        pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
                         if (snapshot) {
                             snapshot.childFrames = await pSubFrameSnapshots;
                         }
@@ -716,8 +676,8 @@ document.addEventListener('load', handlePageLoad);
                     break;
                 }
                 if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
-                    screenshot = await page.screenshot();
-                    pageshot = await page.screenshot({ fullPage: true });
+                    screenshot = Buffer.from(await page.screenshot());
+                    pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {

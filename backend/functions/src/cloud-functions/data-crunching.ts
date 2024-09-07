@@ -18,6 +18,7 @@ import { appendFile } from 'fs/promises';
 import { createGzip } from 'zlib';
 import { getFunctions } from 'firebase-admin/functions';
 import { GoogleAuth } from 'google-auth-library';
+import { SnapshotFormatter } from '../services/snapshot-formatter';
 
 dayjs.extend(require('dayjs/plugin/utc'));
 
@@ -57,6 +58,7 @@ export class DataCrunchingHost extends RPCHost {
         protected globalLogger: Logger,
 
         protected crawler: CrawlerHost,
+        protected snapshotFormatter: SnapshotFormatter,
         protected tempFileManager: TempFileManager,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
     ) {
@@ -265,9 +267,9 @@ export class DataCrunchingHost extends RPCHost {
                     try {
                         const snapshot = JSON.parse(snapshotTxt.toString('utf-8'));
 
-                        let formatted = await this.crawler.formatSnapshot('default', snapshot);
+                        let formatted = await this.snapshotFormatter.formatSnapshot('default', snapshot);
                         if (!formatted.content) {
-                            formatted = await this.crawler.formatSnapshot('markdown', snapshot);
+                            formatted = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
                         }
 
                         await nextDrainDeferred.promise;

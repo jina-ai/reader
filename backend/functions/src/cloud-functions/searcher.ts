@@ -11,11 +11,12 @@ import _ from 'lodash';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { BraveSearchExplicitOperatorsDto, BraveSearchService } from '../services/brave-search';
-import { CrawlerHost, ExtraScrappingOptions, FormattedPage } from './crawler';
+import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
 import { SearchResult } from '../db/searched';
 import { WebSearchApiResponse, SearchResult as WebSearchResult } from '../shared/3rd-party/brave-types';
 import { CrawlerOptions } from '../dto/scrapping-options';
+import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
 
 
 @singleton()
@@ -36,6 +37,7 @@ export class SearcherHost extends RPCHost {
         protected threadLocal: AsyncContext,
         protected braveSearchService: BraveSearchService,
         protected crawler: CrawlerHost,
+        protected snapshotFormatter: SnapshotFormatter,
     ) {
         super(...arguments);
     }
@@ -324,7 +326,7 @@ export class SearcherHost extends RPCHost {
                 if (snapshotMap.has(x)) {
                     return snapshotMap.get(x);
                 }
-                return this.crawler.formatSnapshot(mode, x, urls[i]).then((r) => {
+                return this.snapshotFormatter.formatSnapshot(mode, x, urls[i]).then((r) => {
                     r.title ??= upstreamSearchResult.title;
                     r.description = upstreamSearchResult.description;
                     snapshotMap.set(x, r);

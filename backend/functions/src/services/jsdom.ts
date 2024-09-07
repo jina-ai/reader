@@ -2,17 +2,18 @@ import { container, singleton } from 'tsyringe';
 import { AsyncService, marshalErrorLike } from 'civkit';
 import { Logger } from '../shared/services/logger';
 import { ExtendedSnapshot, PageSnapshot } from './puppeteer';
-import { JSDOM, VirtualConsole } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
+import { Threaded } from '../shared/services/threaded';
 
-const virtualConsole = new VirtualConsole();
-virtualConsole.on('error', () => void 0);
+const pLinkedom = import('linkedom');
 
 @singleton()
 export class JSDomControl extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
+
+    linkedom!: Awaited<typeof pLinkedom>;
 
     constructor(
         protected globalLogger: Logger,
@@ -22,22 +23,34 @@ export class JSDomControl extends AsyncService {
 
     override async init() {
         await this.dependencyReady();
+        this.linkedom = await pLinkedom;
         this.emit('ready');
     }
 
-    narrowSnapshot(snapshot: PageSnapshot | undefined, options?: {
+    async narrowSnapshot(snapshot: PageSnapshot | undefined, options?: {
         targetSelector?: string | string[];
         removeSelector?: string | string[];
         withIframe?: boolean;
-    }): PageSnapshot | undefined {
+    }) {
         if (snapshot?.parsed && !options?.targetSelector && !options?.removeSelector && !options?.withIframe) {
             return snapshot;
         }
         if (!snapshot?.html) {
             return snapshot;
         }
+
+        return this.actualNarrowSnapshot(snapshot, options);
+    }
+
+    @Threaded()
+    async actualNarrowSnapshot(snapshot: PageSnapshot, options?: {
+        targetSelector?: string | string[];
+        removeSelector?: string | string[];
+        withIframe?: boolean;
+    }): Promise<PageSnapshot | undefined> {
+
         const t0 = Date.now();
-        const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
+        const jsdom = this.linkedom.parseHTML(snapshot.html);
         const allNodes: Node[] = [];
         jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
         if (options?.withIframe) {
@@ -90,16 +103,16 @@ export class JSDomControl extends AsyncService {
         let rootDoc: Document;
         if (allNodes.length === 1 && allNodes[0].nodeName === '#document') {
             rootDoc = allNodes[0] as any;
-            if (rootDoc.body.textContent) {
-                textChunks.push(rootDoc.body.textContent);
+            if (rootDoc.body.innerText) {
+                textChunks.push(rootDoc.body.innerText);
             }
         } else {
-            rootDoc = new JSDOM('', { url: snapshot.href, virtualConsole }).window.document;
+            rootDoc = this.linkedom.parseHTML('<html><body></body></html>').window.document;
             for (const n of allNodes) {
                 rootDoc.body.appendChild(n);
                 rootDoc.body.appendChild(rootDoc.createTextNode('\n\n'));
-                if (n.textContent) {
-                    textChunks.push(n.textContent);
+                if ((n as HTMLElement).innerText) {
+                    textChunks.push((n as HTMLElement).innerText);
                 }
             }
         }
@@ -110,11 +123,6 @@ export class JSDomControl extends AsyncService {
         } catch (err: any) {
             this.logger.warn(`Failed to parse selected element`, { err: marshalErrorLike(err) });
         }
-
-        // No innerText in jsdom
-        // https://github.com/jsdom/jsdom/issues/1245
-        const textContent = textChunks.join('\n\n');
-        const cleanedText = textContent?.split('\n').map((x: any) => x.trimEnd()).join('\n').replace(/\n{3,}/g, '\n\n');
 
         const imageTags = Array.from(rootDoc.querySelectorAll('img[src],img[data-src]'))
             .map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src')])
@@ -135,7 +143,7 @@ export class JSDomControl extends AsyncService {
             title: snapshot.title || jsdom.window.document.title,
             parsed,
             html: rootDoc.documentElement.outerHTML,
-            text: cleanedText,
+            text: textChunks.join('\n'),
             imgs: snapshot.imgs?.filter((x) => imageSet.has(x.src)) || [],
         } as PageSnapshot;
 
@@ -147,11 +155,13 @@ export class JSDomControl extends AsyncService {
         return r;
     }
 
+    @Threaded()
     inferSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
         const t0 = Date.now();
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {
-            const jsdom = new JSDOM(snapshot.html, { url: snapshot.href, virtualConsole });
+            const jsdom = this.linkedom.parseHTML(snapshot.html);
+
             jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
             const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
                 .map((x: any) => [x.getAttribute('href'), x.textContent.replace(/\s+/g, ' ').trim()])
@@ -207,9 +217,8 @@ export class JSDomControl extends AsyncService {
 
         return extendedSnapshot;
     }
-
     snippetToElement(snippet?: string, url?: string) {
-        const parsed = new JSDOM(snippet || '', { url, virtualConsole });
+        const parsed = this.linkedom.parseHTML(snippet || '<html><body></body></html>');
 
         return parsed.window.document.documentElement;
     }
