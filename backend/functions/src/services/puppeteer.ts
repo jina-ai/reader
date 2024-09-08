@@ -9,7 +9,7 @@ import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
-import { SecurityCompromiseError, ServiceCrashedError } from '../shared/lib/errors';
+import { SecurityCompromiseError, ServiceCrashedError, ServiceNodeResourceDrainError } from '../shared/lib/errors';
 import { TimeoutError } from 'puppeteer';
 import _ from 'lodash';
 const tldExtract = require('tld-extract');
@@ -285,7 +285,13 @@ export class PuppeteerControl extends AsyncService {
         await this.serviceReady();
         const dedicatedContext = await this.browser.createBrowserContext();
         const sn = this._sn++;
-        const page = await dedicatedContext.newPage();
+        let page
+        try {
+            page = await dedicatedContext.newPage();
+        } catch (err: any) {
+            this.logger.warn(`Failed to create page ${sn}`, { err: marshalErrorLike(err) });
+            throw new ServiceNodeResourceDrainError(`This specific worker node failed to open a new page, try again.`);
+        }
         const preparations = [];
 
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
