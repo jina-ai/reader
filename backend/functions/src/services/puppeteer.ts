@@ -11,6 +11,7 @@ import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
 import { SecurityCompromiseError, ServiceCrashedError } from '../shared/lib/errors';
 import { TimeoutError } from 'puppeteer';
+import _ from 'lodash';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -114,13 +115,6 @@ function briefImgs(elem) {
         };
     });
 }
-function briefPDFs() {
-    const pdfTags = Array.from(document.querySelectorAll('embed[type="application/pdf"]'));
-
-    return pdfTags.map((x)=> {
-        return x.src === 'about:blank' ? document.location.href : x.src;
-    });
-}
 function getMaxDepthAndCountUsingTreeWalker(root) {
   let maxDepth = 0;
   let currentDepth = 0;
@@ -178,7 +172,6 @@ function giveSnapshot(stopActiveSnapshot) {
         text: document.body?.innerText,
         parsed: parsed,
         imgs: [],
-        pdfs: briefPDFs(),
         maxElemDepth: domAnalysis.maxDepth,
         elemCount: domAnalysis.elementCount,
     };
@@ -324,7 +317,7 @@ export class PuppeteerControl extends AsyncService {
             }
             t0 ??= Date.now();
             const requestUrl = req.url();
-            if (!requestUrl.startsWith("http:") && !requestUrl.startsWith("https:") && requestUrl !== 'about:blank') {
+            if (!requestUrl.startsWith('http:') && !requestUrl.startsWith('https:') && !requestUrl.startsWith('chrome-extension:') && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
             }
             const tldParsed = tldExtract(requestUrl);
@@ -469,7 +462,19 @@ document.addEventListener('load', handlePageLoad);
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
         let pageshot: Buffer | undefined;
+        const pdfUrls: string[] = [];
         const page = await this.getNextPage();
+        page.on('response', (resp) => {
+            if (!resp.ok()) {
+                return;
+            }
+            const headers = resp.headers();
+            const url = resp.url();
+            const contentType = headers['content-type'];
+            if (contentType?.toLowerCase().includes('application/pdf')) {
+                pdfUrls.push(url);
+            }
+        });
         const sn = this.snMap.get(page);
         this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
 
@@ -619,7 +624,7 @@ document.addEventListener('load', handlePageLoad);
                     this.logger.info(`Page ${sn}: Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
                     this.emit(
                         'crawled',
-                        { ...snapshot, screenshot, pageshot },
+                        { ...snapshot, pdfs: _.uniq(pdfUrls), screenshot, pageshot, },
                         { ...options, url: parsedUrl }
                     );
                 }
@@ -672,7 +677,7 @@ document.addEventListener('load', handlePageLoad);
                         }
                         throw new AssertionFailureError(`Could not extract any meaningful content from the page`);
                     }
-                    yield { ...snapshot, screenshot, pageshot } as PageSnapshot;
+                    yield { ...snapshot, pdfs: _.uniq(pdfUrls), screenshot, pageshot } as PageSnapshot;
                     break;
                 }
                 if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
@@ -681,7 +686,7 @@ document.addEventListener('load', handlePageLoad);
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {
-                    yield { ...snapshot, screenshot, pageshot } as PageSnapshot;
+                    yield { ...snapshot, pdfs: _.uniq(pdfUrls), screenshot, pageshot } as PageSnapshot;
                 }
                 if (error) {
                     throw error;
