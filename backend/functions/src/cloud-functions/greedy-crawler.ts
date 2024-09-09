@@ -4,7 +4,7 @@ import {
     RPCHost, RPCReflection,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, Logger, RPCReflect } from '../shared';
+import { AsyncContext, CloudHTTPv2, CloudTaskV2, Ctx, Logger, Param, RPCReflect } from '../shared';
 import { RateLimitControl } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { Request, Response } from 'express';
@@ -19,7 +19,7 @@ import { CrawlerOptions } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { GreedyCrawlState, GreedyCrawlStateStatus } from '../db/greedy-craw-states';
 import { getFunctions } from 'firebase-admin/functions';
-// import { getFunctionUrl } from '../utils/get-function-url';
+import { getFunctionUrl } from '../utils/get-function-url';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -45,14 +45,13 @@ export class GreedyCrawlerHost extends RPCHost {
 
     @CloudHTTPv2({
         runtime: {
-            memory: '4GiB',
+            memory: '1GiB',
             timeoutSeconds: 300,
             concurrency: 22,
         },
         tags: ['Crawler'],
         httpMethod: ['post', 'get'],
         returnType: [String],
-        exposeRoot: true,
     })
     async greedyCrawl(
         @RPCReflect() rpcReflect: RPCReflection,
@@ -71,7 +70,7 @@ export class GreedyCrawlerHost extends RPCHost {
 
 
         const uid = await auth.solveUID();
-        const { useSitemap, deepLevel, maxPageCount } = greedyCrawlerOptions;
+        const { useSitemap, maxDepth, maxPages } = greedyCrawlerOptions;
         const targetUrl = await this.crawler.getTargetUrl(ctx.req.url, crawlerOptions);
 
         if (!targetUrl) {
@@ -89,10 +88,9 @@ export class GreedyCrawlerHost extends RPCHost {
         const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
         const existing = await GreedyCrawlState.fromFirestore(shortDigest);
 
-        // if (existing) {
-        //     // TODO:
-        //     return existing;
-        // }
+        if (existing) {
+            return { taskId: shortDigest };
+        }
 
         await GreedyCrawlState.COLLECTION.doc(shortDigest).set({
             _id: shortDigest,
@@ -101,8 +99,8 @@ export class GreedyCrawlerHost extends RPCHost {
             meta: {
                 targetUrl: targetUrl.toString(),
                 useSitemap,
-                deepLevel,
-                maxPageCount,
+                maxDepth,
+                maxPages,
             },
             createdAt: new Date(),
             urls: [],
@@ -110,7 +108,7 @@ export class GreedyCrawlerHost extends RPCHost {
         });
 
         if (useSitemap) {
-            const urls = await this.crawlBySitemap(targetUrl, deepLevel, maxPageCount);
+            const urls = await this.crawlBySitemap(targetUrl, maxDepth, maxPages);
 
             await GreedyCrawlState.COLLECTION.doc(shortDigest).update({
                 status: GreedyCrawlStateStatus.PROCESSING,
@@ -120,28 +118,114 @@ export class GreedyCrawlerHost extends RPCHost {
 
             const promises = [];
             for (const url of urls) {
-                // TODO:
-                // promises.push(getFunctions().taskQueue('singleCrawl').enqueue({ shortDigest, url }, {
-                //     dispatchDeadlineSeconds: 1800,
-                //     // uri: await getFunctionUrl('singleCrawl'),
-                // }));
-                promises.push(fetch('http://127.0.0.1:5001/reader-6b7dc/us-central1/singleCrawl', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ data: { shortDigest, url } }),
-                    redirect: "follow"
+                promises.push(getFunctions().taskQueue('singleCrawl').enqueue({ shortDigest, url, token: auth.bearerToken }, {
+                    dispatchDeadlineSeconds: 1800,
+                    uri: await getFunctionUrl('singleCrawl'),
                 }));
             };
 
-            // await Promise.all(promises);
+            await Promise.all(promises);
 
-            return GreedyCrawlState.fromFirestore(shortDigest);
+            return { taskId: shortDigest };
         } else {
             // TODO:
-            return this.crawlByRecursion(targetUrl, deepLevel, maxPageCount);
+            return this.crawlByRecursion(targetUrl, maxDepth, maxPages);
         }
+    }
+
+    @CloudHTTPv2({
+        runtime: {
+            memory: '1GiB',
+            timeoutSeconds: 300,
+            concurrency: 22,
+        },
+        tags: ['Crawler'],
+        httpMethod: ['post', 'get'],
+        returnType: [String],
+    })
+    async fetchGreedyTask(
+        @RPCReflect() rpcReflect: RPCReflection,
+        @Ctx() ctx: {
+            req: Request,
+            res: Response,
+        },
+        auth: JinaEmbeddingsAuthDTO,
+        @Param('taskId') taskId: string
+    ) {
+        if (!taskId) {
+            throw new Error('taskId is required');
+        }
+
+        const state = await GreedyCrawlState.fromFirestore(taskId);
+
+        return state;
+    }
+
+    @CloudTaskV2({
+        runtime: {
+            cpu: 1,
+            memory: '1GiB',
+            timeoutSeconds: 3600,
+            concurrency: 2,
+            maxInstances: 200,
+            retryConfig: {
+                maxAttempts: 3,
+                minBackoffSeconds: 60,
+            },
+            rateLimits: {
+                maxConcurrentDispatches: 150,
+                maxDispatchesPerSecond: 5,
+            },
+        },
+    })
+    async singleCrawl(
+        @Param('shortDigest') shortDigest: string,
+        @Param('url') url: string,
+        @Param('token') token: string,
+    ) {
+        this.logger.debug('singleCrawl', shortDigest, url, token);
+        const state = await GreedyCrawlState.fromFirestore(shortDigest);
+        if (state?.status === GreedyCrawlStateStatus.COMPLETED) {
+            return 'ok';
+        }
+
+        const response = await fetch('https://r.jina.ai', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json',
+            },
+            body: JSON.stringify({ url })
+        })
+
+        if (!response.ok) {
+            throw new Error(`Failed to crawl ${url}`);
+        }
+
+        const json = await response.json();
+
+        await GreedyCrawlState.DB.runTransaction(async (transaction) => {
+            const ref = GreedyCrawlState.COLLECTION.doc(shortDigest);
+            const state = await transaction.get(ref);
+            const data = state.data() as GreedyCrawlState;
+
+            const processed = [
+                ...data.processed,
+                { url, data: json }
+            ];
+
+            const status = processed.length >= data.urls.length ? GreedyCrawlStateStatus.COMPLETED : GreedyCrawlStateStatus.PROCESSING;
+            const statusText = processed.length >= data.urls.length ? 'Completed' : `Processing ${processed.length}/${data.urls.length}`;
+            transaction.update(ref, {
+                status,
+                statusText,
+                processed
+            });
+        });
+
+
+        return 'ok';
     }
 
     getIndex(user?: JinaEmbeddingsTokenAccount) {
@@ -164,7 +248,7 @@ export class GreedyCrawlerHost extends RPCHost {
         return indexObject;
     }
 
-    async crawlBySitemap(url: URL, deepLevel: number, maxPageCount: number) {
+    async crawlBySitemap(url: URL, maxDepth: number, maxPages: number) {
         const sitemapsFromRobotsTxt = await this.getSitemapsFromRobotsTxt(url);
         // 4. 获取 sitemap.xml 中的所有链接
         const initialSitemaps: string[] = [];
@@ -179,7 +263,7 @@ export class GreedyCrawlerHost extends RPCHost {
         const processedSitemaps: Set<string> = new Set();
 
         const fetchSitemapUrls = async (sitemapUrl: string, currentDepth: number = 0) => {
-            if (currentDepth > deepLevel || processedSitemaps.has(sitemapUrl)) {
+            if (currentDepth > maxDepth || processedSitemaps.has(sitemapUrl)) {
                 return;
             }
 
@@ -197,7 +281,7 @@ export class GreedyCrawlerHost extends RPCHost {
                     const locElement = urlElements[i].getElementsByTagName("loc")[0];
                     if (locElement) {
                         allUrls.add(locElement.textContent || "");
-                        if (allUrls.size >= maxPageCount) {
+                        if (allUrls.size >= maxPages) {
                             return;
                         }
                     }
@@ -209,7 +293,7 @@ export class GreedyCrawlerHost extends RPCHost {
                     const locElement = sitemapElements[i].getElementsByTagName("loc")[0];
                     if (locElement) {
                         await fetchSitemapUrls(locElement.textContent || "", currentDepth + 1);
-                        if (allUrls.size >= maxPageCount) {
+                        if (allUrls.size >= maxPages) {
                             return;
                         }
                     }
@@ -221,21 +305,22 @@ export class GreedyCrawlerHost extends RPCHost {
 
         for (const sitemapUrl of initialSitemaps) {
             await fetchSitemapUrls(sitemapUrl);
-            if (allUrls.size >= maxPageCount) {
+            if (allUrls.size >= maxPages) {
                 break;
             }
         }
 
-        const urlsToProcess = Array.from(allUrls).slice(0, maxPageCount);
+        const urlsToProcess = Array.from(allUrls).slice(0, maxPages);
 
         return urlsToProcess;
     }
 
-    async crawlByRecursion(url: URL, deepLevel: number, maxPageCount: number) {
+    async crawlByRecursion(url: URL, maxDepth: number, maxPages: number) {
         // TODO:
         // 1. 获取当前 url 的内容，并解析出所有链接
         // 2. 递归获取所有链接的内容，并设置终止条件
         // 3. 将所有链接的内容存储到数据库中
+        throw new Error('Not implemented');
     }
 
     async getSitemapsFromRobotsTxt(url: URL) {

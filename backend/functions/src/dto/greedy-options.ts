@@ -11,12 +11,12 @@ import type { Request, Response } from 'express';
                     in: 'header',
                     schema: { type: 'string' }
                 },
-                'X-Deep-Level': {
+                'X-Max-Depth': {
                     description: 'Max deep level to crawl.',
                     in: 'header',
                     schema: { type: 'string' }
                 },
-                'X-Max-Page-Count': {
+                'X-Max-Pages': {
                     description: 'Max number of pages to crawl.',
                     in: 'header',
                     schema: { type: 'string' }
@@ -27,24 +27,24 @@ import type { Request, Response } from 'express';
 })
 export class GreedyCrawlerOptions extends AutoCastable {
     @Prop({
-        default: false,
+        default: true,
         desc: 'Use sitemap to crawl the website.',
     })
     useSitemap!: boolean;
 
     @Prop({
-        default: 5,
-        desc: 'Max deep level to crawl.',
-        validate: (v: number) => v >= 0 && v <= 10,
+        default: 2,
+        desc: 'Max depth to crawl.',
+        validate: (v: number) => v >= 0 && v <= 5,
     })
-    deepLevel!: number;
+    maxDepth!: number;
 
     @Prop({
         default: 10,
         desc: 'Max number of pages to crawl.',
-        validate: (v: number) => v >= 0 && v <= 1000,
+        validate: (v: number) => v >= 0 && v <= 100,
     })
-    maxPageCount!: number;
+    maxPages!: number;
 
     static override from(input: any) {
         const instance = super.from(input) as GreedyCrawlerOptions;
@@ -53,19 +53,21 @@ export class GreedyCrawlerOptions extends AutoCastable {
             res: Response,
         } | undefined;
 
-        let deepLevel = parseInt(ctx?.req.get('x-deep-level') || '');
-        if (!isNaN(deepLevel) && deepLevel > 0) {
-            instance.deepLevel = deepLevel <= 10 ? deepLevel : 10;
+        let maxDepth = parseInt(ctx?.req.get('x-max-depth') || '');
+        if (!isNaN(maxDepth) && maxDepth > 0) {
+            instance.maxDepth = maxDepth <= 2 ? maxDepth : 2;
         }
 
-        let maxPageCount = parseInt(ctx?.req.get('x-max-page-count') || '');
-        if (!isNaN(maxPageCount) && maxPageCount > 0) {
-            instance.maxPageCount = maxPageCount <= 1000 ? maxPageCount : 1000;
+        let maxPages = parseInt(ctx?.req.get('x-max-pages') || '');
+        if (!isNaN(maxPages) && maxPages > 0) {
+            instance.maxPages = maxPages <= 100 ? maxPages : 100;
         }
 
         const useSitemap = ctx?.req.get('x-use-sitemap');
         if (useSitemap !== undefined) {
             instance.useSitemap = Boolean(useSitemap);
+        } else {
+            instance.useSitemap = true;
         }
 
         return instance;

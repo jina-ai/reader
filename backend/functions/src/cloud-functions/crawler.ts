@@ -4,7 +4,7 @@ import {
     AssertionFailureError, ParamValidationError, Defer,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, CloudTaskV2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, Param, RPCReflect, SecurityCompromiseError } from '../shared';
+import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect, SecurityCompromiseError } from '../shared';
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -21,7 +21,6 @@ import { DomainBlockade } from '../db/domain-blockade';
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
-import { GreedyCrawlState, GreedyCrawlStateStatus } from '../db/greedy-craw-states';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean;
@@ -350,58 +349,6 @@ export class CrawlerHost extends RPCHost {
         }
 
         return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
-    }
-
-    @CloudTaskV2({
-        runtime: {
-            memory: '4GiB',
-            timeoutSeconds: 300,
-        },
-    })
-    async singleCrawl(
-        @Param('shortDigest') shortDigest: string,
-        @Param('url') url: string,
-    ) {
-        console.log('singleCrawl', shortDigest, url);
-        const state = await GreedyCrawlState.fromFirestore(shortDigest);
-
-        if (!state) {
-            throw new Error('State not found');
-        }
-
-
-        if (state.status === GreedyCrawlStateStatus.COMPLETED) {
-            return 'ok';
-        }
-
-        // TODO:
-        await new Promise((resolve, reject) => {
-            setTimeout(() => {
-                resolve(true);
-            }, Math.random() * 100);
-        });
-
-        await GreedyCrawlState.DB.runTransaction(async (transaction) => {
-            const ref = GreedyCrawlState.COLLECTION.doc(shortDigest);
-            const state = await transaction.get(ref);
-            const data = state.data() as GreedyCrawlState;
-
-            const processed = [
-                ...data.processed,
-                url
-            ];
-
-            const status = processed.length >= data.urls.length ? GreedyCrawlStateStatus.COMPLETED : GreedyCrawlStateStatus.PROCESSING;
-            const statusText = processed.length >= data.urls.length ? 'Completed' : `Processing ${processed.length}/${data.urls.length}`;
-            transaction.update(ref, {
-                status,
-                statusText,
-                processed
-            });
-        });
-
-
-        return 'ok';
     }
 
     async getTargetUrl(originPath: string, crawlerOptions: CrawlerOptions) {

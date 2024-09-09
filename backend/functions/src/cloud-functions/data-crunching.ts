@@ -17,7 +17,6 @@ import { createReadStream } from 'fs';
 import { appendFile } from 'fs/promises';
 import { createGzip } from 'zlib';
 import { getFunctions } from 'firebase-admin/functions';
-import { GoogleAuth } from 'google-auth-library';
 import { SnapshotFormatter } from '../services/snapshot-formatter';
 import { getFunctionUrl } from '../utils/get-function-url';
 

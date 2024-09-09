@@ -1,4 +1,4 @@
-import { Also, Prop, parseJSONText } from 'civkit';
+import { Also, ArrayOf, Prop, parseJSONText } from 'civkit';
 import { FirestoreRecord } from '../shared/lib/firestore';
 import _ from 'lodash';
 
@@ -33,14 +33,16 @@ export class GreedyCrawlState extends FirestoreRecord {
     @Prop()
     urls!: string[];
 
-    @Prop()
-    processed!: string[];
+    @Prop({
+        type: ArrayOf(Object)
+    })
+    processed!: any[];
 
     @Prop()
     createdAt!: Date;
 
     static patchedFields = [
-        'meta'
+        'meta',
     ];
 
     static override from(input: any) {
