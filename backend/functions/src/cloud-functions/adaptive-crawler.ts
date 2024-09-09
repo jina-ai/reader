@@ -4,21 +4,20 @@ import {
     RPCHost, RPCReflection,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, CloudTaskV2, Ctx, Logger, Param, RPCReflect } from '../shared';
-import { RateLimitControl } from '../shared/services/rate-limit';
+import { CloudHTTPv2, CloudTaskV2, Ctx, Logger, Param, RPCReflect } from '../shared';
 import _ from 'lodash';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import robotsParser from 'robots-parser';
 import { DOMParser } from 'xmldom';
 
-import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { AdaptiveCrawlerOptions } from '../dto/adaptive-crawler-options';
 import { CrawlerOptions } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { AdaptiveCrawlTask, AdaptiveCrawlTaskStatus } from '../db/adaptive-crawl-task';
 import { getFunctions } from 'firebase-admin/functions';
 import { getFunctionUrl } from '../utils/get-function-url';
+import { Timestamp } from 'firebase-admin/firestore';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -26,11 +25,10 @@ const md5Hasher = new HashManager('md5', 'hex');
 export class AdaptiveCrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
+    static readonly __singleCrawlQueueName = 'singleCrawlQueue';
+
     constructor(
         protected globalLogger: Logger,
-        protected rateLimitControl: RateLimitControl,
-        protected threadLocal: AsyncContext,
-        protected fbHealthCheck: FirebaseRoundTripChecker,
     ) {
         super(...arguments);
     }
@@ -121,9 +119,11 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
             const promises = [];
             for (const url of urls) {
-                promises.push(getFunctions().taskQueue('singleCrawlQueue').enqueue({ shortDigest, url, token: auth.bearerToken }, {
+                promises.push(getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
+                    shortDigest, url, token: auth.bearerToken
+                }, {
                     dispatchDeadlineSeconds: 1800,
-                    uri: await getFunctionUrl('singleCrawlQueue'),
+                    uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
                 }));
             };
 
@@ -165,6 +165,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
     }
 
     @CloudTaskV2({
+        name: AdaptiveCrawlerHost.__singleCrawlQueueName,
         runtime: {
             cpu: 1,
             memory: '1GiB',
@@ -186,7 +187,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         @Param('url') url: string,
         @Param('token') token: string,
     ) {
-        this.logger.debug('singleCrawlQueue', shortDigest, url, token);
+        this.logger.debug(shortDigest, url);
         const state = await AdaptiveCrawlTask.fromFirestore(shortDigest);
         if (state?.status === AdaptiveCrawlTaskStatus.COMPLETED) {
             return 'ok';
@@ -203,7 +204,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         })
 
         if (!response.ok) {
-            throw new Error(`Failed to crawl ${url}`);
+            throw new Error(`Failed to crawl ${url}, ${response.statusText}`);
         }
 
         const json = await response.json();
@@ -211,7 +212,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
             const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
             const state = await transaction.get(ref);
-            const data = state.data() as AdaptiveCrawlTask;
+            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
 
             const processed = [
                 ...data.processed,
@@ -229,7 +230,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
             if (status === AdaptiveCrawlTaskStatus.COMPLETED) {
                 payload.finishedAt = new Date();
-                payload.duration = new Date().getTime() - data.createdAt.getTime();
+                payload.duration = new Date().getTime() - data.createdAt.toDate().getTime();
             }
 
             transaction.update(ref, payload);
