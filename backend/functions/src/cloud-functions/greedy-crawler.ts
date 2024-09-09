@@ -1,5 +1,6 @@
 import {
     assignTransferProtocolMeta,
+    HashManager,
     RPCHost, RPCReflection,
 } from 'civkit';
 import { singleton } from 'tsyringe';
@@ -16,6 +17,11 @@ import { CrawlerHost, indexProto } from './crawler';
 import { GreedyCrawlerOptions } from '../dto/greedy-options';
 import { CrawlerOptions } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
+import { GreedyCrawlState, GreedyCrawlStateStatus } from '../db/greedy-craw-states';
+import { getFunctions } from 'firebase-admin/functions';
+// import { getFunctionUrl } from '../utils/get-function-url';
+
+const md5Hasher = new HashManager('md5', 'hex');
 
 @singleton()
 export class GreedyCrawlerHost extends RPCHost {
@@ -58,7 +64,7 @@ export class GreedyCrawlerHost extends RPCHost {
         crawlerOptions: CrawlerOptions,
         greedyCrawlerOptions: GreedyCrawlerOptions,
     ) {
-        this.logger.info({
+        this.logger.debug({
             greedyCrawlerOptions,
             crawlerOptions,
         });
@@ -79,9 +85,61 @@ export class GreedyCrawlerHost extends RPCHost {
             );
         }
 
+        const digest = md5Hasher.hash(targetUrl.toString());
+        const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
+        const existing = await GreedyCrawlState.fromFirestore(shortDigest);
+
+        // if (existing) {
+        //     // TODO:
+        //     return existing;
+        // }
+
+        await GreedyCrawlState.COLLECTION.doc(shortDigest).set({
+            _id: shortDigest,
+            status: GreedyCrawlStateStatus.PENDING,
+            statusText: 'Pending',
+            meta: {
+                targetUrl: targetUrl.toString(),
+                useSitemap,
+                deepLevel,
+                maxPageCount,
+            },
+            createdAt: new Date(),
+            urls: [],
+            processed: [],
+        });
+
         if (useSitemap) {
-            return this.crawlBySitemap(targetUrl, deepLevel, maxPageCount);
+            const urls = await this.crawlBySitemap(targetUrl, deepLevel, maxPageCount);
+
+            await GreedyCrawlState.COLLECTION.doc(shortDigest).update({
+                status: GreedyCrawlStateStatus.PROCESSING,
+                statusText: `Processing 0/${urls.length}`,
+                urls,
+            });
+
+            const promises = [];
+            for (const url of urls) {
+                // TODO:
+                // promises.push(getFunctions().taskQueue('singleCrawl').enqueue({ shortDigest, url }, {
+                //     dispatchDeadlineSeconds: 1800,
+                //     // uri: await getFunctionUrl('singleCrawl'),
+                // }));
+                promises.push(fetch('http://127.0.0.1:5001/reader-6b7dc/us-central1/singleCrawl', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ data: { shortDigest, url } }),
+                    redirect: "follow"
+                }));
+            };
+
+            // await Promise.all(promises);
+
+            return GreedyCrawlState.fromFirestore(shortDigest);
         } else {
+            // TODO:
             return this.crawlByRecursion(targetUrl, deepLevel, maxPageCount);
         }
     }
