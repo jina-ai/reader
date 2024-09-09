@@ -118,9 +118,9 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
             const promises = [];
             for (const url of urls) {
-                promises.push(getFunctions().taskQueue('singleCrawl').enqueue({ shortDigest, url, token: auth.bearerToken }, {
+                promises.push(getFunctions().taskQueue('singleCrawlQueue').enqueue({ shortDigest, url, token: auth.bearerToken }, {
                     dispatchDeadlineSeconds: 1800,
-                    uri: await getFunctionUrl('singleCrawl'),
+                    uri: await getFunctionUrl('singleCrawlQueue'),
                 }));
             };
 
@@ -178,12 +178,12 @@ export class AdaptiveCrawlerHost extends RPCHost {
             },
         },
     })
-    async singleCrawl(
+    async singleCrawlQueue(
         @Param('shortDigest') shortDigest: string,
         @Param('url') url: string,
         @Param('token') token: string,
     ) {
-        this.logger.debug('singleCrawl', shortDigest, url, token);
+        this.logger.debug('singleCrawlQueue', shortDigest, url, token);
         const state = await AdaptiveCrawlTask.fromFirestore(shortDigest);
         if (state?.status === AdaptiveCrawlTaskStatus.COMPLETED) {
             return 'ok';
