@@ -14,17 +14,17 @@ import { DOMParser } from 'xmldom';
 
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { CrawlerHost, indexProto } from './crawler';
-import { GreedyCrawlerOptions } from '../dto/greedy-options';
+import { AdaptiveCrawlerOptions } from '../dto/adaptive-crawler-options';
 import { CrawlerOptions } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
-import { GreedyCrawlState, GreedyCrawlStateStatus } from '../db/greedy-craw-states';
+import { AdaptiveCrawlTask, AdaptiveCrawlTaskStatus } from '../db/adaptive-crawl-task';
 import { getFunctions } from 'firebase-admin/functions';
 import { getFunctionUrl } from '../utils/get-function-url';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
 @singleton()
-export class GreedyCrawlerHost extends RPCHost {
+export class AdaptiveCrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     constructor(
@@ -53,7 +53,7 @@ export class GreedyCrawlerHost extends RPCHost {
         httpMethod: ['post', 'get'],
         returnType: [String],
     })
-    async greedyCrawl(
+    async adaptiveCrawl(
         @RPCReflect() rpcReflect: RPCReflection,
         @Ctx() ctx: {
             req: Request,
@@ -61,16 +61,16 @@ export class GreedyCrawlerHost extends RPCHost {
         },
         auth: JinaEmbeddingsAuthDTO,
         crawlerOptions: CrawlerOptions,
-        greedyCrawlerOptions: GreedyCrawlerOptions,
+        adaptiveCrawlerOptions: AdaptiveCrawlerOptions,
     ) {
         this.logger.debug({
-            greedyCrawlerOptions,
+            adaptiveCrawlerOptions,
             crawlerOptions,
         });
 
 
         const uid = await auth.solveUID();
-        const { useSitemap, maxDepth, maxPages } = greedyCrawlerOptions;
+        const { useSitemap, maxDepth, maxPages } = adaptiveCrawlerOptions;
         const targetUrl = await this.crawler.getTargetUrl(ctx.req.url, crawlerOptions);
 
         if (!targetUrl) {
@@ -86,15 +86,15 @@ export class GreedyCrawlerHost extends RPCHost {
 
         const digest = md5Hasher.hash(targetUrl.toString());
         const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
-        const existing = await GreedyCrawlState.fromFirestore(shortDigest);
+        const existing = await AdaptiveCrawlTask.fromFirestore(shortDigest);
 
         if (existing) {
             return { taskId: shortDigest };
         }
 
-        await GreedyCrawlState.COLLECTION.doc(shortDigest).set({
+        await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).set({
             _id: shortDigest,
-            status: GreedyCrawlStateStatus.PENDING,
+            status: AdaptiveCrawlTaskStatus.PENDING,
             statusText: 'Pending',
             meta: {
                 targetUrl: targetUrl.toString(),
@@ -110,8 +110,8 @@ export class GreedyCrawlerHost extends RPCHost {
         if (useSitemap) {
             const urls = await this.crawlBySitemap(targetUrl, maxDepth, maxPages);
 
-            await GreedyCrawlState.COLLECTION.doc(shortDigest).update({
-                status: GreedyCrawlStateStatus.PROCESSING,
+            await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).update({
+                status: AdaptiveCrawlTaskStatus.PROCESSING,
                 statusText: `Processing 0/${urls.length}`,
                 urls,
             });
@@ -143,7 +143,7 @@ export class GreedyCrawlerHost extends RPCHost {
         httpMethod: ['post', 'get'],
         returnType: [String],
     })
-    async fetchGreedyTask(
+    async adaptiveCrawlStatus(
         @RPCReflect() rpcReflect: RPCReflection,
         @Ctx() ctx: {
             req: Request,
@@ -156,7 +156,7 @@ export class GreedyCrawlerHost extends RPCHost {
             throw new Error('taskId is required');
         }
 
-        const state = await GreedyCrawlState.fromFirestore(taskId);
+        const state = await AdaptiveCrawlTask.fromFirestore(taskId);
 
         return state;
     }
@@ -184,8 +184,8 @@ export class GreedyCrawlerHost extends RPCHost {
         @Param('token') token: string,
     ) {
         this.logger.debug('singleCrawl', shortDigest, url, token);
-        const state = await GreedyCrawlState.fromFirestore(shortDigest);
-        if (state?.status === GreedyCrawlStateStatus.COMPLETED) {
+        const state = await AdaptiveCrawlTask.fromFirestore(shortDigest);
+        if (state?.status === AdaptiveCrawlTaskStatus.COMPLETED) {
             return 'ok';
         }
 
@@ -205,26 +205,26 @@ export class GreedyCrawlerHost extends RPCHost {
 
         const json = await response.json();
 
-        await GreedyCrawlState.DB.runTransaction(async (transaction) => {
-            const ref = GreedyCrawlState.COLLECTION.doc(shortDigest);
+        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
+            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
             const state = await transaction.get(ref);
-            const data = state.data() as GreedyCrawlState;
+            const data = state.data() as AdaptiveCrawlTask;
 
             const processed = [
                 ...data.processed,
                 { [url]: json }
             ];
 
-            const status = processed.length >= data.urls.length ? GreedyCrawlStateStatus.COMPLETED : GreedyCrawlStateStatus.PROCESSING;
+            const status = processed.length >= data.urls.length ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
             const statusText = processed.length >= data.urls.length ? 'Completed' : `Processing ${processed.length}/${data.urls.length}`;
 
-            const payload: Partial<GreedyCrawlState> = {
+            const payload: Partial<AdaptiveCrawlTask> = {
                 status,
                 statusText,
                 processed
             };
 
-            if (status === GreedyCrawlStateStatus.COMPLETED) {
+            if (status === AdaptiveCrawlTaskStatus.COMPLETED) {
                 payload.finishedAt = new Date();
                 payload.duration = new Date().getTime() - data.createdAt.getTime();
             }

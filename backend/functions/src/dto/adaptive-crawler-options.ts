@@ -25,7 +25,7 @@ import type { Request, Response } from 'express';
         }
     }
 })
-export class GreedyCrawlerOptions extends AutoCastable {
+export class AdaptiveCrawlerOptions extends AutoCastable {
     @Prop({
         default: true,
         desc: 'Use sitemap to crawl the website.',
@@ -47,7 +47,7 @@ export class GreedyCrawlerOptions extends AutoCastable {
     maxPages!: number;
 
     static override from(input: any) {
-        const instance = super.from(input) as GreedyCrawlerOptions;
+        const instance = super.from(input) as AdaptiveCrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
             req: Request,
             res: Response,

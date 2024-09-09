@@ -3,7 +3,7 @@ import { FirestoreRecord } from '../shared/lib/firestore';
 import _ from 'lodash';
 import { FormattedPage } from '../services/snapshot-formatter';
 
-export enum GreedyCrawlStateStatus {
+export enum AdaptiveCrawlTaskStatus {
     PENDING = 'pending',
     PROCESSING = 'processing',
     COMPLETED = 'completed',
@@ -13,7 +13,7 @@ export enum GreedyCrawlStateStatus {
 @Also({
     dictOf: Object
 })
-export class GreedyCrawlState extends FirestoreRecord {
+export class AdaptiveCrawlTask extends FirestoreRecord {
     static override collectionName = 'greedyCrawlStates';
 
     override _id!: string;
@@ -21,7 +21,7 @@ export class GreedyCrawlState extends FirestoreRecord {
     @Prop({
         required: true
     })
-    status!: GreedyCrawlStateStatus;
+    status!: AdaptiveCrawlTaskStatus;
 
     @Prop({
         required: true
@@ -65,13 +65,13 @@ export class GreedyCrawlState extends FirestoreRecord {
             }
         }
 
-        return super.from(input) as GreedyCrawlState;
+        return super.from(input) as AdaptiveCrawlTask;
     }
 
     override degradeForFireStore() {
         const copy: any = { ...this };
 
-        for (const field of (this.constructor as typeof GreedyCrawlState).patchedFields) {
+        for (const field of (this.constructor as typeof AdaptiveCrawlTask).patchedFields) {
             if (typeof copy[field] === 'object') {
                 copy[field] = JSON.stringify(copy[field]) as any;
             }
