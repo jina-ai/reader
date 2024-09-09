@@ -1,6 +1,7 @@
 import { Also, ArrayOf, Prop, parseJSONText } from 'civkit';
 import { FirestoreRecord } from '../shared/lib/firestore';
 import _ from 'lodash';
+import { FormattedPage } from '../services/snapshot-formatter';
 
 export enum GreedyCrawlStateStatus {
     PENDING = 'pending',
@@ -36,10 +37,22 @@ export class GreedyCrawlState extends FirestoreRecord {
     @Prop({
         type: ArrayOf(Object)
     })
-    processed!: any[];
+    processed!: {
+        [url: string]: {
+            code: number;
+            status: number;
+            data: FormattedPage;
+        }
+    }[];
 
     @Prop()
     createdAt!: Date;
+
+    @Prop()
+    finishedAt?: Date;
+
+    @Prop()
+    duration?: number;
 
     static patchedFields = [
         'meta',

@@ -212,16 +212,24 @@ export class GreedyCrawlerHost extends RPCHost {
 
             const processed = [
                 ...data.processed,
-                { url, data: json }
+                { [url]: json }
             ];
 
             const status = processed.length >= data.urls.length ? GreedyCrawlStateStatus.COMPLETED : GreedyCrawlStateStatus.PROCESSING;
             const statusText = processed.length >= data.urls.length ? 'Completed' : `Processing ${processed.length}/${data.urls.length}`;
-            transaction.update(ref, {
+
+            const payload: Partial<GreedyCrawlState> = {
                 status,
                 statusText,
                 processed
-            });
+            };
+
+            if (status === GreedyCrawlStateStatus.COMPLETED) {
+                payload.finishedAt = new Date();
+                payload.duration = new Date().getTime() - data.createdAt.getTime();
+            }
+
+            transaction.update(ref, payload);
         });
 
 
