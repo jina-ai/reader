@@ -14,7 +14,7 @@ export enum AdaptiveCrawlTaskStatus {
     dictOf: Object
 })
 export class AdaptiveCrawlTask extends FirestoreRecord {
-    static override collectionName = 'greedyCrawlStates';
+    static override collectionName = 'adaptiveCrawlTasks';
 
     override _id!: string;
 

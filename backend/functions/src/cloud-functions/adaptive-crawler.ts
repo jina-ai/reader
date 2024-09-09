@@ -13,7 +13,6 @@ import robotsParser from 'robots-parser';
 import { DOMParser } from 'xmldom';
 
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
-import { CrawlerHost, indexProto } from './crawler';
 import { AdaptiveCrawlerOptions } from '../dto/adaptive-crawler-options';
 import { CrawlerOptions } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
@@ -32,7 +31,6 @@ export class AdaptiveCrawlerHost extends RPCHost {
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncContext,
         protected fbHealthCheck: FirebaseRoundTripChecker,
-        protected crawler: CrawlerHost,
     ) {
         super(...arguments);
     }
@@ -71,7 +69,12 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
         const uid = await auth.solveUID();
         const { useSitemap, maxDepth, maxPages } = adaptiveCrawlerOptions;
-        const targetUrl = await this.crawler.getTargetUrl(ctx.req.url, crawlerOptions);
+
+        let tmpUrl = ctx.req.url.slice(1)?.trim();
+        if (!tmpUrl) {
+            tmpUrl = crawlerOptions.url?.trim() ?? '';
+        }
+        const targetUrl = new URL(tmpUrl);
 
         if (!targetUrl) {
             const latestUser = uid ? await auth.assertUser() : undefined;
@@ -238,22 +241,22 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
     getIndex(user?: JinaEmbeddingsTokenAccount) {
         // TODO: 需要更新使用方式
-        const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
+        // const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
 
-        Object.assign(indexObject, {
-            usage1: 'https://r.jina.ai/YOUR_URL',
-            usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
-            homepage: 'https://jina.ai/reader',
-            sourceCode: 'https://github.com/jina-ai/reader',
-        });
+        // Object.assign(indexObject, {
+        //     usage1: 'https://r.jina.ai/YOUR_URL',
+        //     usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
+        //     homepage: 'https://jina.ai/reader',
+        //     sourceCode: 'https://github.com/jina-ai/reader',
+        // });
 
-        if (user) {
-            indexObject[''] = undefined;
-            indexObject.authenticatedAs = `${user.user_id} (${user.full_name})`;
-            indexObject.balanceLeft = user.wallet.total_balance;
-        }
+        // if (user) {
+        //     indexObject[''] = undefined;
+        //     indexObject.authenticatedAs = `${user.user_id} (${user.full_name})`;
+        //     indexObject.balanceLeft = user.wallet.total_balance;
+        // }
 
-        return indexObject;
+        // return indexObject;
     }
 
     async crawlBySitemap(url: URL, maxDepth: number, maxPages: number) {
