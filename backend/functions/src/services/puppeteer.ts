@@ -573,6 +573,12 @@ document.addEventListener('load', handlePageLoad);
                         cause: err,
                     });
                 }
+                if (err?.message?.startsWith('net::ERR_ABORTED')) {
+                    if (pdfUrls.length) {
+                        // Not throw for pdf mode.
+                        return;
+                    }
+                }
 
                 this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err: marshalErrorLike(err) });
                 return Promise.reject(new AssertionFailureError({
