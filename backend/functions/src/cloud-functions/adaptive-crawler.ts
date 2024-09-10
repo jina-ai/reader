@@ -4,7 +4,7 @@ import {
     RPCHost, RPCReflection,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { CloudHTTPv2, CloudTaskV2, Ctx, Logger, Param, RPCReflect } from '../shared';
+import { CloudHTTPv2, CloudTaskV2, Ctx, FirebaseStorageBucketControl, Logger, Param, RPCReflect } from '../shared';
 import _ from 'lodash';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
@@ -29,6 +29,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
     constructor(
         protected globalLogger: Logger,
+        protected firebaseObjectStorage: FirebaseStorageBucketControl,
     ) {
         super(...arguments);
     }
@@ -107,7 +108,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             meta,
             createdAt: new Date(),
             urls: [],
-            processed: [],
+            processed: {},
         });
 
         if (useSitemap) {
@@ -146,7 +147,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         },
         tags: ['Crawler'],
         httpMethod: ['post', 'get'],
-        returnType: [String],
+        returnType: AdaptiveCrawlTask,
     })
     async adaptiveCrawlStatus(
         @RPCReflect() rpcReflect: RPCReflection,
@@ -162,6 +163,13 @@ export class AdaptiveCrawlerHost extends RPCHost {
         }
 
         const state = await AdaptiveCrawlTask.fromFirestore(taskId);
+
+        const promises = Object.entries(state?.processed ?? {}).map(async ([url, cachePath]) => {
+            const raw = await this.firebaseObjectStorage.downloadFile(cachePath);
+            state!.processed[url] = JSON.parse(raw.toString('utf-8'));
+        });
+
+        await Promise.all(promises);
 
         return state;
     }
@@ -182,7 +190,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
                 maxConcurrentDispatches: 150,
                 maxDispatchesPerSecond: 5,
             },
-        },
+        }
     })
     async singleCrawlQueue(
         @Param('shortDigest') shortDigest: string,
@@ -211,18 +219,31 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
         const json = await response.json();
 
+        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
+        await this.firebaseObjectStorage.saveFile(cachePath,
+            Buffer.from(
+                JSON.stringify(json),
+                'utf-8'
+            ),
+            {
+                metadata: {
+                    contentType: 'application/json',
+                }
+            }
+        )
+
         await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
             const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
             const state = await transaction.get(ref);
             const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
 
-            const processed = [
+            const processed = {
                 ...data.processed,
-                { [url]: json }
-            ];
+                [url]: cachePath,
+            };
 
-            const status = processed.length >= data.urls.length ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
-            const statusText = processed.length >= data.urls.length ? 'Completed' : `Processing ${processed.length}/${data.urls.length}`;
+            const status = Object.keys(processed).length >= data.urls.length ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
+            const statusText = Object.keys(processed).length >= data.urls.length ? 'Completed' : `Processing ${Object.keys(processed).length}/${data.urls.length}`;
 
             const payload: Partial<AdaptiveCrawlTask> = {
                 status,
@@ -272,11 +293,13 @@ export class AdaptiveCrawlerHost extends RPCHost {
             initialSitemaps.push(...sitemapsFromRobotsTxt);
         }
 
-        // 递归获取sitemap中的所有URL
+
         const allUrls: Set<string> = new Set();
         const processedSitemaps: Set<string> = new Set();
 
         const fetchSitemapUrls = async (sitemapUrl: string, currentDepth: number = 0) => {
+            sitemapUrl = sitemapUrl.trim();
+
             if (currentDepth > maxDepth || processedSitemaps.has(sitemapUrl)) {
                 return;
             }
@@ -287,14 +310,17 @@ export class AdaptiveCrawlerHost extends RPCHost {
                 const response = await fetch(sitemapUrl);
                 const sitemapContent = await response.text();
                 const parser = new DOMParser();
-                const xmlDoc = parser.parseFromString(sitemapContent, "text/xml");
+                const xmlDoc = parser.parseFromString(sitemapContent, 'text/xml');
 
                 // handle normal sitemap
-                const urlElements = xmlDoc.getElementsByTagName("url");
+                const urlElements = xmlDoc.getElementsByTagName('url');
                 for (let i = 0; i < urlElements.length; i++) {
-                    const locElement = urlElements[i].getElementsByTagName("loc")[0];
+                    const locElement = urlElements[i].getElementsByTagName('loc')[0];
                     if (locElement) {
-                        allUrls.add(locElement.textContent || "");
+                        const loc = locElement.textContent?.trim() || '';
+                        if (loc.startsWith(url.origin) && !loc.endsWith('.xml')) {
+                            allUrls.add(loc);
+                        }
                         if (allUrls.size >= maxPages) {
                             return;
                         }
@@ -302,11 +328,11 @@ export class AdaptiveCrawlerHost extends RPCHost {
                 }
 
                 // handle sitemap index
-                const sitemapElements = xmlDoc.getElementsByTagName("sitemap");
+                const sitemapElements = xmlDoc.getElementsByTagName('sitemap');
                 for (let i = 0; i < sitemapElements.length; i++) {
-                    const locElement = sitemapElements[i].getElementsByTagName("loc")[0];
+                    const locElement = sitemapElements[i].getElementsByTagName('loc')[0];
                     if (locElement) {
-                        await fetchSitemapUrls(locElement.textContent || "", currentDepth + 1);
+                        await fetchSitemapUrls(locElement.textContent?.trim() || '', currentDepth + 1);
                         if (allUrls.size >= maxPages) {
                             return;
                         }

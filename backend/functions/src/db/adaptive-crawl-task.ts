@@ -1,7 +1,6 @@
-import { Also, ArrayOf, Prop, parseJSONText } from 'civkit';
+import { Also, Prop, parseJSONText } from 'civkit';
 import { FirestoreRecord } from '../shared/lib/firestore';
 import _ from 'lodash';
-import { FormattedPage } from '../services/snapshot-formatter';
 
 export enum AdaptiveCrawlTaskStatus {
     PENDING = 'pending',
@@ -34,16 +33,10 @@ export class AdaptiveCrawlTask extends FirestoreRecord {
     @Prop()
     urls!: string[];
 
-    @Prop({
-        type: ArrayOf(Object)
-    })
+    @Prop()
     processed!: {
-        [url: string]: {
-            code: number;
-            status: number;
-            data: FormattedPage;
-        }
-    }[];
+        [url: string]: string;
+    };
 
     @Prop()
     createdAt!: Date;
