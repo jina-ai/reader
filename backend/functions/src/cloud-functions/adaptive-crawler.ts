@@ -156,7 +156,8 @@ export class AdaptiveCrawlerHost extends RPCHost {
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
-        @Param('taskId') taskId: string
+        @Param('taskId') taskId: string,
+        @Param('urls') urls: string[] = [],
     ) {
         if (!taskId) {
             throw new Error('taskId is required');
@@ -164,12 +165,17 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
         const state = await AdaptiveCrawlTask.fromFirestore(taskId);
 
-        const promises = Object.entries(state?.processed ?? {}).map(async ([url, cachePath]) => {
-            const raw = await this.firebaseObjectStorage.downloadFile(cachePath);
-            state!.processed[url] = JSON.parse(raw.toString('utf-8'));
-        });
+        if (urls.length) {
+            const promises = Object.entries(state?.processed ?? {}).map(async ([url, cachePath]) => {
+                if (urls.includes(url)) {
+                    const raw = await this.firebaseObjectStorage.downloadFile(cachePath);
+                    state!.processed[url] = JSON.parse(raw.toString('utf-8'));
+                }
+            });
 
-        await Promise.all(promises);
+            await Promise.all(promises);
+        }
+
 
         return state;
     }
