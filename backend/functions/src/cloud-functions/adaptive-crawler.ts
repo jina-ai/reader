@@ -85,7 +85,14 @@ export class AdaptiveCrawlerHost extends RPCHost {
             );
         }
 
-        const digest = md5Hasher.hash(targetUrl.toString());
+        const meta = {
+            targetUrl: targetUrl.toString(),
+            useSitemap,
+            maxDepth,
+            maxPages,
+        };
+
+        const digest = md5Hasher.hash(JSON.stringify(meta));
         const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
         const existing = await AdaptiveCrawlTask.fromFirestore(shortDigest);
 
@@ -97,12 +104,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             _id: shortDigest,
             status: AdaptiveCrawlTaskStatus.PENDING,
             statusText: 'Pending',
-            meta: {
-                targetUrl: targetUrl.toString(),
-                useSitemap,
-                maxDepth,
-                maxPages,
-            },
+            meta,
             createdAt: new Date(),
             urls: [],
             processed: [],
@@ -262,7 +264,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
     async crawlBySitemap(url: URL, maxDepth: number, maxPages: number) {
         const sitemapsFromRobotsTxt = await this.getSitemapsFromRobotsTxt(url);
-        // 4. 获取 sitemap.xml 中的所有链接
+
         const initialSitemaps: string[] = [];
         if (sitemapsFromRobotsTxt === null) {
             initialSitemaps.push(`${url.origin}/sitemap.xml`);
