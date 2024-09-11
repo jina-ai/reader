@@ -316,6 +316,7 @@ export class SnapshotFormatter extends AsyncService {
 
         const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
+            description: (snapshot.description || '').trim(),
             url: nominalUrl?.toString() || snapshot.href?.trim(),
             content: cleanText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,

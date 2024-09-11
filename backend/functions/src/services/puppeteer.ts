@@ -42,6 +42,7 @@ export interface ReadabilityParsed {
 
 export interface PageSnapshot {
     title: string;
+    description: string;
     href: string;
     rebase?: string;
     html: string;
@@ -167,6 +168,7 @@ function giveSnapshot(stopActiveSnapshot) {
     const domAnalysis = getMaxDepthAndCountUsingTreeWalker(document.documentElement);
     const r = {
         title: document.title,
+        description: document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? '',
         href: document.location.href,
         html: document.documentElement?.outerHTML,
         text: document.body?.innerText,
