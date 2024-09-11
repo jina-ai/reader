@@ -112,7 +112,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         });
 
         if (useSitemap) {
-            const urls = await this.crawlBySitemap(targetUrl, maxDepth, maxPages);
+            const urls = await this.crawlUrlsFromSitemap(targetUrl, maxDepth, maxPages);
 
             await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).update({
                 status: AdaptiveCrawlTaskStatus.PROCESSING,
@@ -123,7 +123,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             const promises = [];
             for (const url of urls) {
                 promises.push(getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
-                    shortDigest, url, token: auth.bearerToken
+                    shortDigest, url, token: auth.bearerToken, meta
                 }, {
                     dispatchDeadlineSeconds: 1800,
                     uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
@@ -131,12 +131,20 @@ export class AdaptiveCrawlerHost extends RPCHost {
             };
 
             await Promise.all(promises);
-
-            return { taskId: shortDigest };
         } else {
-            // TODO:
-            return this.crawlByRecursion(targetUrl, maxDepth, maxPages);
+            await getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
+                shortDigest, url: targetUrl.toString(), token: auth.bearerToken, meta: {
+                    ...meta,
+                    currentDepth: 0,
+                    currentPage: 1,
+                }
+            }, {
+                dispatchDeadlineSeconds: 1800,
+                uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
+            })
         }
+
+        return { taskId: shortDigest };
     }
 
     @CloudHTTPv2({
@@ -202,13 +210,23 @@ export class AdaptiveCrawlerHost extends RPCHost {
         @Param('shortDigest') shortDigest: string,
         @Param('url') url: string,
         @Param('token') token: string,
+        @Param('meta') meta: AdaptiveCrawlTask['meta'] & { currentDepth: number; currentPage: number },
     ) {
-        this.logger.debug(shortDigest, url);
+        this.logger.debug(shortDigest, url, meta);
+
         const state = await AdaptiveCrawlTask.fromFirestore(shortDigest);
         if (state?.status === AdaptiveCrawlTaskStatus.COMPLETED) {
             return 'ok';
         }
 
+        if (meta.useSitemap) {
+            return this.handleSingleCrawl(shortDigest, url, token);
+        } else {
+            return this.handleSingleCrawlRecursively(shortDigest, url, token, meta);
+        }
+    }
+
+    async handleSingleCrawl(shortDigest: string, url: string, token: string) {
         const response = await fetch('https://r.jina.ai', {
             method: 'POST',
             headers: {
@@ -269,6 +287,86 @@ export class AdaptiveCrawlerHost extends RPCHost {
         return 'ok';
     }
 
+    async handleSingleCrawlRecursively(
+        shortDigest: string, url: string, token: string, meta: AdaptiveCrawlTask['meta'] & { currentDepth: number; currentPage: number }
+    ) {
+        const response = await fetch('https://r.jina.ai', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/json',
+                'X-With-Links-Summary': 'true',
+            },
+            body: JSON.stringify({ url })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to crawl ${url}, ${response.statusText}`);
+        }
+
+        const json = await response.json();
+
+        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
+        await this.firebaseObjectStorage.saveFile(cachePath,
+            Buffer.from(
+                JSON.stringify(json),
+                'utf-8'
+            ),
+            {
+                metadata: {
+                    contentType: 'application/json',
+                }
+            }
+        )
+
+        // const topic = json.data.title;
+        const links = json.data.links as Record<string, string>;
+
+        // TODO: get links via reranker
+        const urls = Object.entries(links).map(([title, url]) => (url)).slice(0, 5);
+
+
+        const promises = [];
+        for (const url of urls) {
+            meta.currentPage += 1;
+
+            if (meta.currentPage > meta.maxPages) {
+                break;
+            }
+
+            promises.push(getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
+                shortDigest, url, token, meta
+            }, {
+                dispatchDeadlineSeconds: 1800,
+                uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
+            }));
+        };
+        await Promise.all(promises);
+
+        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
+            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
+            const state = await transaction.get(ref);
+            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
+
+            const processed = {
+                ...data.processed,
+                [url]: cachePath,
+            };
+
+            const status = Object.keys(processed).length >= meta.maxPages ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
+            const statusText = Object.keys(processed).length >= meta.maxPages ? 'Completed' : `Processing ${Object.keys(processed).length}/${meta.maxPages}`;
+
+            const payload: Partial<AdaptiveCrawlTask> = {
+                status,
+                statusText,
+                processed
+            };
+
+            transaction.update(ref, payload);
+        });
+    }
+
     getIndex(user?: JinaEmbeddingsTokenAccount) {
         // TODO: 需要更新使用方式
         // const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
@@ -289,7 +387,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         // return indexObject;
     }
 
-    async crawlBySitemap(url: URL, maxDepth: number, maxPages: number) {
+    async crawlUrlsFromSitemap(url: URL, maxDepth: number, maxPages: number) {
         const sitemapsFromRobotsTxt = await this.getSitemapsFromRobotsTxt(url);
 
         const initialSitemaps: string[] = [];
@@ -359,14 +457,6 @@ export class AdaptiveCrawlerHost extends RPCHost {
         const urlsToProcess = Array.from(allUrls).slice(0, maxPages);
 
         return urlsToProcess;
-    }
-
-    async crawlByRecursion(url: URL, maxDepth: number, maxPages: number) {
-        // TODO:
-        // 1. 获取当前 url 的内容，并解析出所有链接
-        // 2. 递归获取所有链接的内容，并设置终止条件
-        // 3. 将所有链接的内容存储到数据库中
-        throw new Error('Not implemented');
     }
 
     async getSitemapsFromRobotsTxt(url: URL) {

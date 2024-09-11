@@ -28,7 +28,12 @@ export class AdaptiveCrawlTask extends FirestoreRecord {
     statusText!: string;
 
     @Prop()
-    meta?: { [k: string]: any; };
+    meta!: {
+        maxDepth: number;
+        useSitemap: boolean;
+        maxPages: number;
+        targetUrl: string;
+    };
 
     @Prop()
     urls!: string[];

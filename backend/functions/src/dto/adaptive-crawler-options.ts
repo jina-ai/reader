@@ -42,7 +42,7 @@ export class AdaptiveCrawlerOptions extends AutoCastable {
     @Prop({
         default: 10,
         desc: 'Max number of pages to crawl.',
-        validate: (v: number) => v >= 0 && v <= 100,
+        validate: (v: number) => v >= 1 && v <= 100,
     })
     maxPages!: number;
 
@@ -66,8 +66,6 @@ export class AdaptiveCrawlerOptions extends AutoCastable {
         const useSitemap = ctx?.req.get('x-use-sitemap');
         if (useSitemap !== undefined) {
             instance.useSitemap = Boolean(useSitemap);
-        } else {
-            instance.useSitemap = true;
         }
 
         return instance;
