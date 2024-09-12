@@ -67,7 +67,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
 
         const uid = await auth.solveUID();
-        const { useSitemap, maxDepth, maxPages } = adaptiveCrawlerOptions;
+        const { useSitemap, maxPages } = adaptiveCrawlerOptions;
 
         let tmpUrl = ctx.req.url.slice(1)?.trim();
         if (!tmpUrl) {
@@ -89,7 +89,6 @@ export class AdaptiveCrawlerHost extends RPCHost {
         const meta = {
             targetUrl: targetUrl.toString(),
             useSitemap,
-            maxDepth,
             maxPages,
         };
 
@@ -112,7 +111,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         });
 
         if (useSitemap) {
-            const urls = await this.crawlUrlsFromSitemap(targetUrl, maxDepth, maxPages);
+            const urls = await this.crawlUrlsFromSitemap(targetUrl, maxPages);
 
             await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).update({
                 status: AdaptiveCrawlTaskStatus.PROCESSING,
@@ -133,11 +132,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             await Promise.all(promises);
         } else {
             await getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
-                shortDigest, url: targetUrl.toString(), token: auth.bearerToken, meta: {
-                    ...meta,
-                    currentDepth: 0,
-                    currentPage: 1,
-                }
+                shortDigest, url: targetUrl.toString(), token: auth.bearerToken, meta
             }, {
                 dispatchDeadlineSeconds: 1800,
                 uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
@@ -210,7 +205,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         @Param('shortDigest') shortDigest: string,
         @Param('url') url: string,
         @Param('token') token: string,
-        @Param('meta') meta: AdaptiveCrawlTask['meta'] & { currentDepth: number; currentPage: number },
+        @Param('meta') meta: AdaptiveCrawlTask['meta'],
     ) {
         this.logger.debug(shortDigest, url, meta);
 
@@ -288,8 +283,37 @@ export class AdaptiveCrawlerHost extends RPCHost {
     }
 
     async handleSingleCrawlRecursively(
-        shortDigest: string, url: string, token: string, meta: AdaptiveCrawlTask['meta'] & { currentDepth: number; currentPage: number }
+        shortDigest: string, url: string, token: string, meta: AdaptiveCrawlTask['meta']
     ) {
+        let abort = false;
+        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
+            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
+            const state = await transaction.get(ref);
+            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
+
+            if (data.urls.includes(url)) {
+                abort = true;
+                return;
+            }
+
+            const urls = [
+                ...data.urls,
+                url
+            ];
+
+            if (urls.length > meta.maxPages) {
+                abort = true;
+                return;
+            }
+
+            transaction.update(ref, { urls });
+        });
+
+        if (abort) {
+            return;
+        }
+
+
         const response = await fetch('https://r.jina.ai', {
             method: 'POST',
             headers: {
@@ -320,18 +344,19 @@ export class AdaptiveCrawlerHost extends RPCHost {
             }
         )
 
-        // const topic = json.data.title;
+        const title = json.data.title;
+        const description = json.data.description;
+        const rerankQuery = `TITLE: ${title}; DESCRIPTION: ${description}`;
         const links = json.data.links as Record<string, string>;
 
-        // TODO: get links via reranker
-        const urls = Object.entries(links).map(([title, url]) => (url)).slice(0, 5);
-
+        const relevantUrls = await this.getRelevantUrls(token, rerankQuery, links);
+        this.logger.debug(`Total urls: ${Object.keys(links).length}, relevant urls: ${relevantUrls.length}`);
 
         const promises = [];
-        for (const url of urls) {
-            meta.currentPage += 1;
+        for (const url of relevantUrls) {
+            const processingPageCount = (await AdaptiveCrawlTask.fromFirestore(shortDigest))?.urls.length ?? 0;
 
-            if (meta.currentPage > meta.maxPages) {
+            if (processingPageCount > meta.maxPages) {
                 break;
             }
 
@@ -354,8 +379,8 @@ export class AdaptiveCrawlerHost extends RPCHost {
                 [url]: cachePath,
             };
 
-            const status = Object.keys(processed).length >= meta.maxPages ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
-            const statusText = Object.keys(processed).length >= meta.maxPages ? 'Completed' : `Processing ${Object.keys(processed).length}/${meta.maxPages}`;
+            const status = Object.keys(processed).length >= data.urls.length ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
+            const statusText = Object.keys(processed).length >= data.urls.length ? 'Completed' : `Processing ${Object.keys(processed).length}/${data.urls.length}`;
 
             const payload: Partial<AdaptiveCrawlTask> = {
                 status,
@@ -365,6 +390,36 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
             transaction.update(ref, payload);
         });
+    }
+
+    async getRelevantUrls(token: string, query: string, links: Record<string, string>) {
+        const data = {
+            model: 'jina-reranker-v2-base-multilingual',
+            query,
+            top_n: 15,
+            documents: Object.entries(links).map(([title, link]) => link)
+        };
+
+        const response = await fetch('https://api.jina.ai/v1/rerank', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(data)
+        });
+
+        const json = (await response.json()) as {
+            results: {
+                index: number;
+                document: {
+                    text: string;
+                };
+                relevance_score: number;
+            }[];
+        };
+
+        return json.results.filter(r => r.relevance_score > 0.3).map(r => r.document.text);
     }
 
     getIndex(user?: JinaEmbeddingsTokenAccount) {
@@ -387,7 +442,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         // return indexObject;
     }
 
-    async crawlUrlsFromSitemap(url: URL, maxDepth: number, maxPages: number) {
+    async crawlUrlsFromSitemap(url: URL, maxPages: number) {
         const sitemapsFromRobotsTxt = await this.getSitemapsFromRobotsTxt(url);
 
         const initialSitemaps: string[] = [];
@@ -401,10 +456,10 @@ export class AdaptiveCrawlerHost extends RPCHost {
         const allUrls: Set<string> = new Set();
         const processedSitemaps: Set<string> = new Set();
 
-        const fetchSitemapUrls = async (sitemapUrl: string, currentDepth: number = 0) => {
+        const fetchSitemapUrls = async (sitemapUrl: string) => {
             sitemapUrl = sitemapUrl.trim();
 
-            if (currentDepth > maxDepth || processedSitemaps.has(sitemapUrl)) {
+            if (processedSitemaps.has(sitemapUrl)) {
                 return;
             }
 
@@ -436,7 +491,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
                 for (let i = 0; i < sitemapElements.length; i++) {
                     const locElement = sitemapElements[i].getElementsByTagName('loc')[0];
                     if (locElement) {
-                        await fetchSitemapUrls(locElement.textContent?.trim() || '', currentDepth + 1);
+                        await fetchSitemapUrls(locElement.textContent?.trim() || '');
                         if (allUrls.size >= maxPages) {
                             return;
                         }
