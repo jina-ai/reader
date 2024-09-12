@@ -137,10 +137,11 @@ export class JSDomControl extends AsyncService {
             .filter(Boolean);
 
         const imageSet = new Set(imageTags);
-
         const r = {
             ...snapshot,
             title: snapshot.title || jsdom.window.document.title,
+            description: snapshot.description ||
+                (jsdom.window.document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? ''),
             parsed,
             html: rootDoc.documentElement.outerHTML,
             text: textChunks.join('\n'),
