@@ -43,6 +43,11 @@ export class AdaptiveCrawlTask extends FirestoreRecord {
     };
 
     @Prop()
+    failed!: {
+        [url: string]: any;
+    };
+
+    @Prop()
     createdAt!: Date;
 
     @Prop()

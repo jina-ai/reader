@@ -108,6 +108,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             createdAt: new Date(),
             urls: [],
             processed: {},
+            failed: {},
         });
 
         if (useSitemap) {
@@ -211,17 +212,57 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
         const state = await AdaptiveCrawlTask.fromFirestore(shortDigest);
         if (state?.status === AdaptiveCrawlTaskStatus.COMPLETED) {
-            return 'ok';
+            return;
         }
 
-        if (meta.useSitemap) {
-            return this.handleSingleCrawl(shortDigest, url, token);
-        } else {
-            return this.handleSingleCrawlRecursively(shortDigest, url, token, meta);
+        const result = meta.useSitemap
+            ? await this.handleSingleCrawl(shortDigest, url, token)
+            : await this.handleSingleCrawlRecursively(shortDigest, url, token, meta);
+
+        if (!result) {
+            return;
         }
+
+        const { error, cachePath } = result;
+
+        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
+            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
+            const state = await transaction.get(ref);
+            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
+
+            if (error.reason) {
+                data.failed[url] = error;
+            } else {
+                data.processed[url] = cachePath;
+            }
+
+            const status = Object.keys(data.processed).length + Object.keys(data.failed).length >= data.urls.length
+                ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
+            const statusText = Object.keys(data.processed).length + Object.keys(data.failed).length >= data.urls.length
+                ? `Completed ${Object.keys(data.processed).length} Succeeded, ${Object.keys(data.failed).length} Failed`
+                : `Processing ${Object.keys(data.processed).length + Object.keys(data.failed).length}/${data.urls.length}`;
+
+            const payload: Partial<AdaptiveCrawlTask> = {
+                status,
+                statusText,
+                processed: data.processed,
+                failed: data.failed,
+            };
+
+            if (status === AdaptiveCrawlTaskStatus.COMPLETED) {
+                payload.finishedAt = new Date();
+                payload.duration = new Date().getTime() - data.createdAt.toDate().getTime();
+            }
+
+            transaction.update(ref, payload);
+        });
     }
 
     async handleSingleCrawl(shortDigest: string, url: string, token: string) {
+        const error = {
+            reason: ''
+        }
+
         const response = await fetch('https://r.jina.ai', {
             method: 'POST',
             headers: {
@@ -232,54 +273,30 @@ export class AdaptiveCrawlerHost extends RPCHost {
             body: JSON.stringify({ url })
         })
 
+        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
+
         if (!response.ok) {
-            throw new Error(`Failed to crawl ${url}, ${response.statusText}`);
+            error.reason = `Failed to crawl ${url}, ${response.statusText}`;
+        } else {
+            const json = await response.json();
+
+            await this.firebaseObjectStorage.saveFile(cachePath,
+                Buffer.from(
+                    JSON.stringify(json),
+                    'utf-8'
+                ),
+                {
+                    metadata: {
+                        contentType: 'application/json',
+                    }
+                }
+            )
         }
 
-        const json = await response.json();
-
-        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
-        await this.firebaseObjectStorage.saveFile(cachePath,
-            Buffer.from(
-                JSON.stringify(json),
-                'utf-8'
-            ),
-            {
-                metadata: {
-                    contentType: 'application/json',
-                }
-            }
-        )
-
-        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
-            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
-            const state = await transaction.get(ref);
-            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
-
-            const processed = {
-                ...data.processed,
-                [url]: cachePath,
-            };
-
-            const status = Object.keys(processed).length >= data.urls.length ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
-            const statusText = Object.keys(processed).length >= data.urls.length ? 'Completed' : `Processing ${Object.keys(processed).length}/${data.urls.length}`;
-
-            const payload: Partial<AdaptiveCrawlTask> = {
-                status,
-                statusText,
-                processed
-            };
-
-            if (status === AdaptiveCrawlTaskStatus.COMPLETED) {
-                payload.finishedAt = new Date();
-                payload.duration = new Date().getTime() - data.createdAt.toDate().getTime();
-            }
-
-            transaction.update(ref, payload);
-        });
-
-
-        return 'ok';
+        return {
+            error,
+            cachePath,
+        }
     }
 
     async handleSingleCrawlRecursively(
@@ -314,6 +331,9 @@ export class AdaptiveCrawlerHost extends RPCHost {
         }
 
 
+        const error = {
+            reason: ''
+        }
         const response = await fetch('https://r.jina.ai', {
             method: 'POST',
             headers: {
@@ -325,71 +345,54 @@ export class AdaptiveCrawlerHost extends RPCHost {
             body: JSON.stringify({ url })
         });
 
+        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
+
         if (!response.ok) {
-            throw new Error(`Failed to crawl ${url}, ${response.statusText}`);
+            error.reason = `Failed to crawl ${url}, ${response.statusText}`;
+        } else {
+            const json = await response.json();
+            await this.firebaseObjectStorage.saveFile(cachePath,
+                Buffer.from(
+                    JSON.stringify(json),
+                    'utf-8'
+                ),
+                {
+                    metadata: {
+                        contentType: 'application/json',
+                    }
+                }
+            )
+
+            const title = json.data.title;
+            const description = json.data.description;
+            const rerankQuery = `TITLE: ${title}; DESCRIPTION: ${description}`;
+            const links = json.data.links as Record<string, string>;
+
+            const relevantUrls = await this.getRelevantUrls(token, rerankQuery, links);
+            this.logger.debug(`Total urls: ${Object.keys(links).length}, relevant urls: ${relevantUrls.length}`);
+
+            const promises = [];
+            for (const url of relevantUrls) {
+                const processingPageCount = (await AdaptiveCrawlTask.fromFirestore(shortDigest))?.urls.length ?? 0;
+
+                if (processingPageCount > meta.maxPages) {
+                    break;
+                }
+
+                promises.push(getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
+                    shortDigest, url, token, meta
+                }, {
+                    dispatchDeadlineSeconds: 1800,
+                    uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
+                }));
+            };
+            await Promise.all(promises);
         }
 
-        const json = await response.json();
-
-        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
-        await this.firebaseObjectStorage.saveFile(cachePath,
-            Buffer.from(
-                JSON.stringify(json),
-                'utf-8'
-            ),
-            {
-                metadata: {
-                    contentType: 'application/json',
-                }
-            }
-        )
-
-        const title = json.data.title;
-        const description = json.data.description;
-        const rerankQuery = `TITLE: ${title}; DESCRIPTION: ${description}`;
-        const links = json.data.links as Record<string, string>;
-
-        const relevantUrls = await this.getRelevantUrls(token, rerankQuery, links);
-        this.logger.debug(`Total urls: ${Object.keys(links).length}, relevant urls: ${relevantUrls.length}`);
-
-        const promises = [];
-        for (const url of relevantUrls) {
-            const processingPageCount = (await AdaptiveCrawlTask.fromFirestore(shortDigest))?.urls.length ?? 0;
-
-            if (processingPageCount > meta.maxPages) {
-                break;
-            }
-
-            promises.push(getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
-                shortDigest, url, token, meta
-            }, {
-                dispatchDeadlineSeconds: 1800,
-                uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
-            }));
-        };
-        await Promise.all(promises);
-
-        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
-            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
-            const state = await transaction.get(ref);
-            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
-
-            const processed = {
-                ...data.processed,
-                [url]: cachePath,
-            };
-
-            const status = Object.keys(processed).length >= data.urls.length ? AdaptiveCrawlTaskStatus.COMPLETED : AdaptiveCrawlTaskStatus.PROCESSING;
-            const statusText = Object.keys(processed).length >= data.urls.length ? 'Completed' : `Processing ${Object.keys(processed).length}/${data.urls.length}`;
-
-            const payload: Partial<AdaptiveCrawlTask> = {
-                status,
-                statusText,
-                processed
-            };
-
-            transaction.update(ref, payload);
-        });
+        return {
+            error,
+            cachePath,
+        }
     }
 
     async getRelevantUrls(token: string, query: string, links: Record<string, string>) {
