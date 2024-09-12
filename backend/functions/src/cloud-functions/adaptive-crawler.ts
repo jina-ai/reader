@@ -20,6 +20,11 @@ import { getFunctionUrl } from '../utils/get-function-url';
 import { Timestamp } from 'firebase-admin/firestore';
 
 const md5Hasher = new HashManager('md5', 'hex');
+const removeURLHash = (url: string) => {
+    const o = new URL(url);
+    o.hash = '';
+    return o.toString();
+}
 
 @singleton()
 export class AdaptiveCrawlerHost extends RPCHost {
@@ -208,22 +213,35 @@ export class AdaptiveCrawlerHost extends RPCHost {
         @Param('token') token: string,
         @Param('meta') meta: AdaptiveCrawlTask['meta'],
     ) {
-        this.logger.debug(shortDigest, url, meta);
+        const error = {
+            reason: ''
+        };
 
         const state = await AdaptiveCrawlTask.fromFirestore(shortDigest);
         if (state?.status === AdaptiveCrawlTaskStatus.COMPLETED) {
             return;
         }
 
-        const result = meta.useSitemap
-            ? await this.handleSingleCrawl(shortDigest, url, token)
-            : await this.handleSingleCrawlRecursively(shortDigest, url, token, meta);
-
-        if (!result) {
-            return;
+        try {
+            url = removeURLHash(url);
+        } catch(e) {
+            error.reason = `Failed to parse url: ${url}`;
         }
 
-        const { error, cachePath } = result;
+        this.logger.debug(shortDigest, url, meta);
+        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
+
+        if (!error.reason) {
+            const result = meta.useSitemap
+                ? await this.handleSingleCrawl(shortDigest, url, token, cachePath)
+                : await this.handleSingleCrawlRecursively(shortDigest, url, token, meta, cachePath);
+
+            if (!result) {
+                return;
+            }
+
+            error.reason = result.error.reason;
+        }
 
         await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
             const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
@@ -258,7 +276,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
         });
     }
 
-    async handleSingleCrawl(shortDigest: string, url: string, token: string) {
+    async handleSingleCrawl(shortDigest: string, url: string, token: string, cachePath: string) {
         const error = {
             reason: ''
         }
@@ -272,8 +290,6 @@ export class AdaptiveCrawlerHost extends RPCHost {
             },
             body: JSON.stringify({ url })
         })
-
-        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
 
         if (!response.ok) {
             error.reason = `Failed to crawl ${url}, ${response.statusText}`;
@@ -295,12 +311,11 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
         return {
             error,
-            cachePath,
         }
     }
 
     async handleSingleCrawlRecursively(
-        shortDigest: string, url: string, token: string, meta: AdaptiveCrawlTask['meta']
+        shortDigest: string, url: string, token: string, meta: AdaptiveCrawlTask['meta'], cachePath: string
     ) {
         let abort = false;
         await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
@@ -345,8 +360,6 @@ export class AdaptiveCrawlerHost extends RPCHost {
             body: JSON.stringify({ url })
         });
 
-        const cachePath = `adaptive-crawl-task/${shortDigest}/${md5Hasher.hash(url)}`;
-
         if (!response.ok) {
             error.reason = `Failed to crawl ${url}, ${response.statusText}`;
         } else {
@@ -368,7 +381,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             const rerankQuery = `TITLE: ${title}; DESCRIPTION: ${description}`;
             const links = json.data.links as Record<string, string>;
 
-            const relevantUrls = await this.getRelevantUrls(token, rerankQuery, links);
+            const relevantUrls = await this.getRelevantUrls(token, { query: rerankQuery, links });
             this.logger.debug(`Total urls: ${Object.keys(links).length}, relevant urls: ${relevantUrls.length}`);
 
             const promises = [];
@@ -391,11 +404,15 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
         return {
             error,
-            cachePath,
         }
     }
 
-    async getRelevantUrls(token: string, query: string, links: Record<string, string>) {
+    async getRelevantUrls(token: string, {
+        query, links
+    }: {
+        query: string;
+        links: Record<string, string>;
+    }) {
         const data = {
             model: 'jina-reranker-v2-base-multilingual',
             query,
@@ -481,7 +498,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
                     if (locElement) {
                         const loc = locElement.textContent?.trim() || '';
                         if (loc.startsWith(url.origin) && !loc.endsWith('.xml')) {
-                            allUrls.add(loc);
+                            allUrls.add(removeURLHash(loc));
                         }
                         if (allUrls.size >= maxPages) {
                             return;
