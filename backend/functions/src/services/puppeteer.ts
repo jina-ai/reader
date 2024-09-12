@@ -4,7 +4,7 @@ import { container, singleton } from 'tsyringe';
 import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
-import type { Browser, CookieParam, GoToOptions, Page } from 'puppeteer';
+import type { Browser, CookieParam, GoToOptions, HTTPResponse, Page } from 'puppeteer';
 import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
@@ -42,11 +42,13 @@ export interface ReadabilityParsed {
 
 export interface PageSnapshot {
     title: string;
-    description: string;
+    description?: string;
     href: string;
     rebase?: string;
     html: string;
     text: string;
+    status?: number;
+    statusText?: string;
     parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
     pageshot?: Buffer;
@@ -287,7 +289,7 @@ export class PuppeteerControl extends AsyncService {
         await this.serviceReady();
         const dedicatedContext = await this.browser.createBrowserContext();
         const sn = this._sn++;
-        let page
+        let page;
         try {
             page = await dedicatedContext.newPage();
         } catch (err: any) {
@@ -471,8 +473,12 @@ document.addEventListener('load', handlePageLoad);
         let screenshot: Buffer | undefined;
         let pageshot: Buffer | undefined;
         const pdfUrls: string[] = [];
+        let navigationResponse: HTTPResponse | undefined;
         const page = await this.getNextPage();
         page.on('response', (resp) => {
+            if (resp.request().isNavigationRequest()) {
+                navigationResponse = resp;
+            }
             if (!resp.ok()) {
                 return;
             }
@@ -638,7 +644,12 @@ document.addEventListener('load', handlePageLoad);
                     this.logger.info(`Page ${sn}: Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
                     this.emit(
                         'crawled',
-                        { ...snapshot, pdfs: _.uniq(pdfUrls), screenshot, pageshot, },
+                        {
+                            ...snapshot,
+                            status: navigationResponse?.status(),
+                            statusText: navigationResponse?.statusText(),
+                            pdfs: _.uniq(pdfUrls), screenshot, pageshot,
+                        },
                         { ...options, url: parsedUrl }
                     );
                 }
@@ -691,7 +702,12 @@ document.addEventListener('load', handlePageLoad);
                         }
                         throw new AssertionFailureError(`Could not extract any meaningful content from the page`);
                     }
-                    yield { ...snapshot, pdfs: _.uniq(pdfUrls), screenshot, pageshot } as PageSnapshot;
+                    yield {
+                        ...snapshot,
+                        status: navigationResponse?.status(),
+                        statusText: navigationResponse?.statusText(),
+                        pdfs: _.uniq(pdfUrls), screenshot, pageshot
+                    } as PageSnapshot;
                     break;
                 }
                 if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
@@ -700,7 +716,12 @@ document.addEventListener('load', handlePageLoad);
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {
-                    yield { ...snapshot, pdfs: _.uniq(pdfUrls), screenshot, pageshot } as PageSnapshot;
+                    yield {
+                        ...snapshot,
+                        status: navigationResponse?.status(),
+                        statusText: navigationResponse?.statusText(),
+                        pdfs: _.uniq(pdfUrls), screenshot, pageshot
+                    } as PageSnapshot;
                 }
                 if (error) {
                     throw error;
