@@ -137,6 +137,10 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
             await Promise.all(promises);
         } else {
+            await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).update({
+                urls: [targetUrl.toString()],
+            });
+
             await getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
                 shortDigest, url: targetUrl.toString(), token: auth.bearerToken, meta
             }, {
@@ -317,35 +321,6 @@ export class AdaptiveCrawlerHost extends RPCHost {
     async handleSingleCrawlRecursively(
         shortDigest: string, url: string, token: string, meta: AdaptiveCrawlTask['meta'], cachePath: string
     ) {
-        let abort = false;
-        await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
-            const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
-            const state = await transaction.get(ref);
-            const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
-
-            if (data.urls.includes(url)) {
-                abort = true;
-                return;
-            }
-
-            const urls = [
-                ...data.urls,
-                url
-            ];
-
-            if (urls.length > meta.maxPages) {
-                abort = true;
-                return;
-            }
-
-            transaction.update(ref, { urls });
-        });
-
-        if (abort) {
-            return;
-        }
-
-
         const error = {
             reason: ''
         }
@@ -384,22 +359,48 @@ export class AdaptiveCrawlerHost extends RPCHost {
             const relevantUrls = await this.getRelevantUrls(token, { query: rerankQuery, links });
             this.logger.debug(`Total urls: ${Object.keys(links).length}, relevant urls: ${relevantUrls.length}`);
 
-            const promises = [];
             for (const url of relevantUrls) {
-                const processingPageCount = (await AdaptiveCrawlTask.fromFirestore(shortDigest))?.urls.length ?? 0;
+                let abortContinue = false;
+                let abortBreak = false;
+                await AdaptiveCrawlTask.DB.runTransaction(async (transaction) => {
+                    const ref = AdaptiveCrawlTask.COLLECTION.doc(shortDigest);
+                    const state = await transaction.get(ref);
+                    const data = state.data() as AdaptiveCrawlTask & { createdAt: Timestamp };
 
-                if (processingPageCount > meta.maxPages) {
+                    if (data.urls.includes(url)) {
+                        this.logger.debug('Recursive CONTINUE', data);
+                        abortContinue = true;
+                        return;
+                    }
+
+                    const urls = [
+                        ...data.urls,
+                        url
+                    ];
+
+                    if (urls.length > meta.maxPages || data.status === AdaptiveCrawlTaskStatus.COMPLETED) {
+                        this.logger.debug('Recursive BREAK', data);
+                        abortBreak = true;
+                        return;
+                    }
+
+                    transaction.update(ref, { urls });
+                });
+
+                if (abortContinue) {
+                    continue;
+                }
+                if (abortBreak) {
                     break;
                 }
 
-                promises.push(getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
+                await getFunctions().taskQueue(AdaptiveCrawlerHost.__singleCrawlQueueName).enqueue({
                     shortDigest, url, token, meta
                 }, {
                     dispatchDeadlineSeconds: 1800,
                     uri: await getFunctionUrl(AdaptiveCrawlerHost.__singleCrawlQueueName),
-                }));
+                });
             };
-            await Promise.all(promises);
         }
 
         return {
