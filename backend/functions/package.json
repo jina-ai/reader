@@ -55,13 +55,15 @@
     "puppeteer-extra-plugin-page-proxy": "^2.0.0",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "puppeteer-page-proxy": "^1.3.0",
+    "robots-parser": "^3.0.1",
     "set-cookie-parser": "^2.6.0",
     "stripe": "^11.11.0",
     "tiktoken": "^1.0.10",
     "tld-extract": "^2.1.0",
     "turndown": "^7.1.3",
     "turndown-plugin-gfm": "^1.0.2",
-    "undici": "^5.24.0"
+    "undici": "^5.24.0",
+    "xmldom": "^0.6.0"
   },
   "devDependencies": {
     "@types/archiver": "^5.3.4",
@@ -70,6 +72,7 @@
     "@types/generic-pool": "^3.8.1",
     "@types/node": "^20.14.13",
     "@types/set-cookie-parser": "^2.4.7",
+    "@types/xmldom": "^0.1.34",
     "@typescript-eslint/eslint-plugin": "^5.12.0",
     "@typescript-eslint/parser": "^5.12.0",
     "eslint": "^8.9.0",
