@@ -388,24 +388,26 @@ export class PuppeteerControl extends AsyncService {
         });
 
         await page.evaluateOnNewDocument(`
-let lastTextLength = 0;
-const handlePageLoad = () => {
-    if (window.haltSnapshot) {
-        return;
-    }
-    const thisTextLength = (document.body.innerText || '').length;
-    const deltaLength = Math.abs(thisTextLength - lastTextLength);
-    if (10 * deltaLength < lastTextLength) {
-        // Change is not significant
-        return;
-    }
-    const r = giveSnapshot();
-    window.reportSnapshot(r);
-    lastTextLength = thisTextLength;
-};
-setInterval(handlePageLoad, 800);
-document.addEventListener('readystatechange', handlePageLoad);
-document.addEventListener('load', handlePageLoad);
+if (window.self === window.top) {
+    let lastTextLength = 0;
+    const handlePageLoad = () => {
+        if (window.haltSnapshot) {
+            return;
+        }
+        const thisTextLength = (document.body.innerText || '').length;
+        const deltaLength = Math.abs(thisTextLength - lastTextLength);
+        if (10 * deltaLength < lastTextLength) {
+            // Change is not significant
+            return;
+        }
+        const r = giveSnapshot();
+        window.reportSnapshot(r);
+        lastTextLength = thisTextLength;
+    };
+    setInterval(handlePageLoad, 800);
+    document.addEventListener('readystatechange', handlePageLoad);
+    document.addEventListener('load', handlePageLoad);
+}
 `);
 
         this.snMap.set(page, sn);
