@@ -78,7 +78,9 @@ export class JSDomControl extends AsyncService {
             jsdom.window.document.querySelectorAll(options.removeSelector).forEach((x) => x.remove());
         }
 
+        let bewareTargetContentDoesNotExist = false;
         if (Array.isArray(options?.targetSelector)) {
+            bewareTargetContentDoesNotExist = true;
             for (const x of options!.targetSelector.map((x) => jsdom.window.document.querySelectorAll(x))) {
                 x.forEach((el) => {
                     if (!allNodes.includes(el)) {
@@ -87,6 +89,7 @@ export class JSDomControl extends AsyncService {
                 });
             }
         } else if (options?.targetSelector) {
+            bewareTargetContentDoesNotExist = true;
             jsdom.window.document.querySelectorAll(options.targetSelector).forEach((el) => {
                 if (!allNodes.includes(el)) {
                     allNodes.push(el);
@@ -97,6 +100,11 @@ export class JSDomControl extends AsyncService {
         }
 
         if (!allNodes.length) {
+
+            if (bewareTargetContentDoesNotExist) {
+                return undefined;
+            }
+
             return snapshot;
         }
         const textChunks: string[] = [];
