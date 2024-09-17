@@ -1,8 +1,11 @@
 import { AsyncService, AutoCastable, Prop } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
+const pLinkedom = import('linkedom');
 
 export class HTMLtoMarkdown extends AsyncService {
+
+    linkedom!: Awaited<typeof pLinkedom>;
 
     constructor(
         protected logger: Logger,
@@ -14,20 +17,22 @@ export class HTMLtoMarkdown extends AsyncService {
     override async init() {
         await this.dependencyReady();
 
+        this.linkedom = await pLinkedom;
+
         this.emit('ready');
     }
 
 }
 
 
-class MarkdownASTNode extends AutoCastable {
+export class MarkdownASTNode extends AutoCastable {
     @Prop({
         required: true
     })
     type!: string;
 }
 
-class MDCode extends MarkdownASTNode {
+export class MDCode extends MarkdownASTNode {
     @Prop({
         default: 'code'
     })
@@ -43,7 +48,7 @@ class MDCode extends MarkdownASTNode {
     text!: string;
 }
 
-class MDHTML extends MarkdownASTNode {
+export class MDHTML extends MarkdownASTNode {
     @Prop({
         default: 'html'
     })
@@ -57,7 +62,7 @@ class MDHTML extends MarkdownASTNode {
 }
 
 
-class MarkdownASTParentNode extends MarkdownASTNode {
+export class MarkdownASTParentNode extends MarkdownASTNode {
 
     @Prop({
         default: [],
@@ -67,21 +72,21 @@ class MarkdownASTParentNode extends MarkdownASTNode {
 }
 
 
-class MarkdownASTRoot extends MarkdownASTParentNode {
+export class MarkdownASTRoot extends MarkdownASTParentNode {
     @Prop({
         default: 'root'
     })
     override type!: 'root';
 }
 
-class MDParagraph extends MarkdownASTParentNode {
+export class MDParagraph extends MarkdownASTParentNode {
     @Prop({
         default: 'paragraph'
     })
     override type!: 'paragraph';
 }
 
-class MDHeading extends MarkdownASTParentNode {
+export class MDHeading extends MarkdownASTParentNode {
     @Prop({
         default: 'heading'
     })
@@ -97,7 +102,7 @@ class MDHeading extends MarkdownASTParentNode {
     level!: 1 | 2 | 3 | 4 | 5 | 6;
 }
 
-class MDList extends MarkdownASTParentNode {
+export class MDList extends MarkdownASTParentNode {
     @Prop({
         default: 'list'
     })
@@ -109,7 +114,7 @@ class MDList extends MarkdownASTParentNode {
     ordered!: boolean;
 }
 
-class MDListItem extends MarkdownASTParentNode {
+export class MDListItem extends MarkdownASTParentNode {
     @Prop({
         default: 'listItem'
     })
@@ -130,7 +135,7 @@ class MDListItem extends MarkdownASTParentNode {
     override children!: MarkdownASTNode[];
 }
 
-class MDLink extends MarkdownASTParentNode {
+export class MDLink extends MarkdownASTParentNode {
     @Prop({
         default: 'link'
     })
@@ -151,7 +156,7 @@ class MDLink extends MarkdownASTParentNode {
     override children!: MarkdownASTNode[];
 }
 
-class MDStrong extends MarkdownASTParentNode {
+export class MDStrong extends MarkdownASTParentNode {
     @Prop({
         default: 'strong'
     })
@@ -164,7 +169,7 @@ class MDStrong extends MarkdownASTParentNode {
     override children!: MarkdownASTNode[];
 }
 
-class MDEmphasis extends MarkdownASTParentNode {
+export class MDEmphasis extends MarkdownASTParentNode {
     @Prop({
         default: 'emphasis'
     })
@@ -177,7 +182,7 @@ class MDEmphasis extends MarkdownASTParentNode {
     override children!: MarkdownASTNode[];
 }
 
-class MDDelete extends MarkdownASTParentNode {
+export class MDDelete extends MarkdownASTParentNode {
     @Prop({
         default: 'delete'
     })
@@ -191,7 +196,7 @@ class MDDelete extends MarkdownASTParentNode {
 }
 
 
-class MDLiteral extends MarkdownASTNode {
+export class MDLiteral extends MarkdownASTNode {
     @Prop({
         default: 'literal'
     })
@@ -204,21 +209,21 @@ class MDLiteral extends MarkdownASTNode {
     text!: string;
 }
 
-class MDLineBreak extends MarkdownASTNode {
+export class MDLineBreak extends MarkdownASTNode {
     @Prop({
         default: 'break'
     })
     override type!: 'break';
 }
 
-class MDThematicBreak extends MarkdownASTNode {
+export class MDThematicBreak extends MarkdownASTNode {
     @Prop({
         default: 'thematicBreak'
     })
     override type!: 'thematicBreak';
 }
 
-class MDImage extends MarkdownASTNode {
+export class MDImage extends MarkdownASTNode {
     @Prop({
         default: 'image'
     })
@@ -236,7 +241,7 @@ class MDImage extends MarkdownASTNode {
     title?: string;
 }
 
-class MDInlineCode extends MarkdownASTNode {
+export class MDInlineCode extends MarkdownASTNode {
     @Prop({
         default: 'inlineCode'
     })
@@ -249,7 +254,7 @@ class MDInlineCode extends MarkdownASTNode {
     text!: string;
 }
 
-class MDMath extends MarkdownASTNode {
+export class MDMath extends MarkdownASTNode {
     @Prop({
         default: 'math'
     })
@@ -265,7 +270,7 @@ class MDMath extends MarkdownASTNode {
     text!: string;
 }
 
-class MDInlineMath extends MarkdownASTNode {
+export class MDInlineMath extends MarkdownASTNode {
     @Prop({
         default: 'inlineMath'
     })
@@ -282,7 +287,7 @@ class MDInlineMath extends MarkdownASTNode {
 }
 
 
-class MDTableHeading extends MarkdownASTNode {
+export class MDTableHeading extends MarkdownASTNode {
     @Prop({
         default: 'tableHeading'
     })
@@ -302,7 +307,7 @@ class MDTableHeading extends MarkdownASTNode {
     align?: 'left' | 'center' | 'right';
 }
 
-class MDTableHeader extends MarkdownASTParentNode {
+export class MDTableHeader extends MarkdownASTParentNode {
     @Prop({
         default: 'tableHeader'
     })
@@ -314,7 +319,7 @@ class MDTableHeader extends MarkdownASTParentNode {
     })
     override children!: MDTableHeading[];
 }
-class MDTableCell extends MarkdownASTParentNode {
+export class MDTableCell extends MarkdownASTParentNode {
     @Prop({
         default: 'tableCell'
     })
@@ -327,7 +332,7 @@ class MDTableCell extends MarkdownASTParentNode {
     override children!: MarkdownASTNode[];
 }
 
-class MDTableRow extends MarkdownASTParentNode {
+export class MDTableRow extends MarkdownASTParentNode {
     @Prop({
         default: 'tableRow'
     })
@@ -340,7 +345,7 @@ class MDTableRow extends MarkdownASTParentNode {
     override children!: MDTableCell[];
 }
 
-class MDTable extends MarkdownASTParentNode {
+export class MDTable extends MarkdownASTParentNode {
     @Prop({
         default: 'table'
     })
@@ -353,15 +358,60 @@ class MDTable extends MarkdownASTParentNode {
     override children!: (MDTableHeader | MDTableRow)[];
 }
 
-class MDBlockQuote extends MarkdownASTParentNode {
+export class MDBlockQuote extends MarkdownASTParentNode {
     @Prop({
         default: 'blockquote'
     })
     override type!: 'blockquote';
 }
 
+export const flowContents = [MDBlockQuote, MDCode, MDHeading, MDHTML, MDList, MDThematicBreak, MDParagraph, MDMath, MDTable];
+export const phrasingContent = [MDLineBreak, MDEmphasis, MDStrong, MDHTML, MDImage, MDInlineCode, MDInlineMath, MDLink, MDLiteral, MDDelete];
+
+export const childrenAllowedNodes = new Map<Function, Function[]>([
+    [MDBlockQuote, flowContents],
+    [MDHeading, phrasingContent],
+    [MDList, [MDListItem]],
+    [MDListItem, flowContents],
+    [MDParagraph, phrasingContent],
+    [MDTable, [MDTableHeader, MDTableRow]],
+    [MDTableHeader, [MDTableHeading]],
+    [MDTableRow, [MDTableCell]],
+
+]);
+
 export class HTMLToMarkdownJob {
 
+    root = new MarkdownASTRoot();
+    stack: MarkdownASTParentNode[] = [this.root];
+    ptr: MarkdownASTNode = this.root;
 
+    metadata: Record<string, any> = {};
+
+    constructor(public dom: Document) {
+    }
+
+    restFlow() {
+        this.ptr = this.root;
+    }
+
+    walk() {
+        const tw = this.dom.createTreeWalker(
+            this.dom.documentElement,
+            1 | 4,
+            {
+                acceptNode: (node) => {
+                    const tagName = node.nodeName.toLowerCase();
+                    if (['script', 'style', 'link'].includes(tagName)) {
+                        return NodeFilter.FILTER_REJECT; // Ignore these nodes
+                    }
+
+                    return NodeFilter.FILTER_ACCEPT; // Accept everything else
+                }
+            }
+        );
+
+
+    }
 
 }
