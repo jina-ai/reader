@@ -328,7 +328,7 @@ export class SnapshotFormatter extends AsyncService {
         if (snapshot.status) {
             const code = snapshot.status;
             const n = code - 200;
-            if (n < 0 || n >= 100) {
+            if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
                 formatted.warning = `Target URL returned error ${code}${text? `: ${text}` : ''}`;
             }
@@ -436,7 +436,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         if (snapshot.status) {
             const code = snapshot.status;
             const n = code - 200;
-            if (n < 0 || n >= 100) {
+            if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
                 mixin.warning = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
             }
