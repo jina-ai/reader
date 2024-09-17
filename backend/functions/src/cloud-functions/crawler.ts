@@ -131,7 +131,7 @@ export class CrawlerHost extends RPCHost {
     @CloudHTTPv2({
         runtime: {
             memory: '4GiB',
-            cpu: 4,
+            cpu: 2,
             timeoutSeconds: 300,
             concurrency: 8,
             maxInstances: 1250,
