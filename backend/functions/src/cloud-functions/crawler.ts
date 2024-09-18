@@ -131,7 +131,7 @@ export class CrawlerHost extends RPCHost {
     @CloudHTTPv2({
         runtime: {
             memory: '4GiB',
-            cpu: 4,
+            cpu: 2,
             timeoutSeconds: 300,
             concurrency: 8,
             maxInstances: 1250,
@@ -276,7 +276,7 @@ export class CrawlerHost extends RPCHost {
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
-                if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
+                if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped?.title?.trim()) && !scrapped?.pdfs?.length)) {
                     continue;
                 }
 
@@ -287,12 +287,15 @@ export class CrawlerHost extends RPCHost {
                     return formatted;
                 }
 
-                if (chargeAmount && scrapped.pdfs?.length) {
+                if (chargeAmount && scrapped?.pdfs?.length) {
                     return formatted;
                 }
             }
 
             if (!lastScrapped) {
+                if (crawlOpts.targetSelector) {
+                    throw new AssertionFailureError(`No content available for URL ${targetUrl} with target selector ${Array.isArray(crawlOpts.targetSelector) ? crawlOpts.targetSelector.join(', ') : crawlOpts.targetSelector}`);
+                }
                 throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
             }
 
@@ -304,7 +307,7 @@ export class CrawlerHost extends RPCHost {
 
         for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
             lastScrapped = scrapped;
-            if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped.title?.trim()) && !scrapped?.pdfs?.length)) {
+            if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped?.title?.trim()) && !scrapped?.pdfs?.length)) {
                 continue;
             }
 
@@ -330,6 +333,9 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (!lastScrapped) {
+            if (crawlOpts.targetSelector) {
+                throw new AssertionFailureError(`No content available for URL ${targetUrl} with target selector ${Array.isArray(crawlOpts.targetSelector) ? crawlOpts.targetSelector.join(', ') : crawlOpts.targetSelector}`);
+            }
             throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
 

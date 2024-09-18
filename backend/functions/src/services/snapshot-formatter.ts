@@ -12,6 +12,7 @@ import { AltTextService } from './alt-text';
 import { PDFExtractor } from './pdf-extract';
 import { cleanAttribute } from '../utils/misc';
 import _ from 'lodash';
+import { STATUS_CODES } from 'http';
 
 
 export interface FormattedPage {
@@ -28,6 +29,7 @@ export interface FormattedPage {
     pageshot?: Buffer;
     links?: { [k: string]: string; };
     images?: { [k: string]: string; };
+    warning?: string;
     usage?: {
         total_tokens?: number;
         totalTokens?: number;
@@ -316,11 +318,21 @@ export class SnapshotFormatter extends AsyncService {
 
         const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
+            description: (snapshot.description || '').trim(),
             url: nominalUrl?.toString() || snapshot.href?.trim(),
             content: cleanText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,
             [Symbol.dispose]: () => { },
         };
+
+        if (snapshot.status) {
+            const code = snapshot.status;
+            const n = code - 200;
+            if (n < 0 || n >= 200) {
+                const text = snapshot.statusText || STATUS_CODES[code];
+                formatted.warning = `Target URL returned error ${code}${text? `: ${text}` : ''}`;
+            }
+        }
 
         if (this.threadLocal.get('withImagesSummary')) {
             formatted.images =
@@ -366,6 +378,10 @@ export class SnapshotFormatter extends AsyncService {
                     linkSummaryChunks.push('This page does not seem to contain any buttons/links.');
                 }
                 suffixMixins.push(linkSummaryChunks.join('\n'));
+            }
+
+            if (this.warning) {
+                mixins.push(`Warning: ${this.warning}`);
             }
 
             return `Title: ${this.title}
@@ -416,6 +432,14 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         if (this.threadLocal.get('withLinksSummary')) {
             inferred ??= this.jsdomControl.inferSnapshot(snapshot);
             mixin.links = _.invert(inferred.links || {});
+        }
+        if (snapshot.status) {
+            const code = snapshot.status;
+            const n = code - 200;
+            if (n < 0 || n >= 200) {
+                const text = snapshot.statusText || STATUS_CODES[code];
+                mixin.warning = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
+            }
         }
 
         return mixin;
