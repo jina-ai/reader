@@ -368,7 +368,7 @@ export class MDBlockQuote extends MarkdownASTParentNode {
 export const flowContents = [MDBlockQuote, MDCode, MDHeading, MDHTML, MDList, MDThematicBreak, MDParagraph, MDMath, MDTable];
 export const phrasingContent = [MDLineBreak, MDEmphasis, MDStrong, MDHTML, MDImage, MDInlineCode, MDInlineMath, MDLink, MDLiteral, MDDelete];
 
-export const childrenAllowedNodes = new Map<Function, Function[]>([
+export const childrenAllowedNodes = new Map<typeof MarkdownASTNode, (typeof MarkdownASTNode)[]>([
     [MDBlockQuote, flowContents],
     [MDHeading, phrasingContent],
     [MDList, [MDListItem]],
@@ -377,7 +377,6 @@ export const childrenAllowedNodes = new Map<Function, Function[]>([
     [MDTable, [MDTableHeader, MDTableRow]],
     [MDTableHeader, [MDTableHeading]],
     [MDTableRow, [MDTableCell]],
-
 ]);
 
 export class HTMLToMarkdownJob {
@@ -389,10 +388,213 @@ export class HTMLToMarkdownJob {
     metadata: Record<string, any> = {};
 
     constructor(public dom: Document) {
+
     }
 
     restFlow() {
         this.ptr = this.root;
+        this.stack.length = 0;
+        this.stack.push(this.root);
+    }
+
+    checkIfAllowedToHaveChild(cls: typeof MarkdownASTNode) {
+        const ptrCls = this.ptr.constructor;
+        const allowedClasses = childrenAllowedNodes.get(ptrCls as typeof MarkdownASTNode);
+        if (allowedClasses?.includes(cls)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    seekToInsert(cls: typeof MarkdownASTNode) {
+        while (true) {
+            if (this.checkIfAllowedToHaveChild(cls)) {
+                return;
+            }
+
+            if (this.stack.length >= 2) {
+                this.stack.pop()!;
+                this.ptr = this.stack[this.stack.length - 1];
+
+                continue;
+            }
+
+            break;
+        }
+
+        this.restFlow();
+    }
+
+    newBlockquote() {
+        const node = new MDBlockQuote();
+        this.restFlow();
+        (this.ptr as MarkdownASTRoot).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newHeading(n: 1 | 2 | 3 | 4 | 5 | 6) {
+        const node = new MDHeading();
+        node.level = n;
+        this.restFlow();
+        (this.ptr as MarkdownASTRoot).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newParagraph() {
+        const node = new MDParagraph();
+        this.restFlow();
+        (this.ptr as MarkdownASTRoot).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newList(ordered: boolean = false) {
+        this.seekToInsert(MDList);
+        const node = new MDList();
+        node.ordered = ordered;
+        (this.ptr as MarkdownASTParentNode).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newListItem(ordered: boolean = false) {
+        this.seekToInsert(MDListItem);
+        if (this.ptr === this.root) {
+            this.newList(ordered);
+        }
+        const node = new MDListItem();
+        (this.ptr as MarkdownASTParentNode).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newTable() {
+        this.seekToInsert(MDTable);
+        const node = new MDTable();
+        (this.ptr as MarkdownASTParentNode).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newTableHeader() {
+        this.seekToInsert(MDTableHeader);
+        if (this.ptr === this.root) {
+            this.newTable();
+        }
+        const node = new MDTableHeader();
+        (this.ptr as MarkdownASTParentNode).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newTableRow() {
+        this.seekToInsert(MDTableCell);
+        if (this.ptr === this.root) {
+            this.newTable();
+        }
+        const node = new MDTableCell();
+        (this.ptr as MarkdownASTParentNode).children.push(node);
+        this.stack.push(node);
+        this.ptr = node;
+
+        return node;
+    }
+
+    newCode(inline?: boolean) {
+        const node = inline ? new MDInlineCode : new MDCode();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newHTML() {
+        const node = new MDHTML();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newMath(inline?: boolean) {
+        const node = inline ? new MDInlineMath : new MDMath();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newLineBreak() {
+        const node = new MDLineBreak();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newEmphasis() {
+        const node = new MDEmphasis();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newString() {
+        const node = new MDLiteral();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newImage() {
+        const node = new MDImage();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newLiteral() {
+        const node = new MDLiteral();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newDelete() {
+        const node = new MDDelete();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
+    }
+
+    newLink() {
+        const node = new MDLink();
+        this.seekToInsert(node.constructor as typeof MarkdownASTNode);
+        (this.ptr as MarkdownASTRoot).children.push(node);
+
+        return node;
     }
 
     walk() {
@@ -411,6 +613,8 @@ export class HTMLToMarkdownJob {
             }
         );
 
+        tw.nextSibling();
+        tw.firstChild();
 
     }
 
