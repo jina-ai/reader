@@ -21,9 +21,13 @@ import { Timestamp } from 'firebase-admin/firestore';
 
 const md5Hasher = new HashManager('md5', 'hex');
 const removeURLHash = (url: string) => {
-    const o = new URL(url);
-    o.hash = '';
-    return o.toString();
+    try {
+        const o = new URL(url);
+        o.hash = '';
+        return o.toString();
+    } catch (e) {
+        return url;
+    }
 }
 
 @singleton()
@@ -440,7 +444,7 @@ export class AdaptiveCrawlerHost extends RPCHost {
             }[];
         };
 
-        return json.results.filter(r => r.relevance_score > 0.3).map(r => r.document.text);
+        return json.results.filter(r => r.relevance_score > 0.3).map(r => removeURLHash(r.document.text));
     }
 
     getIndex(user?: JinaEmbeddingsTokenAccount) {
