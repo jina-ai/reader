@@ -418,11 +418,22 @@ export class AdaptiveCrawlerHost extends RPCHost {
         query: string;
         links: Record<string, string>;
     }) {
+        const invalidSuffix = [
+            '.zip',
+            '.docx',
+            '.pptx',
+            '.xlsx',
+        ];
+
+        const validLinks = Object.entries(links)
+            .map(([title, link]) => link)
+            .filter(link => link.startsWith('http') && !invalidSuffix.some(suffix => link.endsWith(suffix)));
+
         const data = {
             model: 'jina-reranker-v2-base-multilingual',
             query,
             top_n: 15,
-            documents: Object.entries(links).map(([title, link]) => link)
+            documents: validLinks,
         };
 
         const response = await fetch('https://api.jina.ai/v1/rerank', {
