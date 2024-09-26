@@ -484,7 +484,8 @@ export class CrawlerHost extends RPCHost {
             Buffer.from(
                 JSON.stringify({
                     ...snapshot,
-                    screenshot: undefined
+                    screenshot: undefined,
+                    pageshot: undefined,
                 }),
                 'utf-8'
             ),
