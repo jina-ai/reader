@@ -63,10 +63,10 @@ export class SearcherHost extends RPCHost {
     })
     @CloudHTTPv2({
         runtime: {
-            cpu: 8,
+            cpu: 4,
             memory: '8GiB',
             timeoutSeconds: 300,
-            concurrency: 3,
+            concurrency: 4,
             maxInstances: 200,
             minInstances: 1,
         },
