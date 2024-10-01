@@ -48,7 +48,7 @@ export class SnapshotFormatter extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    turnDownPlugins = [require('turndown-plugin-gfm').tables];
+    turnDownPlugins = [require('turndown-plugin-gfm').tables, require('turndown-plugin-gfm').strikethrough];
 
     constructor(
         protected globalLogger: Logger,
