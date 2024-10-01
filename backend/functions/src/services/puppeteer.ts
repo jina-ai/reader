@@ -225,9 +225,17 @@ export class PuppeteerControl extends AsyncService {
         super(...arguments);
         this.setMaxListeners(2 * Math.floor(os.totalmem() / (256 * 1024 * 1024)) + 1); 148 - 95;
 
+        let crippledTimes = 0;
         this.on('crippled', () => {
+            crippledTimes += 1;
             this.__loadedPage.length = 0;
             this.livePages.clear();
+            if (crippledTimes > 5) {
+                process.nextTick(() => {
+                    this.emit('error', new Error('Browser crashed too many times, quitting...'));
+                    // process.exit(1);
+                });
+            }
         });
     }
 
@@ -257,7 +265,9 @@ export class PuppeteerControl extends AsyncService {
         });
         this.browser.once('disconnected', () => {
             this.logger.warn(`Browser disconnected`);
-            this.emit('crippled');
+            if (this.browser) {
+                this.emit('crippled');
+            }
             process.nextTick(() => this.serviceReady());
         });
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}`);
@@ -287,13 +297,14 @@ export class PuppeteerControl extends AsyncService {
 
     async newPage() {
         await this.serviceReady();
-        const dedicatedContext = await this.browser.createBrowserContext();
         const sn = this._sn++;
         let page;
         try {
+            const dedicatedContext = await this.browser.createBrowserContext();
             page = await dedicatedContext.newPage();
         } catch (err: any) {
             this.logger.warn(`Failed to create page ${sn}`, { err: marshalErrorLike(err) });
+            this.browser.process()?.kill('SIGKILL');
             throw new ServiceNodeResourceDrainError(`This specific worker node failed to open a new page, try again.`);
         }
         const preparations = [];
