@@ -120,9 +120,12 @@ export class AdaptiveCrawlerHost extends RPCHost {
             failed: {},
         });
 
+        let urls: string[] = [];
         if (useSitemap) {
-            const urls = await this.crawlUrlsFromSitemap(targetUrl, maxPages);
+            urls = await this.crawlUrlsFromSitemap(targetUrl, maxPages);
+        }
 
+        if (urls.length > 0) {
             await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).update({
                 status: AdaptiveCrawlTaskStatus.PROCESSING,
                 statusText: `Processing 0/${urls.length}`,
