@@ -144,6 +144,8 @@ export class AdaptiveCrawlerHost extends RPCHost {
 
             await Promise.all(promises);
         } else {
+            meta.useSitemap = false;
+
             await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).update({
                 urls: [targetUrl.toString()],
             });
