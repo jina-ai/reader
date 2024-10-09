@@ -623,6 +623,7 @@ if (window.self === window.top) {
                     const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
                     screenshot = Buffer.from(await page.screenshot());
+                    pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
                     if (snapshot) {
                         snapshot.childFrames = await pSubFrameSnapshots;
                     }
