@@ -136,7 +136,8 @@ export class SnapshotFormatter extends AsyncService {
         }
 
         let pdfMode = false;
-        if (snapshot.pdfs?.length && !snapshot.title) {
+        // in case of Google Web Cache content
+        if (snapshot.pdfs?.length && (!snapshot.title || snapshot.title.startsWith('cache:'))) {
             const pdf = await this.pdfExtractor.cachedExtract(snapshot.pdfs[0],
                 this.threadLocal.get('cacheTolerance')
             );
@@ -330,7 +331,7 @@ export class SnapshotFormatter extends AsyncService {
             const n = code - 200;
             if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
-                formatted.warning = `Target URL returned error ${code}${text? `: ${text}` : ''}`;
+                formatted.warning = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
             }
         }
 
