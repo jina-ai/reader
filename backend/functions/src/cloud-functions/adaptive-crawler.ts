@@ -9,7 +9,7 @@ import _ from 'lodash';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import robotsParser from 'robots-parser';
-import { DOMParser } from 'xmldom';
+import { DOMParser } from '@xmldom/xmldom';
 
 import { AdaptiveCrawlerOptions } from '../dto/adaptive-crawler-options';
 import { CrawlerOptions } from '../dto/scrapping-options';
