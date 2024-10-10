@@ -1,6 +1,8 @@
 import {
+    AssertionFailureError,
     assignTransferProtocolMeta,
     HashManager,
+    ParamValidationError,
     RPCHost, RPCReflection,
 } from 'civkit';
 import { singleton } from 'tsyringe';
@@ -33,6 +35,8 @@ const removeURLHash = (url: string) => {
 @singleton()
 export class AdaptiveCrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
+    // Actual cache storage (gcp buckets) exists for 7 days, so here we need to select a time < 7 days.
+    cacheExpiry = 3 * 1000 * 60 * 60 * 24;
 
     static readonly __singleCrawlQueueName = 'singleCrawlQueue';
 
@@ -105,8 +109,13 @@ export class AdaptiveCrawlerHost extends RPCHost {
         const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
         const existing = await AdaptiveCrawlTask.fromFirestore(shortDigest);
 
-        if (existing) {
-            return { taskId: shortDigest };
+        if (existing?.createdAt) {
+            if (existing.createdAt.getTime() > Date.now() - this.cacheExpiry) {
+                this.logger.info(`Cache hit for ${shortDigest}, created at ${existing.createdAt.toDateString()}`);
+                return { taskId: shortDigest };
+            } else {
+                this.logger.info(`Cache expired for ${shortDigest}, created at ${existing.createdAt.toDateString()}`);
+            }
         }
 
         await AdaptiveCrawlTask.COLLECTION.doc(shortDigest).set({
@@ -182,10 +191,18 @@ export class AdaptiveCrawlerHost extends RPCHost {
         @Param('urls') urls: string[] = [],
     ) {
         if (!taskId) {
-            throw new Error('taskId is required');
+            throw new ParamValidationError('taskId is required');
         }
 
         const state = await AdaptiveCrawlTask.fromFirestore(taskId);
+
+        if (!state) {
+            throw new AssertionFailureError('The task does not exist');
+        }
+
+        if (state?.createdAt && state.createdAt.getTime() < Date.now() - this.cacheExpiry) {
+            throw new AssertionFailureError('The task has expired');
+        }
 
         if (urls.length) {
             const promises = Object.entries(state?.processed ?? {}).map(async ([url, cachePath]) => {
