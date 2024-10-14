@@ -41,7 +41,7 @@
     "dayjs": "^1.11.9",
     "express": "^4.19.2",
     "firebase-admin": "^12.1.0",
-    "firebase-functions": "^4.9.0",
+    "firebase-functions": "^6.0.1",
     "htmlparser2": "^9.0.0",
     "jose": "^5.1.0",
     "langdetect": "^0.2.1",

@@ -90,7 +90,7 @@ export class SearcherHost extends RPCHost {
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const noSlashPath = ctx.req.url.slice(1);
+        const noSlashPath = decodeURIComponent(ctx.req.url).slice(1);
         if (!noSlashPath && !q) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
@@ -152,7 +152,7 @@ export class SearcherHost extends RPCHost {
         delete crawlerOptions.html;
 
         const crawlOpts = this.crawler.configure(crawlerOptions);
-        const searchQuery = braveSearchExplicitOperators.addTo(q || ctx.req.path.slice(1));
+        const searchQuery = braveSearchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
             count: Math.floor(count + 2)

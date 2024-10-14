@@ -156,7 +156,7 @@ export class CrawlerHost extends RPCHost {
         let chargeAmount = 0;
         const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
-        const targetUrl = await this.getTargetUrl(ctx.req.url, crawlerOptions);
+        const targetUrl = await this.getTargetUrl(decodeURIComponent(ctx.req.url), crawlerOptions);
         if (!targetUrl) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
@@ -592,11 +592,11 @@ export class CrawlerHost extends RPCHost {
 
     assignChargeAmount(formatted: FormattedPage) {
         if (!formatted) {
-            return undefined;
+            return 0;
         }
 
         const textContent = formatted?.content || formatted?.description || formatted?.text || formatted?.html;
-        let amount;
+        let amount = 0;
         do {
             if (typeof textContent === 'string') {
                 amount = estimateToken(textContent);
