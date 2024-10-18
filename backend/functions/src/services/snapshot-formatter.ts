@@ -510,8 +510,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             },
 
             replacement: function (content, node: any) {
-                let href = node.getAttribute('href');
-                if (href) href = href.replace(/([()])/g, '\\$1');
+                const href = node.getAttribute('href');
                 let title = cleanAttribute(node.getAttribute('title'));
                 if (title) title = ' "' + title.replace(/"/g, '\\"') + '"';
 
