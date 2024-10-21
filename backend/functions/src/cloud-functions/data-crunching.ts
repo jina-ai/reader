@@ -5,7 +5,7 @@ import {
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import {
-    CloudScheduleV2, CloudTaskV2,
+    // CloudScheduleV2, CloudTaskV2,
     FirebaseStorageBucketControl, Logger, Param, TempFileManager
 } from '../shared';
 import _ from 'lodash';
@@ -48,24 +48,24 @@ export class DataCrunchingHost extends RPCHost {
         this.emit('ready');
     }
 
-    @CloudTaskV2({
-        runtime: {
-            cpu: 2,
-            memory: '4GiB',
-            timeoutSeconds: 3600,
-            concurrency: 2,
-            maxInstances: 200,
-            retryConfig: {
-                maxAttempts: 3,
-                minBackoffSeconds: 60,
-            },
-            rateLimits: {
-                maxConcurrentDispatches: 150,
-                maxDispatchesPerSecond: 2,
-            },
-        },
-        tags: ['DataCrunching'],
-    })
+    // @CloudTaskV2({
+    //     runtime: {
+    //         cpu: 2,
+    //         memory: '4GiB',
+    //         timeoutSeconds: 3600,
+    //         concurrency: 2,
+    //         maxInstances: 200,
+    //         retryConfig: {
+    //             maxAttempts: 3,
+    //             minBackoffSeconds: 60,
+    //         },
+    //         rateLimits: {
+    //             maxConcurrentDispatches: 150,
+    //             maxDispatchesPerSecond: 2,
+    //         },
+    //     },
+    //     tags: ['DataCrunching'],
+    // })
     async crunchPageCacheWorker(
         @Param('date') date: string,
         @Param('offset', { default: 0 }) offset: number
@@ -87,18 +87,18 @@ export class DataCrunchingHost extends RPCHost {
         return true;
     }
 
-    @CloudScheduleV2('2 0 * * *', {
-        name: 'crunchPageCacheEveryday',
-        runtime: {
-            cpu: 2,
-            memory: '4GiB',
-            timeoutSeconds: 1800,
-            timeZone: 'UTC',
-            retryCount: 3,
-            minBackoffSeconds: 60,
-        },
-        tags: ['DataCrunching'],
-    })
+    // @CloudScheduleV2('2 0 * * *', {
+    //     name: 'crunchPageCacheEveryday',
+    //     runtime: {
+    //         cpu: 2,
+    //         memory: '4GiB',
+    //         timeoutSeconds: 1800,
+    //         timeZone: 'UTC',
+    //         retryCount: 3,
+    //         minBackoffSeconds: 60,
+    //     },
+    //     tags: ['DataCrunching'],
+    // })
     async dispatchPageCacheCrunching() {
         for await (const { fileName, date, offset } of this.iterPageCacheChunks()) {
             this.logger.info(`Dispatching ${fileName}...`);
