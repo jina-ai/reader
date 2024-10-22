@@ -24,6 +24,7 @@ import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapsho
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean;
+    withShadowDom?: boolean;
     targetSelector?: string | string[];
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
@@ -571,7 +572,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         try {
-            if (crawlOpts?.targetSelector || crawlOpts?.removeSelector || crawlOpts?.withIframe) {
+            if (crawlOpts?.targetSelector || crawlOpts?.removeSelector || crawlOpts?.withIframe || crawlOpts?.withShadowDom) {
                 for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
                     yield this.jsdomControl.narrowSnapshot(x, crawlOpts);
                 }
@@ -686,6 +687,7 @@ export class CrawlerHost extends RPCHost {
             overrideUserAgent: opts.userAgent,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
+            withShadowDom: opts.withShadowDom,
             locale: opts.locale,
             referer: opts.referer,
         };

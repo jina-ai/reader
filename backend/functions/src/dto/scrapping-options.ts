@@ -101,6 +101,16 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-With-Iframe': {
+                    description: `Enable filling iframe contents into main. (violates standards)`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-With-Shadow-Dom': {
+                    description: `Enable filling shadow dom contents into main. (violates standards)`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-User-Agent': {
                     description: `Override User-Agent.`,
                     in: 'header',
@@ -184,6 +194,11 @@ export class CrawlerOptions extends AutoCastable {
         default: false,
     })
     withIframe!: boolean;
+
+    @Prop({
+        default: false,
+    })
+    withShadowDom!: boolean;
 
     @Prop({
         arrayOf: String,
@@ -281,6 +296,13 @@ export class CrawlerOptions extends AutoCastable {
             instance.withIframe = Boolean(withIframe);
         }
         if (instance.withIframe) {
+            instance.timeout ??= null;
+        }
+        const withShadowDom = ctx?.req.get('x-with-shadow-dom');
+        if (withShadowDom) {
+            instance.withShadowDom = Boolean(withShadowDom);
+        }
+        if (instance.withShadowDom) {
             instance.timeout ??= null;
         }
 

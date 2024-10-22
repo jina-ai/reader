@@ -46,6 +46,7 @@ export interface PageSnapshot {
     href: string;
     rebase?: string;
     html: string;
+    shadowExpanded?: string
     text: string;
     status?: number;
     statusText?: string;
@@ -157,6 +158,79 @@ function getMaxDepthAndCountUsingTreeWalker(root) {
   };
 }
 
+function cloneAndExpandShadowRoots(rootElement = document.documentElement) {
+  // Create a shallow clone of the root element
+  const clone = rootElement.cloneNode(false);
+  // Function to process an element and its shadow root
+  function processShadowRoot(original, cloned) {
+    if (original.shadowRoot && original.shadowRoot.mode === 'open') {
+      shadowDomPresents = true;
+      const shadowContent = document.createDocumentFragment();
+
+      // Clone shadow root content normally
+      original.shadowRoot.childNodes.forEach(childNode => {
+        const clonedNode = childNode.cloneNode(true);
+        shadowContent.appendChild(clonedNode);
+      });
+
+      // Handle slots
+      const slots = shadowContent.querySelectorAll('slot');
+      slots.forEach(slot => {
+        const slotName = slot.getAttribute('name') || '';
+        const assignedElements = original.querySelectorAll(
+          slotName ? \`[slot="\${slotName}"]\` : ':not([slot])'
+        );
+
+        if (assignedElements.length > 0) {
+          const slotContent = document.createDocumentFragment();
+          assignedElements.forEach(el => {
+            const clonedEl = el.cloneNode(true);
+            slotContent.appendChild(clonedEl);
+          });
+          slot.parentNode.replaceChild(slotContent, slot);
+        } else if (!slotName) {
+          // Keep default slot content
+          // No need to do anything as it's already cloned
+        }
+      });
+
+      cloned.appendChild(shadowContent);
+    }
+  }
+
+  // Use a TreeWalker on the original root to clone the entire structure
+  const treeWalker = document.createTreeWalker(
+    rootElement,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT
+  );
+
+  const elementMap = new Map([[rootElement, clone]]);
+
+  let currentNode;
+  while (currentNode = treeWalker.nextNode()) {
+    const parentClone = elementMap.get(currentNode.parentNode);
+    const clonedNode = currentNode.cloneNode(false);
+    parentClone.appendChild(clonedNode);
+
+    if (currentNode.nodeType === Node.ELEMENT_NODE) {
+      elementMap.set(currentNode, clonedNode);
+      processShadowRoot(currentNode, clonedNode);
+    }
+  }
+
+  return clone;
+}
+
+function shadowDomPresent(rootElement = document.documentElement) {
+    const elems = rootElement.querySelectorAll('*');
+    for (const x of elems) {
+        if (x.shadowRoot && x.shadowRoot.mode === 'open') {
+            return true;
+        }
+    }
+    return false;
+}
+
 function giveSnapshot(stopActiveSnapshot) {
     if (stopActiveSnapshot) {
         window.haltSnapshot = true;
@@ -174,6 +248,7 @@ function giveSnapshot(stopActiveSnapshot) {
         href: document.location.href,
         html: document.documentElement?.outerHTML,
         text: document.body?.innerText,
+        shadowExpanded: shadowDomPresent() ? cloneAndExpandShadowRoots()?.outerHTML : undefined,
         parsed: parsed,
         imgs: [],
         maxElemDepth: domAnalysis.maxDepth,

@@ -299,12 +299,12 @@ export class SnapshotFormatter extends AsyncService {
                 && toBeTurnedToMd !== jsDomElementOfHTML
             ) {
                 try {
-                    contentText = this.jsdomControl.runTurndown(turnDownService, snapshot.html);
+                    contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
                     const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
                     try {
-                        contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, snapshot.html);
+                        contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, jsDomElementOfHTML);
                     } catch (err2) {
                         this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }

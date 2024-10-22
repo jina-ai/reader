@@ -5,6 +5,7 @@ import { ExtendedSnapshot, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { Threaded } from '../shared/services/threaded';
+import type { ExtraScrappingOptions } from '../cloud-functions/crawler';
 
 const pLinkedom = import('linkedom');
 
@@ -27,12 +28,8 @@ export class JSDomControl extends AsyncService {
         this.emit('ready');
     }
 
-    async narrowSnapshot(snapshot: PageSnapshot | undefined, options?: {
-        targetSelector?: string | string[];
-        removeSelector?: string | string[];
-        withIframe?: boolean;
-    }) {
-        if (snapshot?.parsed && !options?.targetSelector && !options?.removeSelector && !options?.withIframe) {
+    async narrowSnapshot(snapshot: PageSnapshot | undefined, options?: ExtraScrappingOptions) {
+        if (snapshot?.parsed && !options?.targetSelector && !options?.removeSelector && !options?.withIframe && !options?.withShadowDom) {
             return snapshot;
         }
         if (!snapshot?.html) {
@@ -43,14 +40,13 @@ export class JSDomControl extends AsyncService {
     }
 
     @Threaded()
-    async actualNarrowSnapshot(snapshot: PageSnapshot, options?: {
-        targetSelector?: string | string[];
-        removeSelector?: string | string[];
-        withIframe?: boolean;
-    }): Promise<PageSnapshot | undefined> {
-
+    async actualNarrowSnapshot(snapshot: PageSnapshot, options?: ExtraScrappingOptions): Promise<PageSnapshot | undefined> {
         const t0 = Date.now();
-        const jsdom = this.linkedom.parseHTML(snapshot.html);
+        let sourceHTML = snapshot.html;
+        if (options?.withShadowDom && snapshot.shadowExpanded) {
+            sourceHTML = snapshot.shadowExpanded;
+        }
+        const jsdom = this.linkedom.parseHTML(sourceHTML);
         const allNodes: Node[] = [];
         jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
         if (options?.withIframe) {
@@ -107,12 +103,12 @@ export class JSDomControl extends AsyncService {
 
             return snapshot;
         }
-        const textChunks: string[] = [];
+        const textNodes: HTMLElement[] = [];
         let rootDoc: Document;
         if (allNodes.length === 1 && allNodes[0].nodeName === '#document') {
             rootDoc = allNodes[0] as any;
             if (rootDoc.body.innerText) {
-                textChunks.push(rootDoc.body.innerText);
+                textNodes.push(rootDoc.body);
             }
         } else {
             rootDoc = this.linkedom.parseHTML('<html><body></body></html>').window.document;
@@ -120,10 +116,16 @@ export class JSDomControl extends AsyncService {
                 rootDoc.body.appendChild(n);
                 rootDoc.body.appendChild(rootDoc.createTextNode('\n\n'));
                 if ((n as HTMLElement).innerText) {
-                    textChunks.push((n as HTMLElement).innerText);
+                    textNodes.push(n as HTMLElement);
                 }
             }
         }
+        const textChunks = textNodes.map((x) => {
+            const clone = x.cloneNode(true) as HTMLElement;
+            clone.querySelectorAll('script,style,link,svg').forEach((s) => s.remove());
+
+            return clone.innerText;
+        });
 
         let parsed;
         try {
@@ -228,6 +230,14 @@ export class JSDomControl extends AsyncService {
     }
     snippetToElement(snippet?: string, url?: string) {
         const parsed = this.linkedom.parseHTML(snippet || '<html><body></body></html>');
+
+        // Hack for turndown gfm table plugin.
+        parsed.window.document.querySelectorAll('table').forEach((x) => {
+            Object.defineProperty(x, 'rows', { value: Array.from(x.querySelectorAll('tr')), enumerable: true });
+        });
+        Object.defineProperty(parsed.window.document.documentElement, 'cloneNode', {
+            value: function () { return this; },
+        });
 
         return parsed.window.document.documentElement;
     }
