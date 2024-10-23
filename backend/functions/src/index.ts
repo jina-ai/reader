@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-// import './shared/lib/doom-domain';
+import './shared/lib/doom-domain';
 import { initializeApp } from 'firebase-admin/app';
 initializeApp();
 
