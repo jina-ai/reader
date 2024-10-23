@@ -334,7 +334,7 @@ export class PuppeteerControl extends AsyncService {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
             process.nextTick(() => {
                 this.emit('error', err);
-                // process.exit(1);
+                process.exit(1);
             });
             return Promise.reject(err);
         });
