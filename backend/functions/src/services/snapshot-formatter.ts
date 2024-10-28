@@ -295,9 +295,10 @@ export class SnapshotFormatter extends AsyncService {
             }
 
             if (
-                !contentText || (contentText.startsWith('<') && contentText.endsWith('>'))
+                this.isPoorlyTransformed(contentText, toBeTurnedToMd)
                 && toBeTurnedToMd !== jsDomElementOfHTML
             ) {
+                toBeTurnedToMd = jsDomElementOfHTML;
                 try {
                     contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
                 } catch (err) {
@@ -310,7 +311,7 @@ export class SnapshotFormatter extends AsyncService {
                     }
                 }
             }
-            if (!contentText || (contentText.startsWith('<') || contentText.endsWith('>'))) {
+            if (this.isPoorlyTransformed(contentText, toBeTurnedToMd)) {
                 contentText = snapshot.text;
             }
         } while (false);
@@ -551,11 +552,58 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 return delimiter + extraSpace + content + (delimiter === '```' && !content.endsWith(extraSpace) ? extraSpace : '') + delimiter;
             }
         });
+        turnDownService.addRule('flattened-tables', {
+            filter: (node) => {
+                if (node.tagName !== 'TABLE') {
+                    return false;
+                }
+                let parentHasTable = false;
+                let ptr = node.parentElement;
+                while (ptr) {
+                    if (ptr.tagName === 'TABLE') {
+                        parentHasTable = true;
+                        break;
+                    }
+                    ptr = ptr.parentElement;
+                }
+
+                return parentHasTable;
+            },
+            replacement: (innerText) => {
+                return innerText.trim();
+            }
+        });
 
         return turnDownService;
     }
 
 
+    isPoorlyTransformed(content?: string, node?: Element) {
+        if (!content) {
+            return true;
+        }
+
+        if (content.startsWith('<') && content.endsWith('>')) {
+            return true;
+        }
+
+        if (content.includes('<table') && content.includes('</table>')) {
+            const tableElms = node?.querySelectorAll('table') || [];
+            const deepTableElms = node?.querySelectorAll('table table');
+
+            if ((deepTableElms?.length || 0) / tableElms.length > 0.6) {
+                return true;
+            }
+
+            const tbodyElms = node?.querySelectorAll('tbody') || [];
+            const deepTbodyElms = node?.querySelectorAll('tbody tbody');
+            if ((deepTbodyElms?.length || 0) / tbodyElms.length > 0.6) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 const snapshotFormatter = container.resolve(SnapshotFormatter);
