@@ -692,6 +692,11 @@ export class CrawlerHost extends RPCHost {
             referer: opts.referer,
         };
 
+        if (opts.locale) {
+            crawlOpts.extraHeaders ??= {};
+            crawlOpts.extraHeaders['Accept-Language'] = opts.locale;
+        }
+
         return crawlOpts;
     }
 

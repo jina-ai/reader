@@ -46,7 +46,7 @@ export interface PageSnapshot {
     href: string;
     rebase?: string;
     html: string;
-    shadowExpanded?: string
+    shadowExpanded?: string;
     text: string;
     status?: number;
     statusText?: string;
@@ -75,6 +75,7 @@ export interface ScrappingOptions {
     timeoutMs?: number;
     locale?: string;
     referer?: string;
+    extraHeaders?: Record<string, string>;
 }
 
 
@@ -581,14 +582,34 @@ if (window.self === window.top) {
                 pdfUrls.push(url);
             }
         });
+        if (options?.extraHeaders) {
+            page.on('request', async (req) => {
+                if (req.isInterceptResolutionHandled()) {
+                    return;
+                };
+
+                const overrides = req.continueRequestOverrides();
+                const continueArgs = [{
+                    ...overrides,
+                    headers: {
+                        ...overrides?.headers,
+                        ...options.extraHeaders,
+                    }
+                }, 1] as const;
+
+                return req.continue(continueArgs[0], continueArgs[1]);
+            });
+        }
         const sn = this.snMap.get(page);
         this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
 
         this.logger.info(`Locale setting: ${options?.locale}`);
         if (options?.locale) {
-            await page.setExtraHTTPHeaders({
-                'Accept-Language': options?.locale
-            });
+            // Add headers via request interception to walk around this bug
+            // https://github.com/puppeteer/puppeteer/issues/10235
+            // await page.setExtraHTTPHeaders({
+            //     'Accept-Language': options?.locale
+            // });
 
             await page.evaluateOnNewDocument(() => {
                 Object.defineProperty(navigator, "language", {
@@ -605,7 +626,10 @@ if (window.self === window.top) {
         }
 
         if (options?.proxyUrl) {
-            await page.useProxy(options.proxyUrl);
+            await page.useProxy(options.proxyUrl, {
+                headers: options.extraHeaders,
+                interceptResolutionPriority: 2,
+            });
         }
         if (options?.cookies) {
             const mapped = options.cookies.map((x) => {
