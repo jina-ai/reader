@@ -592,6 +592,7 @@ if (window.self === window.top) {
                 const continueArgs = [{
                     ...overrides,
                     headers: {
+                        ...req.headers(),
                         ...overrides?.headers,
                         ...options.extraHeaders,
                     }
