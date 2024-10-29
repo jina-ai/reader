@@ -739,22 +739,22 @@ if (window.self === window.top) {
                         throw stuff;
                     }
                 }
-                try {
-                    if ((!snapshot?.title || !snapshot?.parsed?.content) && !(snapshot?.pdfs?.length)) {
-                        const salvaged = await this.salvage(url, page);
-                        if (salvaged) {
-                            const pSubFrameSnapshots = this.snapshotChildFrames(page);
-                            snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                            screenshot = Buffer.from(await page.screenshot());
-                            pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
-                            if (snapshot) {
-                                snapshot.childFrames = await pSubFrameSnapshots;
-                            }
-                        }
-                    }
-                } catch (err: any) {
-                    this.logger.warn(`Page ${sn}: Failed to salvage ${url}`, { err: marshalErrorLike(err) });
-                }
+                // try {
+                //     if ((!snapshot?.title || !snapshot?.parsed?.content) && !(snapshot?.pdfs?.length)) {
+                //         const salvaged = await this.salvage(url, page);
+                //         if (salvaged) {
+                //             const pSubFrameSnapshots = this.snapshotChildFrames(page);
+                //             snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
+                //             screenshot = Buffer.from(await page.screenshot());
+                //             pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
+                //             if (snapshot) {
+                //                 snapshot.childFrames = await pSubFrameSnapshots;
+                //             }
+                //         }
+                //     }
+                // } catch (err: any) {
+                //     this.logger.warn(`Page ${sn}: Failed to salvage ${url}`, { err: marshalErrorLike(err) });
+                // }
 
                 finalized = true;
                 if (snapshot?.html) {
@@ -853,28 +853,28 @@ if (window.self === window.top) {
         }
     }
 
-    async salvage(url: string, page: Page) {
-        this.logger.info(`Salvaging ${url}`);
-        const googleArchiveUrl = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(url)}`;
-        const resp = await fetch(googleArchiveUrl, {
-            headers: {
-                'User-Agent': `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
-            }
-        });
-        resp.body?.cancel().catch(() => void 0);
-        if (!resp.ok) {
-            this.logger.warn(`No salvation found for url: ${url}`, { status: resp.status, url });
-            return null;
-        }
+    // async salvage(url: string, page: Page) {
+    //     this.logger.info(`Salvaging ${url}`);
+    //     const googleArchiveUrl = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(url)}`;
+    //     const resp = await fetch(googleArchiveUrl, {
+    //         headers: {
+    //             'User-Agent': `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
+    //         }
+    //     });
+    //     resp.body?.cancel().catch(() => void 0);
+    //     if (!resp.ok) {
+    //         this.logger.warn(`No salvation found for url: ${url}`, { status: resp.status, url });
+    //         return null;
+    //     }
 
-        await page.goto(googleArchiveUrl, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 15_000 }).catch((err) => {
-            this.logger.warn(`Page salvation did not fully succeed.`, { err: marshalErrorLike(err) });
-        });
+    //     await page.goto(googleArchiveUrl, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 15_000 }).catch((err) => {
+    //         this.logger.warn(`Page salvation did not fully succeed.`, { err: marshalErrorLike(err) });
+    //     });
 
-        this.logger.info(`Salvation completed.`);
+    //     this.logger.info(`Salvation completed.`);
 
-        return true;
-    }
+    //     return true;
+    // }
 
     async snapshotChildFrames(page: Page): Promise<PageSnapshot[]> {
         const childFrames = page.mainFrame().childFrames();
