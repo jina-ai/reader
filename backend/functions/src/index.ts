@@ -7,6 +7,7 @@ initializeApp();
 import { loadModulesDynamically, registry } from './shared';
 import path from 'path';
 loadModulesDynamically(path.resolve(__dirname, 'cloud-functions'));
+loadModulesDynamically(path.resolve(__dirname, 'shared', 'cloud-functions'));
 
 Object.assign(exports, registry.exportAll());
 Object.assign(exports, registry.exportGrouped({
