@@ -552,25 +552,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 return delimiter + extraSpace + content + (delimiter === '```' && !content.endsWith(extraSpace) ? extraSpace : '') + delimiter;
             }
         });
-        turnDownService.addRule('flattened-tables', {
-            filter: (node) => {
-                if (node.tagName !== 'TABLE') {
-                    return false;
-                }
-                let parentHasTable = false;
-                let ptr = node.parentElement;
-                while (ptr) {
-                    if (ptr.tagName === 'TABLE') {
-                        parentHasTable = true;
-                        break;
-                    }
-                    ptr = ptr.parentElement;
-                }
-
-                return parentHasTable;
-            },
-            replacement: (innerText) => {
-                return innerText.trim();
+        turnDownService.addRule('picture', {
+            filter: 'picture',
+            replacement: (content, _node) => {
+                return content;
             }
         });
 
