@@ -93,61 +93,50 @@ export class SearcherHost extends RPCHost {
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
         if (!noSlashPath && !q) {
             const latestUser = uid ? await auth.assertUser() : undefined;
+            const index = this.crawler.getIndex(latestUser);
+            if (!uid) {
+                index.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
+            }
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
 
-                return this.crawler.getIndex(latestUser);
+                return index;
             }
 
-            return assignTransferProtocolMeta(`${this.crawler.getIndex(latestUser)}`,
+            return assignTransferProtocolMeta(`${index}`,
                 { contentType: 'text/plain', envelope: null }
             );
         }
 
-        if (uid) {
-            const user = await auth.assertUser();
-            if (!(user.wallet.total_balance > 0)) {
-                throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
-            }
-
-            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
-                parseInt(user.metadata?.speed_level) >= 2 ?
-                    RateLimitDesc.from({
-                        occurrence: 100,
-                        periodSeconds: 60
-                    }) :
-                    RateLimitDesc.from({
-                        occurrence: 40,
-                        periodSeconds: 60
-                    })
-            ];
-
-            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
-                rpcReflect, uid, [rpcReflect.name.toUpperCase()],
-                ...rateLimitPolicy
-            );
-
-            rpcReflect.finally(() => {
-                if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
-                        this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
-                    });
-                    apiRoll.chargeAmount = chargeAmount;
-                }
-            });
-        } else if (ctx.req.ip) {
-            this.threadLocal.set('ip', ctx.req.ip);
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, [rpcReflect.name.toUpperCase()],
-                [
-                    // 5 requests per minute
-                    new Date(Date.now() - 60 * 1000), 5
-                ]
-            );
-            rpcReflect.finally(() => {
-                if (chargeAmount) {
-                    apiRoll.chargeAmount = chargeAmount;
-                }
-            });
+        const user = await auth.assertUser();
+        if (!(user.wallet.total_balance > 0)) {
+            throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
         }
+
+        const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
+            parseInt(user.metadata?.speed_level) >= 2 ?
+                RateLimitDesc.from({
+                    occurrence: 100,
+                    periodSeconds: 60
+                }) :
+                RateLimitDesc.from({
+                    occurrence: 40,
+                    periodSeconds: 60
+                })
+        ];
+
+        const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
+            rpcReflect, uid!, [rpcReflect.name.toUpperCase()],
+            ...rateLimitPolicy
+        );
+
+        rpcReflect.finally(() => {
+            if (chargeAmount) {
+                auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
+                    this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
+                });
+                apiRoll.chargeAmount = chargeAmount;
+            }
+        });
 
         delete crawlerOptions.html;
 
