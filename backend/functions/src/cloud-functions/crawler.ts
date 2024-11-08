@@ -23,7 +23,7 @@ import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
-    withIframe?: boolean;
+    withIframe?: boolean | 'quoted';
     withShadowDom?: boolean;
     targetSelector?: string | string[];
     removeSelector?: string | string[];
@@ -67,6 +67,10 @@ export class CrawlerHost extends RPCHost {
             }
             if (options.cookies?.length) {
                 // Potential privacy issue, dont cache if cookies are used
+                return;
+            }
+            if (options.injectFrameScripts?.length || options.injectPageScripts?.length) {
+                // Potentially mangeled content, dont cache if scripts are injected
                 return;
             }
             if (options.locale) {
@@ -237,7 +241,7 @@ export class CrawlerHost extends RPCHost {
                 throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
         }
-        const crawlOpts = this.configure(crawlerOptions);
+        const crawlOpts = await this.configure(crawlerOptions);
 
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -284,7 +288,7 @@ export class CrawlerHost extends RPCHost {
                 const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                 chargeAmount = this.assignChargeAmount(formatted);
 
-                if (crawlerOptions.timeout === undefined) {
+                if (crawlerOptions.isEarlyReturnApplicable()) {
                     return formatted;
                 }
 
@@ -315,7 +319,7 @@ export class CrawlerHost extends RPCHost {
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
 
-            if (crawlerOptions.timeout === undefined) {
+            if (crawlerOptions.isEarlyReturnApplicable()) {
                 if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
                     return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
@@ -557,8 +561,8 @@ export class CrawlerHost extends RPCHost {
 
         let cache;
 
-        const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
-        if (cacheTolerance && !crawlOpts?.cookies?.length) {
+        if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
+            const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
         }
 
@@ -665,7 +669,7 @@ export class CrawlerHost extends RPCHost {
         }
     }
 
-    configure(opts: CrawlerOptions) {
+    async configure(opts: CrawlerOptions) {
 
         this.threadLocal.set('withGeneratedAlt', opts.withGeneratedAlt);
         this.threadLocal.set('withLinksSummary', opts.withLinksSummary);
@@ -695,6 +699,30 @@ export class CrawlerHost extends RPCHost {
         if (opts.locale) {
             crawlOpts.extraHeaders ??= {};
             crawlOpts.extraHeaders['Accept-Language'] = opts.locale;
+        }
+
+        if (opts.injectFrameScript?.length) {
+            crawlOpts.injectFrameScripts = (await Promise.all(
+                opts.injectFrameScript.map((x) => {
+                    if (URL.canParse(x)) {
+                        return fetch(x).then((r) => r.text());
+                    }
+
+                    return x;
+                })
+            )).filter(Boolean);
+        }
+
+        if (opts.injectPageScript?.length) {
+            crawlOpts.injectPageScripts = (await Promise.all(
+                opts.injectPageScript.map((x) => {
+                    if (URL.canParse(x)) {
+                        return fetch(x).then((r) => r.text());
+                    }
+
+                    return x;
+                })
+            )).filter(Boolean);
         }
 
         return crawlOpts;

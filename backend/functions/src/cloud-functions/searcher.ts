@@ -140,7 +140,7 @@ export class SearcherHost extends RPCHost {
 
         delete crawlerOptions.html;
 
-        const crawlOpts = this.crawler.configure(crawlerOptions);
+        const crawlOpts = await this.crawler.configure(crawlerOptions);
         const searchQuery = braveSearchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
@@ -156,7 +156,7 @@ export class SearcherHost extends RPCHost {
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
-            { ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs },
+            CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
         );
 

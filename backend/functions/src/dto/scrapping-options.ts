@@ -192,8 +192,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop({
         default: false,
+        type: [String, Boolean]
     })
-    withIframe!: boolean;
+    withIframe!: boolean | 'quoted';
 
     @Prop({
         default: false,
@@ -210,6 +211,16 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop()
     userAgent?: string;
+
+    @Prop({
+        arrayOf: String,
+    })
+    injectPageScript?: string[];
+
+    @Prop({
+        arrayOf: String,
+    })
+    injectFrameScript?: string[];
 
     @Prop({
         validate: (v: number) => v > 0 && v <= 180,
@@ -293,7 +304,7 @@ export class CrawlerOptions extends AutoCastable {
         }
         const withIframe = ctx?.req.get('x-with-iframe');
         if (withIframe !== undefined) {
-            instance.withIframe = Boolean(withIframe);
+            instance.withIframe = withIframe.toLowerCase() === 'quoted' ? 'quoted' : Boolean(withIframe);
         }
         if (instance.withIframe) {
             instance.timeout ??= null;
@@ -330,6 +341,37 @@ export class CrawlerOptions extends AutoCastable {
 
         return instance;
     }
+
+    isEarlyReturnApplicable() {
+        if (this.timeout !== undefined) {
+            return false;
+        }
+        if (this.waitForSelector?.length) {
+            return false;
+        }
+        if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
+
+        return true;
+    }
+
+    isCacheQueryApplicable() {
+        if (this.noCache) {
+            return false;
+        }
+        if (this.cacheTolerance === 0) {
+            return false;
+        }
+        if (this.setCookies?.length) {
+            return false;
+        }
+        if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
+
+        return true;
+    }
 }
 
 export class CrawlerOptionsHeaderOnly extends CrawlerOptions {
@@ -347,14 +389,14 @@ function filterSelector(s?: string | string[]) {
         return s;
     }
     const sr = Array.isArray(s) ? s : [s];
-    const selectors = sr.filter((i)=> {
+    const selectors = sr.filter((i) => {
         const innerSelectors = i.split(',').map((s) => s.trim());
         const someViolation = innerSelectors.find((x) => x.startsWith('*') || x.startsWith(':') || x.includes('*:'));
         if (someViolation) {
             return false;
         }
         return true;
-    })
+    });
 
     return selectors;
 };

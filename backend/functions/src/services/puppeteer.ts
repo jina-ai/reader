@@ -76,6 +76,8 @@ export interface ScrappingOptions {
     locale?: string;
     referer?: string;
     extraHeaders?: Record<string, string>;
+    injectFrameScripts?: string[];
+    injectPageScripts?: string[];
 }
 
 
@@ -95,9 +97,135 @@ puppeteer.use(puppeteerPageProxy({
     interceptResolutionPriority: 1,
 }));
 
+const SIMULATE_SCROLL = `
+(function () {
+    function createIntersectionObserverEntry(target, isIntersecting, timestamp) {
+        const targetRect = target.getBoundingClientRect();
+        const record = {
+            target,
+            isIntersecting,
+            time: timestamp,
+            // If intersecting, intersectionRect matches boundingClientRect
+            // If not intersecting, intersectionRect is empty (0x0)
+            intersectionRect: isIntersecting
+                ? targetRect
+                : new DOMRectReadOnly(0, 0, 0, 0),
+            // Current bounding client rect of the target
+            boundingClientRect: targetRect,
+            // Intersection ratio is either 0 (not intersecting) or 1 (fully intersecting)
+            intersectionRatio: isIntersecting ? 1 : 0,
+            // Root bounds (viewport in our case)
+            rootBounds: new DOMRectReadOnly(
+                0,
+                0,
+                window.innerWidth,
+                window.innerHeight
+            )
+        };
+        Object.setPrototypeOf(record, window.IntersectionObserverEntry.prototype);
+        return record;
+    }
+    function cloneIntersectionObserverEntry(entry) {
+        const record = {
+            target: entry.target,
+            isIntersecting: entry.isIntersecting,
+            time: entry.time,
+            intersectionRect: entry.intersectionRect,
+            boundingClientRect: entry.boundingClientRect,
+            intersectionRatio: entry.intersectionRatio,
+            rootBounds: entry.rootBounds
+        };
+        Object.setPrototypeOf(record, window.IntersectionObserverEntry.prototype);
+        return record;
+    }
+    const orig = window.IntersectionObserver;
+    const kCallback = Symbol('callback');
+    const kLastEntryMap = Symbol('lastEntryMap');
+    const liveObservers = new Map();
+    class MangledIntersectionObserver extends orig {
+        constructor(callback, options) {
+            super((entries, observer) => {
+                const lastEntryMap = observer[kLastEntryMap];
+                const lastEntry = entries[entries.length - 1];
+                lastEntryMap.set(lastEntry.target, lastEntry);
+                return callback(entries, observer);
+            }, options);
+            this[kCallback] = callback;
+            this[kLastEntryMap] = new WeakMap();
+            liveObservers.set(this, new Set());
+        }
+        disconnect() {
+            liveObservers.get(this)?.clear();
+            liveObservers.delete(this);
+            return super.disconnect();
+        }
+        observe(target) {
+            const observer = liveObservers.get(this);
+            observer?.add(target);
+            return super.observe(target);
+        }
+        unobserve(target) {
+            const observer = liveObservers.get(this);
+            observer?.delete(target);
+            return super.unobserve(target);
+        }
+    }
+    Object.defineProperty(MangledIntersectionObserver, 'name', { value: 'IntersectionObserver', writable: false });
+    window.IntersectionObserver = MangledIntersectionObserver;
+    function simulateScroll() {
+        for (const [observer, targets] of liveObservers.entries()) {
+            const t0 = performance.now();
+            for (const target of targets) {
+                const entry = createIntersectionObserverEntry(target, true, t0);
+                observer[kCallback]([entry], observer);
+                setTimeout(() => {
+                    const t1 = performance.now();
+                    const lastEntry = observer[kLastEntryMap].get(target);
+                    if (!lastEntry) {
+                        return;
+                    }
+                    const entry2 = { ...cloneIntersectionObserverEntry(lastEntry), time: t1 };
+                    observer[kCallback]([entry2], observer);
+                });
+            }
+        }
+    }
+    window.simulateScroll = simulateScroll;
+})();
+`;
+
+const MUTATION_IDLE_WATCH = `
+(function () {
+    let timeout;
+    const sendMsg = ()=> {
+        document.dispatchEvent(new CustomEvent('mutationIdle'));
+    };
+
+    const cb = () => {
+        if (timeout) {
+            clearTimeout(timeout);
+            timeout = setTimeout(sendMsg, 200);
+        }
+    };
+    const mutationObserver = new MutationObserver(cb);
+
+    document.addEventListener('DOMContentLoaded', () => {
+        mutationObserver.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+        });
+        timeout = setTimeout(sendMsg, 200);
+    }, { once: true })
+})();
+`;
+
+
 const SCRIPT_TO_INJECT_INTO_FRAME = `
 ${READABILITY_JS}
+${SIMULATE_SCROLL}
+${MUTATION_IDLE_WATCH}
 
+(function(){
 function briefImgs(elem) {
     const imageTags = Array.from((elem || document).querySelectorAll('img[src],img[data-src]'));
 
@@ -271,6 +399,30 @@ function giveSnapshot(stopActiveSnapshot) {
 
     return r;
 }
+function waitForSelector(selectorText) {
+  return new Promise((resolve) => {
+    const existing = document.querySelector(selectorText);
+    if (existing) {
+      resolve(existing);
+      return;
+    }
+    const observer = new MutationObserver(() => {
+      const elem = document.querySelector(selectorText);
+      if (elem) {
+        resolve(document.querySelector(selectorText));
+        observer.disconnect();
+      }
+    });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true
+    });
+  });
+}
+window.waitForSelector = waitForSelector;
+window.giveSnapshot = giveSnapshot;
+window.briefImgs = briefImgs;
+})();
 `;
 
 @singleton()
@@ -479,26 +631,29 @@ export class PuppeteerControl extends AsyncService {
         });
 
         await page.evaluateOnNewDocument(`
-if (window.self === window.top) {
-    let lastTextLength = 0;
-    const handlePageLoad = () => {
-        if (window.haltSnapshot) {
-            return;
-        }
-        const thisTextLength = (document.body.innerText || '').length;
-        const deltaLength = Math.abs(thisTextLength - lastTextLength);
-        if (10 * deltaLength < lastTextLength) {
-            // Change is not significant
-            return;
-        }
-        const r = giveSnapshot();
-        window.reportSnapshot(r);
-        lastTextLength = thisTextLength;
-    };
-    setInterval(handlePageLoad, 800);
-    document.addEventListener('readystatechange', handlePageLoad);
-    document.addEventListener('load', handlePageLoad);
-}
+(function () {
+    if (window.self === window.top) {
+        let lastTextLength = 0;
+        const handlePageLoad = () => {
+            const thisTextLength = (document.body.innerText || '').length;
+            const deltaLength = Math.abs(thisTextLength - lastTextLength);
+            if (10 * deltaLength < lastTextLength) {
+                // Change is not significant
+                return;
+            }
+            lastTextLength = thisTextLength;
+            if (window.haltSnapshot) {
+                return;
+            }
+            const r = giveSnapshot();
+            window.reportSnapshot(r);
+        };
+        document.addEventListener('readystatechange', handlePageLoad);
+        document.addEventListener('load', handlePageLoad);
+        document.addEventListener('mutationIdle', handlePageLoad);
+    }
+    document.addEventListener('DOMContentLoaded', ()=> window.simulateScroll(), { once: true });
+})();
 `);
 
         this.snMap.set(page, sn);
@@ -550,9 +705,13 @@ if (window.self === window.top) {
         await Promise.race([
             (async () => {
                 const ctx = page.browserContext();
-                await page.close();
-                await ctx.close();
-            })(), delay(5000)
+                try {
+                    await page.close();
+                } finally {
+                    await ctx.close();
+                }
+            })(),
+            delay(5000)
         ]).catch((err) => {
             this.logger.error(`Failed to destroy page ${sn}`, { err: marshalErrorLike(err) });
         });
@@ -599,6 +758,30 @@ if (window.self === window.top) {
                 }, 1] as const;
 
                 return req.continue(continueArgs[0], continueArgs[1]);
+            });
+        }
+        let pageScriptEvaluations: Promise<unknown>[] = [];
+        let frameScriptEvaluations: Promise<unknown>[] = [];
+        if (options?.injectPageScripts?.length) {
+            page.on('framenavigated', (frame) => {
+                if (frame !== page.mainFrame()) {
+                    return;
+                }
+
+                pageScriptEvaluations.push(
+                    Promise.allSettled(options.injectPageScripts!.map((x) => frame.evaluate(x).catch((err) => {
+                        this.logger.warn(`Error in evaluation of page scripts`, { err });
+                    })))
+                );
+            });
+        }
+        if (options?.injectFrameScripts?.length) {
+            page.on('framenavigated', (frame) => {
+                frameScriptEvaluations.push(
+                    Promise.allSettled(options.injectFrameScripts!.map((x) => frame.evaluate(x).catch((err) => {
+                        this.logger.warn(`Error in evaluation of frame scripts`, { err });
+                    })))
+                );
             });
         }
         const sn = this.snMap.get(page);
@@ -689,6 +872,7 @@ if (window.self === window.top) {
             goToOptions.referer = options.referer;
         }
 
+        const delayPromise = delay(timeout);
         const gotoPromise = page.goto(url, goToOptions)
             .catch((err) => {
                 if (err instanceof TimeoutError) {
@@ -719,6 +903,8 @@ if (window.self === window.top) {
                         throw stuff;
                     }
                 }
+                await Promise.race([Promise.allSettled([...pageScriptEvaluations, ...frameScriptEvaluations]), delayPromise])
+                    .catch(() => void 0);
                 try {
                     const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;

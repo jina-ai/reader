@@ -316,7 +316,7 @@ export class SnapshotFormatter extends AsyncService {
             }
         } while (false);
 
-        const cleanText = (contentText || '').trim();
+        const cleanText = contentText?.includes('return') ? contentText.trimEnd() : (contentText || '').trim();
 
         const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),

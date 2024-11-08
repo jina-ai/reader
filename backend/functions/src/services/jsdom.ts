@@ -53,7 +53,13 @@ export class JSDomControl extends AsyncService {
             jsdom.window.document.querySelectorAll('iframe[src],frame[src]').forEach((x) => {
                 const src = x.getAttribute('src');
                 const thisSnapshot = snapshot.childFrames?.find((f) => f.href === src);
-                if (thisSnapshot?.html) {
+                if (options?.withIframe === 'quoted') {
+                    const blockquoteElem = jsdom.window.document.createElement('blockquote');
+                    const preElem = jsdom.window.document.createElement('pre');
+                    preElem.innerHTML = thisSnapshot?.text || '';
+                    blockquoteElem.appendChild(preElem);
+                    x.replaceWith(blockquoteElem);
+                } else if (thisSnapshot?.html) {
                     x.innerHTML = thisSnapshot.html;
                     x.querySelectorAll('script, style').forEach((s) => s.remove());
                     x.querySelectorAll('[src]').forEach((el) => {
