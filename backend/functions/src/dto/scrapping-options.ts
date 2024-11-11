@@ -3,6 +3,16 @@ import type { Request, Response } from 'express';
 import type { CookieParam } from 'puppeteer';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 
+export enum CONTENT_FORMAT {
+    CONTENT = 'content',
+    MARKDOWN = 'markdown',
+    HTML = 'html',
+    TEXT = 'text',
+    PAGESHOT = 'pageshot',
+    SCREENSHOT = 'screenshot',
+}
+
+const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
 @Also({
     openapi: {
@@ -35,7 +45,10 @@ import { parseString as parseSetCookieString } from 'set-cookie-parser';
                         `- html\n` +
                         `- text\n` +
                         `- pageshot\n` +
-                        `- screenshot\n`
+                        `- screenshot\n` +
+                        `- content\n` +
+                        `- any combination of the above\n\n` +
+                        `Default: content\n`
                     ,
                     in: 'header',
                     schema: { type: 'string' }
@@ -149,7 +162,8 @@ export class CrawlerOptions extends AutoCastable {
     pdf?: string;
 
     @Prop({
-        default: 'default',
+        default: CONTENT_FORMAT.CONTENT,
+        type: [CONTENT_FORMAT, String]
     })
     respondWith!: string;
 
@@ -371,6 +385,10 @@ export class CrawlerOptions extends AutoCastable {
         }
 
         return true;
+    }
+
+    isRequestingCompoundContentFormat() {
+        return !CONTENT_FORMAT_VALUES.has(this.respondWith);
     }
 }
 

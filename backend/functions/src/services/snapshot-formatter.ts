@@ -73,7 +73,10 @@ export class SnapshotFormatter extends AsyncService {
         pageshotUrl?: string;
     }, nominalUrl?: URL, urlValidMs = 3600 * 1000 * 4) {
         const t0 = Date.now();
-        if (mode === 'screenshot') {
+        const f = {
+            ...this.getGeneralSnapshotMixins(snapshot),
+        };
+        if (mode.includes('screenshot')) {
             if (snapshot.screenshot && !snapshot.screenshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
                 await this.firebaseObjectStorage.saveFile(fid, snapshot.screenshot, {
@@ -84,20 +87,13 @@ export class SnapshotFormatter extends AsyncService {
                 snapshot.screenshotUrl = await this.firebaseObjectStorage.signDownloadUrl(fid, Date.now() + urlValidMs);
             }
 
-            const f = {
-                ...this.getGeneralSnapshotMixins(snapshot),
-                // html: snapshot.html,
+            Object.assign(f, {
                 screenshotUrl: snapshot.screenshotUrl,
-            };
+            });
 
-            Object.defineProperty(f, 'textRepresentation', { value: `${f.screenshotUrl}\n`, enumerable: false });
-
-            const dt = Date.now() - t0;
-            this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
-
-            return f as FormattedPage;
+            Object.defineProperty(f, 'textRepresentation', { value: `${f.screenshotUrl}\n`, enumerable: false, configurable: true });
         }
-        if (mode === 'pageshot') {
+        if (mode.includes('pageshot')) {
             if (snapshot.pageshot && !snapshot.pageshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
                 await this.firebaseObjectStorage.saveFile(fid, snapshot.pageshot, {
@@ -108,31 +104,18 @@ export class SnapshotFormatter extends AsyncService {
                 snapshot.pageshotUrl = await this.firebaseObjectStorage.signDownloadUrl(fid, Date.now() + urlValidMs);
             }
 
-            const f = {
-                ...this.getGeneralSnapshotMixins(snapshot),
+            Object.assign(f, {
                 html: snapshot.html,
                 pageshotUrl: snapshot.pageshotUrl,
-            } as FormattedPage;
-
-            Object.defineProperty(f, 'textRepresentation', { value: `${f.pageshotUrl}\n`, enumerable: false });
-
-            const dt = Date.now() - t0;
-            this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
-
-            return f;
+            });
+            Object.defineProperty(f, 'textRepresentation', { value: `${f.pageshotUrl}\n`, enumerable: false, configurable: true });
         }
-        if (mode === 'html') {
-            const f = {
-                ...this.getGeneralSnapshotMixins(snapshot),
+        if (mode.includes('html')) {
+            Object.assign(f, {
                 html: snapshot.html,
-            } as FormattedPage;
+            });
 
-            Object.defineProperty(f, 'textRepresentation', { value: snapshot.html, enumerable: false });
-
-            const dt = Date.now() - t0;
-            this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
-
-            return f;
+            Object.defineProperty(f, 'textRepresentation', { value: snapshot.html, enumerable: false, configurable: true });
         }
 
         let pdfMode = false;
@@ -157,19 +140,20 @@ export class SnapshotFormatter extends AsyncService {
             }
         }
 
-        if (mode === 'text') {
-            const f = {
-                ...this.getGeneralSnapshotMixins(snapshot),
+        if (mode.includes('text')) {
+            Object.assign(f, {
                 text: snapshot.text,
-            } as FormattedPage;
+            });
+            Object.defineProperty(f, 'textRepresentation', { value: snapshot.text, enumerable: false, configurable: true });
+        }
 
-            Object.defineProperty(f, 'textRepresentation', { value: snapshot.text, enumerable: false });
-
+        if (!mode.includes('markdown') && !mode.includes('content')) {
             const dt = Date.now() - t0;
             this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 
             return f;
         }
+
         const imgDataUrlToObjectUrl = !Boolean(this.threadLocal.get('keepImgDataUrl'));
 
         let contentText = '';
@@ -178,7 +162,7 @@ export class SnapshotFormatter extends AsyncService {
         const uid = this.threadLocal.get('uid');
         do {
             if (pdfMode) {
-                contentText = snapshot.parsed?.content || snapshot.text;
+                contentText = (snapshot.parsed?.content || snapshot.text || '').trim();
                 break;
             }
 
@@ -188,14 +172,14 @@ export class SnapshotFormatter extends AsyncService {
                 snapshot.elemCount! > 70_000
             ) {
                 this.logger.warn('Degrading to text to protect the server', { url: snapshot.href });
-                contentText = snapshot.text;
+                contentText = (snapshot.text || '').trimEnd();
                 break;
             }
 
             const jsDomElementOfHTML = this.jsdomControl.snippetToElement(snapshot.html, snapshot.href);
             let toBeTurnedToMd = jsDomElementOfHTML;
             let turnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
-            if (mode !== 'markdown' && snapshot.parsed?.content) {
+            if (!mode.includes('markdown') && snapshot.parsed?.content) {
                 const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
                 const par1 = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
                 const par2 = snapshot.parsed.content ? this.jsdomControl.runTurndown(turnDownService, jsDomElementOfParsed) : '';
@@ -300,29 +284,27 @@ export class SnapshotFormatter extends AsyncService {
             ) {
                 toBeTurnedToMd = jsDomElementOfHTML;
                 try {
-                    contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
+                    contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
                     const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
                     try {
-                        contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, jsDomElementOfHTML);
+                        contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, jsDomElementOfHTML).trim();
                     } catch (err2) {
                         this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }
                 }
             }
             if (this.isPoorlyTransformed(contentText, toBeTurnedToMd)) {
-                contentText = snapshot.text;
+                contentText = (snapshot.text || '').trimEnd();
             }
         } while (false);
-
-        const cleanText = contentText?.includes('return') ? contentText.trimEnd() : (contentText || '').trim();
 
         const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),
             description: (snapshot.description || '').trim(),
             url: nominalUrl?.toString() || snapshot.href?.trim(),
-            content: cleanText,
+            content: contentText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,
             [Symbol.dispose]: () => { },
         };
@@ -351,8 +333,10 @@ export class SnapshotFormatter extends AsyncService {
             formatted.links = _.invert(this.jsdomControl.inferSnapshot(snapshot).links || {});
         }
 
+        Object.assign(f, formatted);
+
         const textRepresentation = (function (this: typeof formatted) {
-            if (mode === 'markdown') {
+            if (mode.includes('markdown')) {
                 return this.content as string;
             }
 
@@ -395,12 +379,12 @@ ${this.content}
 ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }).call(formatted);
 
-        Object.defineProperty(formatted, 'textRepresentation', { value: textRepresentation, enumerable: false });
+        Object.defineProperty(f, 'textRepresentation', { value: textRepresentation, enumerable: false });
 
         const dt = Date.now() - t0;
         this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 
-        return formatted as FormattedPage;
+        return f as FormattedPage;
     }
 
     getGeneralSnapshotMixins(snapshot: PageSnapshot) {
