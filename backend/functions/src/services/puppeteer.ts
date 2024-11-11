@@ -13,6 +13,7 @@ import puppeteerPageProxy from 'puppeteer-extra-plugin-page-proxy';
 import { SecurityCompromiseError, ServiceCrashedError, ServiceNodeResourceDrainError } from '../shared/lib/errors';
 import { TimeoutError } from 'puppeteer';
 import _ from 'lodash';
+import { isIP } from 'net';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -570,14 +571,18 @@ export class PuppeteerControl extends AsyncService {
             if (!requestUrl.startsWith('http:') && !requestUrl.startsWith('https:') && !requestUrl.startsWith('chrome-extension:') && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
             }
+
+            const parsedUrl = new URL(requestUrl);
             try {
-                const tldParsed = tldExtract(requestUrl);
-                domainSet.add(tldParsed.domain);
+                if (isIP(parsedUrl.hostname)) {
+                    domainSet.add(parsedUrl.hostname);
+                } else {
+                    const tldParsed = tldExtract(requestUrl);
+                    domainSet.add(tldParsed.domain);
+                }
             } catch (err) {
                 return req.abort('blockedbyclient', 1000);
             }
-
-            const parsedUrl = new URL(requestUrl);
 
             if (this.circuitBreakerHosts.has(parsedUrl.hostname.toLowerCase())) {
                 page.emit('abuse', { url: requestUrl, page, sn, reason: `Abusive request: ${requestUrl}` });
