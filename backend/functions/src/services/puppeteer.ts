@@ -1,10 +1,11 @@
 import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick, ParamValidationError } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, GoToOptions, HTTPResponse, Page } from 'puppeteer';
+import type { Cookie } from 'set-cookie-parser';
 import puppeteer from 'puppeteer-extra';
 
 import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
@@ -67,7 +68,7 @@ export interface ExtendedSnapshot extends PageSnapshot {
 
 export interface ScrappingOptions {
     proxyUrl?: string;
-    cookies?: CookieParam[];
+    cookies?: Cookie[];
     favorScreenshot?: boolean;
     waitForSelector?: string | string[];
     minIntervalMs?: number;
@@ -817,13 +818,33 @@ export class PuppeteerControl extends AsyncService {
         }
         if (options?.cookies) {
             const mapped = options.cookies.map((x) => {
-                if (x.domain || x.url) {
-                    return x;
+                const draft: CookieParam = {
+                    name: x.name,
+                    value: encodeURIComponent(x.value),
+                    secure: x.secure,
+                    domain: x.domain,
+                    path: x.path,
+                    expires: x.expires ? Math.floor(x.expires.valueOf() / 1000) : undefined,
+                    sameSite: x.sameSite as any,
+                };
+                if (!draft.expires && x.maxAge) {
+                    draft.expires = Math.floor(Date.now() / 1000) + x.maxAge;
+                }
+                if (!draft.domain) {
+                    draft.url = parsedUrl.toString();
                 }
 
-                return { ...x, url: parsedUrl.toString() };
+                return draft;
             });
-            await page.setCookie(...mapped);
+            try {
+                await page.setCookie(...mapped);
+            } catch (err: any) {
+                this.logger.warn(`Page ${sn}: Failed to set cookies`, { err: marshalErrorLike(err) });
+                throw new ParamValidationError({
+                    path: 'cookies',
+                    message: `Failed to set cookies: ${err?.message}`
+                });
+            }
         }
         if (options?.overrideUserAgent) {
             await page.setUserAgent(options.overrideUserAgent);

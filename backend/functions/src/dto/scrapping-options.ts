@@ -1,7 +1,6 @@
 import { Also, AutoCastable, Prop, RPC_CALL_ENVIRONMENT } from 'civkit'; // Adjust the import based on where your decorators are defined
 import type { Request, Response } from 'express';
-import type { CookieParam } from 'puppeteer';
-import { parseString as parseSetCookieString } from 'set-cookie-parser';
+import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
 
 export enum CONTENT_FORMAT {
     CONTENT = 'content',
@@ -218,7 +217,7 @@ export class CrawlerOptions extends AutoCastable {
     @Prop({
         arrayOf: String,
     })
-    setCookies?: CookieParam[];
+    setCookies?: Cookie[];
 
     @Prop()
     proxyUrl?: string;
@@ -331,17 +330,17 @@ export class CrawlerOptions extends AutoCastable {
             instance.timeout ??= null;
         }
 
-        const cookies: CookieParam[] = [];
+        const cookies: Cookie[] = [];
         const setCookieHeaders = ctx?.req.get('x-set-cookie')?.split(', ') || (instance.setCookies as any as string[]);
         if (Array.isArray(setCookieHeaders)) {
             for (const setCookie of setCookieHeaders) {
                 cookies.push({
-                    ...parseSetCookieString(setCookie, { decodeValues: false }) as CookieParam,
+                    ...parseSetCookieString(setCookie, { decodeValues: true }),
                 });
             }
         } else if (setCookieHeaders && typeof setCookieHeaders === 'string') {
             cookies.push({
-                ...parseSetCookieString(setCookieHeaders, { decodeValues: false }) as CookieParam,
+                ...parseSetCookieString(setCookieHeaders, { decodeValues: true }),
             });
         }
         instance.setCookies = cookies;
