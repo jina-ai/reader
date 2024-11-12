@@ -76,7 +76,10 @@ export class SnapshotFormatter extends AsyncService {
         const f = {
             ...this.getGeneralSnapshotMixins(snapshot),
         };
+        let modeOK = false;
+
         if (mode.includes('screenshot')) {
+            modeOK = true;
             if (snapshot.screenshot && !snapshot.screenshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
                 await this.firebaseObjectStorage.saveFile(fid, snapshot.screenshot, {
@@ -86,7 +89,6 @@ export class SnapshotFormatter extends AsyncService {
                 });
                 snapshot.screenshotUrl = await this.firebaseObjectStorage.signDownloadUrl(fid, Date.now() + urlValidMs);
             }
-
             Object.assign(f, {
                 screenshotUrl: snapshot.screenshotUrl,
             });
@@ -94,6 +96,7 @@ export class SnapshotFormatter extends AsyncService {
             Object.defineProperty(f, 'textRepresentation', { value: `${f.screenshotUrl}\n`, enumerable: false, configurable: true });
         }
         if (mode.includes('pageshot')) {
+            modeOK = true;
             if (snapshot.pageshot && !snapshot.pageshotUrl) {
                 const fid = `instant-screenshots/${randomUUID()}`;
                 await this.firebaseObjectStorage.saveFile(fid, snapshot.pageshot, {
@@ -103,7 +106,6 @@ export class SnapshotFormatter extends AsyncService {
                 });
                 snapshot.pageshotUrl = await this.firebaseObjectStorage.signDownloadUrl(fid, Date.now() + urlValidMs);
             }
-
             Object.assign(f, {
                 html: snapshot.html,
                 pageshotUrl: snapshot.pageshotUrl,
@@ -111,6 +113,7 @@ export class SnapshotFormatter extends AsyncService {
             Object.defineProperty(f, 'textRepresentation', { value: `${f.pageshotUrl}\n`, enumerable: false, configurable: true });
         }
         if (mode.includes('html')) {
+            modeOK = true;
             Object.assign(f, {
                 html: snapshot.html,
             });
@@ -141,13 +144,14 @@ export class SnapshotFormatter extends AsyncService {
         }
 
         if (mode.includes('text')) {
+            modeOK = true;
             Object.assign(f, {
                 text: snapshot.text,
             });
             Object.defineProperty(f, 'textRepresentation', { value: snapshot.text, enumerable: false, configurable: true });
         }
 
-        if (!mode.includes('markdown') && !mode.includes('content')) {
+        if (modeOK && !mode.includes('markdown') && !mode.includes('content')) {
             const dt = Date.now() - t0;
             this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 

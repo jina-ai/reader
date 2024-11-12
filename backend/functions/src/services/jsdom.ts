@@ -113,7 +113,7 @@ export class JSDomControl extends AsyncService {
         let rootDoc: Document;
         if (allNodes.length === 1 && allNodes[0].nodeName === '#document') {
             rootDoc = allNodes[0] as any;
-            if (rootDoc.body.innerText) {
+            if (rootDoc.documentElement && rootDoc.body?.innerText) {
                 textNodes.push(rootDoc.body);
             }
         } else {
