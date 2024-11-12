@@ -46,7 +46,10 @@ export class JSDomControl extends AsyncService {
         if (options?.withShadowDom && snapshot.shadowExpanded) {
             sourceHTML = snapshot.shadowExpanded;
         }
-        const jsdom = this.linkedom.parseHTML(sourceHTML);
+        let jsdom = this.linkedom.parseHTML(sourceHTML);
+        if (!jsdom.window.document.documentElement) {
+            jsdom = this.linkedom.parseHTML(`<html><body>${sourceHTML}</body></html>`);
+        }
         const allNodes: Node[] = [];
         jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
         if (options?.withIframe) {
