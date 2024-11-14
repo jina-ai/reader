@@ -687,6 +687,7 @@ export class CrawlerHost extends RPCHost {
         if (opts.timeout) {
             this.threadLocal.set('timeout', opts.timeout * 1000);
         }
+        this.threadLocal.set('retainImages', opts.retainImages);
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,

@@ -13,6 +13,9 @@ export enum CONTENT_FORMAT {
 
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
+export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
+const IMAGE_RETENTION_MODE_VALUES = new Set<string>(IMAGE_RETENTION_MODES);
+
 @Also({
     openapi: {
         operation: {
@@ -113,6 +116,17 @@ const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Retain-Images': {
+                    description: `Image retention modes.\n\n` +
+                        `Supported modes: \n` +
+                        `- all: all images\n` +
+                        `- none: no images\n` +
+                        `- alt: only alt text\n` +
+                        `- all_p: all images and with generated alt text\n` +
+                        `- alt_p: only alt text and with generated alt\n\n`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-With-Iframe': {
                     description: `Enable filling iframe contents into main. (violates standards)`,
                     in: 'header',
@@ -170,6 +184,9 @@ export class CrawlerOptions extends AutoCastable {
         default: false,
     })
     withGeneratedAlt!: boolean;
+
+    @Prop({ default: 'all', type: IMAGE_RETENTION_MODE_VALUES })
+    retainImages?: typeof IMAGE_RETENTION_MODES[number];
 
     @Prop({
         default: false,
@@ -281,6 +298,13 @@ export class CrawlerOptions extends AutoCastable {
         const withImagesSummary = ctx?.req.get('x-with-images-summary');
         if (withImagesSummary !== undefined) {
             instance.withImagesSummary = Boolean(withImagesSummary);
+        }
+        const retainImages = ctx?.req.get('x-retain-images');
+        if (retainImages && IMAGE_RETENTION_MODE_VALUES.has(retainImages)) {
+            instance.retainImages = retainImages as any;
+        }
+        if (instance.withGeneratedAlt) {
+            instance.retainImages = 'all_p';
         }
         const noCache = ctx?.req.get('x-no-cache');
         if (noCache !== undefined) {

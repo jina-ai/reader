@@ -13,6 +13,7 @@ import { PDFExtractor } from './pdf-extract';
 import { cleanAttribute } from '../utils/misc';
 import _ from 'lodash';
 import { STATUS_CODES } from 'http';
+import type { CrawlerOptions } from '../dto/scrapping-options';
 
 
 export interface FormattedPage {
@@ -201,7 +202,9 @@ export class SnapshotFormatter extends AsyncService {
                 turnDownService = turnDownService.use(plugin);
             }
             const urlToAltMap: { [k: string]: string | undefined; } = {};
-            if (snapshot.imgs?.length && this.threadLocal.get('withGeneratedAlt')) {
+            const imageRetention = this.threadLocal.get('retainImages') as CrawlerOptions['retainImages'];
+            // _p is the special suffix for withGeneratedAlt
+            if (snapshot.imgs?.length && imageRetention?.endsWith('_p')) {
                 const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
                     const r = await this.altTextService.getAltText(x).catch((err: any) => {
                         this.logger.warn(`Failed to get alt text for ${x.src}`, { err: marshalErrorLike(err) });
@@ -215,9 +218,17 @@ export class SnapshotFormatter extends AsyncService {
                 await Promise.all(tasks);
             }
             let imgIdx = 0;
-            turnDownService.addRule('img-generated-alt', {
+            turnDownService.addRule('img-retention', {
                 filter: 'img',
                 replacement: (_content, node: any) => {
+                    if (imageRetention === 'none') {
+                        return '';
+                    }
+                    const alt = cleanAttribute(node.getAttribute('alt'));
+
+                    if (imageRetention === 'alt') {
+                        return alt ? `(Image ${++imgIdx}: ${alt})` : '';
+                    }
                     let linkPreferredSrc = (node.getAttribute('src') || '').trim();
                     if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
                         const dataSrc = (node.getAttribute('data-src') || '').trim();
@@ -232,7 +243,6 @@ export class SnapshotFormatter extends AsyncService {
                     } catch (_err) {
                         void 0;
                     }
-                    const alt = cleanAttribute(node.getAttribute('alt'));
                     if (!src) {
                         return '';
                     }
@@ -245,6 +255,10 @@ export class SnapshotFormatter extends AsyncService {
                     if (mapped) {
                         imageSummary[src] = mapped || alt;
 
+                        if (imageRetention === 'alt_p') {
+                            return `(Image ${imgIdx}: ${mapped || alt})`;
+                        }
+
                         if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
                             const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
                             mappedUrl.protocol = 'blob:';
@@ -253,6 +267,8 @@ export class SnapshotFormatter extends AsyncService {
                         }
 
                         return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
+                    } else if (imageRetention === 'alt_p') {
+                        return alt ? `(Image ${imgIdx}: ${alt})` : '';
                     }
 
                     imageSummary[src] = alt || '';
@@ -439,6 +455,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         noRules?: boolean | string,
         url?: string | URL;
         imgDataUrlToObjectUrl?: boolean;
+        removeImages?: boolean | 'src';
     }) {
         const turnDownService = new TurndownService({
             codeBlockStyle: 'fenced',
