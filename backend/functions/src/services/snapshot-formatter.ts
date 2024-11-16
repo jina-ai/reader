@@ -578,11 +578,19 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         if (content.includes('<table') && content.includes('</table>')) {
+            if (node?.textContent && content.length > node.textContent.length * 0.8) {
+                return true;
+            }
+
             const tableElms = node?.querySelectorAll('table') || [];
             const deepTableElms = node?.querySelectorAll('table table');
+            if (node && tableElms.length) {
+                const wrappingTables = _.without(tableElms, ...Array.from(deepTableElms || []));
+                const tableTextsLength = _.sum(wrappingTables.map((x) => (x.innerHTML?.length || 0)));
 
-            if ((deepTableElms?.length || 0) / tableElms.length > 0.6) {
-                return true;
+                if (tableTextsLength / (content.length) > 0.6) {
+                    return true;
+                }
             }
 
             const tbodyElms = node?.querySelectorAll('tbody') || [];
