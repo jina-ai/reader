@@ -230,6 +230,10 @@ export class SnapshotFormatter extends AsyncService {
                         return alt ? `(Image ${++imgIdx}: ${alt})` : '';
                     }
                     let linkPreferredSrc = (node.getAttribute('src') || '').trim();
+                    const maybeSrcSet: string = (node.getAttribute('srcset') || '').trim();
+                    if (!linkPreferredSrc && maybeSrcSet) {
+                        linkPreferredSrc = maybeSrcSet.split(',').map((x) => x.trim()).filter(Boolean)[0];
+                    }
                     if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
                         const dataSrc = (node.getAttribute('data-src') || '').trim();
                         if (dataSrc && !dataSrc.startsWith('data:')) {
