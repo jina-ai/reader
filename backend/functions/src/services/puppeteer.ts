@@ -221,8 +221,14 @@ const MUTATION_IDLE_WATCH = `
 })();
 `;
 
+const DONT_MESS_WITH_THE_FUNDAMENTALS = `
+delete Function.prototype.toString;
+delete Function.prototype.bind.apply;
+delete Function.prototype.bind.call;
+`;
 
 const SCRIPT_TO_INJECT_INTO_FRAME = `
+${DONT_MESS_WITH_THE_FUNDAMENTALS}
 ${READABILITY_JS}
 ${SIMULATE_SCROLL}
 ${MUTATION_IDLE_WATCH}
