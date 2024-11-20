@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { container, singleton } from 'tsyringe';
 import { AsyncService, HashManager, marshalErrorLike } from 'civkit';
-import TurndownService from 'turndown';
+import TurndownService, { Rule } from 'turndown';
 import { Logger } from '../shared/services/logger';
 import { PageSnapshot } from './puppeteer';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
@@ -181,9 +181,84 @@ export class SnapshotFormatter extends AsyncService {
                 break;
             }
 
+            const urlToAltMap: { [k: string]: string | undefined; } = {};
+            const imageRetention = this.threadLocal.get('retainImages') as CrawlerOptions['retainImages'];
+            let imgIdx = 0;
+            const customRules = {
+                'img-retention': {
+                    filter: 'img',
+                    replacement: (_content: string, node: HTMLElement) => {
+                        if (imageRetention === 'none') {
+                            return '';
+                        }
+                        const alt = cleanAttribute(node.getAttribute('alt'));
+
+                        if (imageRetention === 'alt') {
+                            return alt ? `(Image ${++imgIdx}: ${alt})` : '';
+                        }
+                        let linkPreferredSrc = (node.getAttribute('src') || '').trim();
+                        const maybeSrcSet: string = (node.getAttribute('srcset') || '').trim();
+                        if (!linkPreferredSrc && maybeSrcSet) {
+                            linkPreferredSrc = maybeSrcSet.split(',').map((x) => x.trim()).filter(Boolean)[0];
+                        }
+                        if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
+                            const dataSrc = (node.getAttribute('data-src') || '').trim();
+                            if (dataSrc && !dataSrc.startsWith('data:')) {
+                                linkPreferredSrc = dataSrc;
+                            }
+                        }
+
+                        let src;
+                        try {
+                            src = new URL(linkPreferredSrc, snapshot.rebase || nominalUrl).toString();
+                        } catch (_err) {
+                            void 0;
+                        }
+                        if (!src) {
+                            return '';
+                        }
+                        const mapped = urlToAltMap[src];
+                        const imgSerial = ++imgIdx;
+                        const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
+                        idxArr.push(imgSerial);
+                        imageIdxTrack.set(src, idxArr);
+
+                        if (mapped) {
+                            imageSummary[src] = mapped || alt;
+
+                            if (imageRetention === 'alt_p') {
+                                return `(Image ${imgIdx}: ${mapped || alt})`;
+                            }
+
+                            if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
+                                const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
+                                mappedUrl.protocol = 'blob:';
+
+                                return `![Image ${imgIdx}: ${mapped || alt}](${mappedUrl})`;
+                            }
+
+                            return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
+                        } else if (imageRetention === 'alt_p') {
+                            return alt ? `(Image ${imgIdx}: ${alt})` : '';
+                        }
+
+                        imageSummary[src] = alt || '';
+
+                        if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
+                            const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
+                            mappedUrl.protocol = 'blob:';
+
+                            return alt ? `![Image ${imgIdx}: ${alt}](${mappedUrl})` : `![Image ${imgIdx}](${mappedUrl})`;
+                        }
+
+                        return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
+                    }
+                } as Rule
+            };
+
             const jsDomElementOfHTML = this.jsdomControl.snippetToElement(snapshot.html, snapshot.href);
             let toBeTurnedToMd = jsDomElementOfHTML;
-            let turnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
+            let turnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
             if (!mode.includes('markdown') && snapshot.parsed?.content) {
                 const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
                 const par1 = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
@@ -191,7 +266,7 @@ export class SnapshotFormatter extends AsyncService {
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
-                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
+                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
                     if (snapshot.parsed.content) {
                         toBeTurnedToMd = jsDomElementOfParsed;
                     }
@@ -201,8 +276,7 @@ export class SnapshotFormatter extends AsyncService {
             for (const plugin of this.turnDownPlugins) {
                 turnDownService = turnDownService.use(plugin);
             }
-            const urlToAltMap: { [k: string]: string | undefined; } = {};
-            const imageRetention = this.threadLocal.get('retainImages') as CrawlerOptions['retainImages'];
+
             // _p is the special suffix for withGeneratedAlt
             if (snapshot.imgs?.length && imageRetention?.endsWith('_p')) {
                 const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
@@ -217,83 +291,13 @@ export class SnapshotFormatter extends AsyncService {
 
                 await Promise.all(tasks);
             }
-            let imgIdx = 0;
-            turnDownService.addRule('img-retention', {
-                filter: 'img',
-                replacement: (_content, node: any) => {
-                    if (imageRetention === 'none') {
-                        return '';
-                    }
-                    const alt = cleanAttribute(node.getAttribute('alt'));
-
-                    if (imageRetention === 'alt') {
-                        return alt ? `(Image ${++imgIdx}: ${alt})` : '';
-                    }
-                    let linkPreferredSrc = (node.getAttribute('src') || '').trim();
-                    const maybeSrcSet: string = (node.getAttribute('srcset') || '').trim();
-                    if (!linkPreferredSrc && maybeSrcSet) {
-                        linkPreferredSrc = maybeSrcSet.split(',').map((x) => x.trim()).filter(Boolean)[0];
-                    }
-                    if (!linkPreferredSrc || linkPreferredSrc.startsWith('data:')) {
-                        const dataSrc = (node.getAttribute('data-src') || '').trim();
-                        if (dataSrc && !dataSrc.startsWith('data:')) {
-                            linkPreferredSrc = dataSrc;
-                        }
-                    }
-
-                    let src;
-                    try {
-                        src = new URL(linkPreferredSrc, snapshot.rebase || nominalUrl).toString();
-                    } catch (_err) {
-                        void 0;
-                    }
-                    if (!src) {
-                        return '';
-                    }
-                    const mapped = urlToAltMap[src];
-                    const imgSerial = ++imgIdx;
-                    const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
-                    idxArr.push(imgSerial);
-                    imageIdxTrack.set(src, idxArr);
-
-                    if (mapped) {
-                        imageSummary[src] = mapped || alt;
-
-                        if (imageRetention === 'alt_p') {
-                            return `(Image ${imgIdx}: ${mapped || alt})`;
-                        }
-
-                        if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
-                            const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
-                            mappedUrl.protocol = 'blob:';
-
-                            return `![Image ${imgIdx}: ${mapped || alt}](${mappedUrl})`;
-                        }
-
-                        return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
-                    } else if (imageRetention === 'alt_p') {
-                        return alt ? `(Image ${imgIdx}: ${alt})` : '';
-                    }
-
-                    imageSummary[src] = alt || '';
-
-                    if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
-                        const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
-                        mappedUrl.protocol = 'blob:';
-
-                        return alt ? `![Image ${imgIdx}: ${alt}](${mappedUrl})` : `![Image ${imgIdx}](${mappedUrl})`;
-                    }
-
-                    return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
-                }
-            });
 
             if (toBeTurnedToMd) {
                 try {
                     contentText = this.jsdomControl.runTurndown(turnDownService, toBeTurnedToMd).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, toBeTurnedToMd).trim();
                     } catch (err2) {
@@ -311,7 +315,7 @@ export class SnapshotFormatter extends AsyncService {
                     contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl });
+                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, jsDomElementOfHTML).trim();
                     } catch (err2) {
@@ -460,6 +464,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         url?: string | URL;
         imgDataUrlToObjectUrl?: boolean;
         removeImages?: boolean | 'src';
+        customRules?: { [k: string]: Rule; };
     }) {
         const turnDownService = new TurndownService({
             codeBlockStyle: 'fenced',
@@ -497,6 +502,12 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     return `![${alt}](blob:${md5Hasher.hash(src)})`;
                 }
             });
+        }
+
+        if (options?.customRules) {
+            for (const [k, v] of Object.entries(options.customRules)) {
+                turnDownService.addRule(k, v);
+            }
         }
 
         turnDownService.addRule('improved-paragraph', {
@@ -559,12 +570,6 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 let extraSpace = delimiter === '```' ? '\n' : /^`|^ .*?[^ ].* $|`$/.test(content) ? ' ' : '';
 
                 return delimiter + extraSpace + content + (delimiter === '```' && !content.endsWith(extraSpace) ? extraSpace : '') + delimiter;
-            }
-        });
-        turnDownService.addRule('picture', {
-            filter: 'picture',
-            replacement: (content, _node) => {
-                return content;
             }
         });
 
