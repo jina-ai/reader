@@ -203,6 +203,11 @@ export class CrawlerOptions extends AutoCastable {
     })
     noCache!: boolean;
 
+    @Prop({
+        default: false,
+    })
+    noGfm!: string | boolean;
+
     @Prop()
     cacheTolerance?: number;
 
@@ -316,6 +321,11 @@ export class CrawlerOptions extends AutoCastable {
         let cacheTolerance = parseInt(ctx?.req.get('x-cache-tolerance') || '');
         if (!isNaN(cacheTolerance)) {
             instance.cacheTolerance = cacheTolerance;
+        }
+
+        const noGfm = ctx?.req.get('x-no-gfm');
+        if (noGfm) {
+            instance.noGfm = noGfm === 'table' ? noGfm : Boolean(noGfm);
         }
 
         let timeoutSeconds = parseInt(ctx?.req.get('x-timeout') || '');

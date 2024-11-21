@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { container, singleton } from 'tsyringe';
 import { AsyncService, HashManager, marshalErrorLike } from 'civkit';
-import TurndownService, { Rule } from 'turndown';
+import TurndownService, { Filter, Rule } from 'turndown';
 import { Logger } from '../shared/services/logger';
 import { PageSnapshot } from './puppeteer';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
@@ -44,12 +44,15 @@ export interface FormattedPage {
 
 export const md5Hasher = new HashManager('md5', 'hex');
 
+const gfmPlugin = require('turndown-plugin-gfm');
+
 @singleton()
 export class SnapshotFormatter extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    turnDownPlugins = [require('turndown-plugin-gfm').tables, require('turndown-plugin-gfm').strikethrough];
+    gfmPlugin = gfmPlugin.gfm;
+    gfmNoTable = [gfmPlugin.highlightedCodeBlock, gfmPlugin.strikethrough, gfmPlugin.taskListItems];
 
     constructor(
         protected globalLogger: Logger,
@@ -182,9 +185,10 @@ export class SnapshotFormatter extends AsyncService {
             }
 
             const urlToAltMap: { [k: string]: string | undefined; } = {};
+            const noGFMOpts = this.threadLocal.get('noGfm');
             const imageRetention = this.threadLocal.get('retainImages') as CrawlerOptions['retainImages'];
             let imgIdx = 0;
-            const customRules = {
+            const customRules: { [k: string]: Rule; } = {
                 'img-retention': {
                     filter: 'img',
                     replacement: (_content: string, node: HTMLElement) => {
@@ -255,10 +259,16 @@ export class SnapshotFormatter extends AsyncService {
                     }
                 } as Rule
             };
+            const optsMixin = {
+                url: snapshot.rebase || nominalUrl,
+                customRules,
+                customKeep: noGFMOpts === 'table' ? 'table' : undefined,
+                imgDataUrlToObjectUrl,
+            } as const;
 
             const jsDomElementOfHTML = this.jsdomControl.snippetToElement(snapshot.html, snapshot.href);
             let toBeTurnedToMd = jsDomElementOfHTML;
-            let turnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
+            let turnDownService = this.getTurndown({ ...optsMixin });
             if (!mode.includes('markdown') && snapshot.parsed?.content) {
                 const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
                 const par1 = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
@@ -266,15 +276,15 @@ export class SnapshotFormatter extends AsyncService {
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
-                    turnDownService = this.getTurndown({ noRules: true, url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
+                    turnDownService = this.getTurndown({ noRules: true, ...optsMixin });
                     if (snapshot.parsed.content) {
                         toBeTurnedToMd = jsDomElementOfParsed;
                     }
                 }
             }
 
-            for (const plugin of this.turnDownPlugins) {
-                turnDownService = turnDownService.use(plugin);
+            if (!noGFMOpts) {
+                turnDownService = turnDownService.use(noGFMOpts === 'table' ? this.gfmNoTable : this.gfmPlugin);
             }
 
             // _p is the special suffix for withGeneratedAlt
@@ -297,7 +307,7 @@ export class SnapshotFormatter extends AsyncService {
                     contentText = this.jsdomControl.runTurndown(turnDownService, toBeTurnedToMd).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
+                    const vanillaTurnDownService = this.getTurndown({ ...optsMixin });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, toBeTurnedToMd).trim();
                     } catch (err2) {
@@ -315,7 +325,7 @@ export class SnapshotFormatter extends AsyncService {
                     contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML).trim();
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
-                    const vanillaTurnDownService = this.getTurndown({ url: snapshot.rebase || nominalUrl, imgDataUrlToObjectUrl, customRules });
+                    const vanillaTurnDownService = this.getTurndown({ ...optsMixin });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, jsDomElementOfHTML).trim();
                     } catch (err2) {
@@ -465,11 +475,15 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         imgDataUrlToObjectUrl?: boolean;
         removeImages?: boolean | 'src';
         customRules?: { [k: string]: Rule; };
+        customKeep?: Filter
     }) {
         const turnDownService = new TurndownService({
             codeBlockStyle: 'fenced',
             preformattedCode: true,
         } as any);
+        if (options?.customKeep) {
+            turnDownService.keep(options.customKeep);
+        }
         if (!options?.noRules) {
             turnDownService.addRule('remove-irrelevant', {
                 filter: ['meta', 'style', 'script', 'noscript', 'link', 'textarea', 'select'],
@@ -586,7 +600,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             return true;
         }
 
-        if (content.includes('<table') && content.includes('</table>')) {
+        if (!this.threadLocal.get('noGfm') && content.includes('<table') && content.includes('</table>')) {
             if (node?.textContent && content.length > node.textContent.length * 0.8) {
                 return true;
             }
