@@ -45,14 +45,37 @@ export interface FormattedPage {
 export const md5Hasher = new HashManager('md5', 'hex');
 
 const gfmPlugin = require('turndown-plugin-gfm');
+const highlightRegExp = /highlight-(?:text|source)-([a-z0-9]+)/;
+
+export function highlightedCodeBlock(turndownService: TurndownService) {
+    turndownService.addRule('highlightedCodeBlock', {
+        filter: (node) => {
+            return (
+                node.nodeName === 'DIV' &&
+                node.firstChild?.nodeName === 'PRE' &&
+                highlightRegExp.test(node.className)
+            );
+        },
+        replacement: (_content, node, options)=> {
+            const className = (node as any).className || '';
+            const language = (className.match(highlightRegExp) || [null, ''])[1];
+
+            return (
+                '\n\n' + options.fence + language + '\n' +
+                node.firstChild!.textContent +
+                '\n' + options.fence + '\n\n'
+            );
+        }
+    });
+}
 
 @singleton()
 export class SnapshotFormatter extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    gfmPlugin = gfmPlugin.gfm;
-    gfmNoTable = [gfmPlugin.highlightedCodeBlock, gfmPlugin.strikethrough, gfmPlugin.taskListItems];
+    gfmPlugin = [gfmPlugin.tables, highlightedCodeBlock, gfmPlugin.strikethrough, gfmPlugin.taskListItems];
+    gfmNoTable = [highlightedCodeBlock, gfmPlugin.strikethrough, gfmPlugin.taskListItems];
 
     constructor(
         protected globalLogger: Logger,
@@ -475,7 +498,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         imgDataUrlToObjectUrl?: boolean;
         removeImages?: boolean | 'src';
         customRules?: { [k: string]: Rule; };
-        customKeep?: Filter
+        customKeep?: Filter;
     }) {
         const turnDownService = new TurndownService({
             codeBlockStyle: 'fenced',
