@@ -171,8 +171,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop({
         desc: 'Base64 encoded PDF.',
+        type: [File, String]
     })
-    pdf?: string;
+    pdf?: File | string;
 
     @Prop({
         default: CONTENT_FORMAT.CONTENT,

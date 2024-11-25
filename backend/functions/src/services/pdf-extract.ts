@@ -64,23 +64,25 @@ export class PDFExtractor extends AsyncService {
     }
 
     isDataUrl(url: string) {
-        return /^data:.+\/(.+);base64,(.*)$/.test(url);
+        return url.startsWith('data:');
     }
 
     parseDataUrl(url: string) {
-        const matches = url.match(/^data:.+\/(.+);base64,(.*)$/);
-        if (!matches || matches.length !== 3) {
+        const protocol = url.slice(0, url.indexOf(':'));
+        const contentType = url.slice(url.indexOf(':') + 1, url.indexOf(';'));
+        const data = url.slice(url.indexOf(',') + 1);
+        if (protocol !== 'data' || !data) {
             throw new Error('Invalid data URL');
         }
 
-        if (matches[1] !== 'pdf') {
+        if (contentType !== 'application/pdf') {
             throw new Error('Invalid data URL type');
         }
 
         return {
-            type: matches[1],
-            data: matches[2]
-        }
+            type: contentType,
+            data: data
+        };
     }
 
     async extract(url: string | URL) {
@@ -88,9 +90,9 @@ export class PDFExtractor extends AsyncService {
 
         if (typeof url === 'string' && this.isDataUrl(url)) {
             const { data } = this.parseDataUrl(url);
-
+            const binary = Uint8Array.from(Buffer.from(data, 'base64'));
             loadingTask = this.pdfjs.getDocument({
-                data: atob(decodeURIComponent(data)),
+                data: binary,
                 disableFontFace: true,
                 verbosity: 0
             });

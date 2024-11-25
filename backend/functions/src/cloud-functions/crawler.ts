@@ -374,7 +374,8 @@ export class CrawlerHost extends RPCHost {
 
         const targetUrlFromGet = originPath.slice(1);
         if (crawlerOptions.pdf) {
-            url = `file://pdf.${md5Hasher.hash(crawlerOptions.pdf)}`;
+            const pdfBuf = crawlerOptions.pdf instanceof Blob ? await crawlerOptions.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOptions.pdf, 'base64');
+            url = `file://pdf.${md5Hasher.hash(pdfBuf)}`;
         } else if (targetUrlFromGet) {
             url = targetUrlFromGet.trim();
         } else if (crawlerOptions.url) {
@@ -552,7 +553,9 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlerOpts?.pdf) {
-            const pdfDataUrl = `data:application/pdf;base64,${encodeURIComponent(crawlerOpts.pdf)}`;
+
+            const pdfBuf = crawlerOpts.pdf instanceof Blob ? await crawlerOpts.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOpts.pdf, 'base64');
+            const pdfDataUrl = `data:application/pdf;base64,${pdfBuf.toString('base64')}`;
             const fakeSnapshot = {
                 href: urlToCrawl.toString(),
                 html: `<!DOCTYPE html><html><head></head><body style="height: 100%; width: 100%; overflow: hidden; margin:0px; background-color: rgb(82, 86, 89);"><embed style="position:absolute; left: 0; top: 0;" width="100%" height="100%" src="${pdfDataUrl}"></body></html>`,
