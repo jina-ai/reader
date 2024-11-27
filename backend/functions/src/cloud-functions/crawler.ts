@@ -138,7 +138,7 @@ export class CrawlerHost extends RPCHost {
             memory: '4GiB',
             cpu: 2,
             timeoutSeconds: 300,
-            concurrency: 16,
+            concurrency: 8,
             maxInstances: 1250,
             minInstances: 1,
         },
