@@ -227,10 +227,6 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (!uid) {
-            if (targetUrl.protocol === 'http:' && (!targetUrl.pathname || targetUrl.pathname === '/') &&
-                crawlerOptions.respondWith !== 'default') {
-                throw new SecurityCompromiseError(`Your request is categorized as abuse. Please don't abuse our service. If you are sure you are not abusing, please authenticate yourself with an API key.`);
-            }
             const blockade = (await DomainBlockade.fromFirestoreQuery(
                 DomainBlockade.COLLECTION
                     .where('domain', '==', targetUrl.hostname.toLowerCase())
