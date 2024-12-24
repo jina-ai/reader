@@ -4,7 +4,7 @@ import {
     AssertionFailureError, ParamValidationError, Defer,
 } from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect, SecurityCompromiseError } from '../shared';
+import { AsyncContext, BudgetExceededError, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect, SecurityCompromiseError } from '../shared';
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -202,6 +202,9 @@ export class CrawlerHost extends RPCHost {
             );
 
             rpcReflect.finally(() => {
+                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                    return;
+                }
                 if (chargeAmount) {
                     auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
@@ -218,6 +221,9 @@ export class CrawlerHost extends RPCHost {
             );
 
             rpcReflect.finally(() => {
+                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                    return;
+                }
                 if (chargeAmount) {
                     apiRoll._ref?.set({
                         chargeAmount,
@@ -252,6 +258,9 @@ export class CrawlerHost extends RPCHost {
 
                     const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                     chargeAmount = this.assignChargeAmount(formatted);
+                    if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                        throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+                    }
                     sseStream.write({
                         event: 'data',
                         data: formatted,
@@ -284,6 +293,10 @@ export class CrawlerHost extends RPCHost {
                 const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                 chargeAmount = this.assignChargeAmount(formatted);
 
+                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                    throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+                }
+
                 if (crawlerOptions.isEarlyReturnApplicable()) {
                     return formatted;
                 }
@@ -302,6 +315,9 @@ export class CrawlerHost extends RPCHost {
 
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
+            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+            }
 
             return formatted;
         }
@@ -321,6 +337,9 @@ export class CrawlerHost extends RPCHost {
 
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
+            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+            }
 
             if (crawlerOptions.isEarlyReturnApplicable()) {
                 if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
@@ -349,6 +368,10 @@ export class CrawlerHost extends RPCHost {
 
         const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
         chargeAmount = this.assignChargeAmount(formatted);
+        if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+            throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+        }
+
         if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
             return assignTransferProtocolMeta(`${formatted.textRepresentation}`,

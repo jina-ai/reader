@@ -156,6 +156,11 @@ const IMAGE_RETENTION_MODE_VALUES = new Set<string>(IMAGE_RETENTION_MODES);
                     description: 'Specify referer for the page.',
                     in: 'header',
                     schema: { type: 'string' }
+                },
+                'X-Token-Budget': {
+                    description: 'Specify a budget in tokens.\n\nIf the resulting token cost exceeds the budget, the request is rejected.',
+                    in: 'header',
+                    schema: { type: 'string' }
                 }
             }
         }
@@ -271,6 +276,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     referer?: string;
 
+    @Prop()
+    tokenBudget?: number;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -382,6 +390,13 @@ export class CrawlerOptions extends AutoCastable {
 
         const proxyUrl = ctx?.req.get('x-proxy-url');
         instance.proxyUrl ??= proxyUrl;
+
+        if (instance.cacheTolerance) {
+            instance.cacheTolerance = instance.cacheTolerance * 1000;
+        }
+
+        const tokenBudget = ctx?.req.get('x-token-budget') || undefined;
+        instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;
 
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
