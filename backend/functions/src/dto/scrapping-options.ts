@@ -16,6 +16,25 @@ const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
 const IMAGE_RETENTION_MODE_VALUES = new Set<string>(IMAGE_RETENTION_MODES);
 
+class Viewport extends AutoCastable {
+    @Prop({
+        default: 1024
+    })
+    width!: number;
+    @Prop({
+        default: 1024
+    })
+    height!: number;
+    @Prop()
+    deviceScaleFactor?: number;
+    @Prop()
+    isMobile?: boolean;
+    @Prop()
+    isLandscape?: boolean;
+    @Prop()
+    hasTouch?: boolean;
+}
+
 @Also({
     openapi: {
         operation: {
@@ -279,6 +298,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     tokenBudget?: number;
 
+    @Prop()
+    viewport?: Viewport;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -430,6 +452,9 @@ export class CrawlerOptions extends AutoCastable {
             return false;
         }
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
+        if (this.viewport) {
             return false;
         }
 

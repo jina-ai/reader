@@ -80,6 +80,7 @@ export interface ScrappingOptions {
     extraHeaders?: Record<string, string>;
     injectFrameScripts?: string[];
     injectPageScripts?: string[];
+    viewport?: Viewport;
 }
 
 
@@ -862,6 +863,9 @@ export class PuppeteerControl extends AsyncService {
         }
         if (options?.overrideUserAgent) {
             await page.setUserAgent(options.overrideUserAgent);
+        }
+        if (options?.viewport) {
+            await page.setViewport(options.viewport);
         }
 
         let nextSnapshotDeferred = Defer();

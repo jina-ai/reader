@@ -69,7 +69,7 @@ export class CrawlerHost extends RPCHost {
                 // Potential privacy issue, dont cache if cookies are used
                 return;
             }
-            if (options.injectFrameScripts?.length || options.injectPageScripts?.length) {
+            if (options.injectFrameScripts?.length || options.injectPageScripts?.length || options.viewport) {
                 // Potentially mangeled content, dont cache if scripts are injected
                 return;
             }
@@ -725,6 +725,7 @@ export class CrawlerHost extends RPCHost {
             withShadowDom: opts.withShadowDom,
             locale: opts.locale,
             referer: opts.referer,
+            viewport: opts.viewport,
         };
 
         if (opts.locale) {
