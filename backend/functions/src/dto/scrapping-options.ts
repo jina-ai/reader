@@ -181,8 +181,8 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
-                'X-Agent': {
-                    description: 'Specify the agent to use for crawling.\n\nDefault: puppeteer, supported: puppeteer, curl',
+                'X-Engine': {
+                    description: 'Specify the engine to use for crawling.\n\nDefault: puppeteer, supported: puppeteer, curl',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -309,7 +309,7 @@ export class CrawlerOptions extends AutoCastable {
     @Prop({
         default: 'puppeteer',
     })
-    agent?: string;
+    engine?: string;
 
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
@@ -404,9 +404,9 @@ export class CrawlerOptions extends AutoCastable {
         if (instance.withShadowDom) {
             instance.timeout ??= null;
         }
-        const agent = ctx?.req.get('x-agent');
-        if (agent) {
-            instance.agent = agent;
+        const engine = ctx?.req.get('x-engine');
+        if (engine) {
+            instance.engine = engine;
         }
 
         const cookies: Cookie[] = [];
