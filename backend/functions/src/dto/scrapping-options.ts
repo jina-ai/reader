@@ -309,11 +309,6 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     viewport?: Viewport;
 
-    @Prop({
-        default: 'puppeteer',
-    })
-    engine?: string;
-
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -411,10 +406,6 @@ export class CrawlerOptions extends AutoCastable {
         }
         if (instance.withShadowDom) {
             instance.timeout ??= null;
-        }
-        const engine = ctx?.req.get('x-engine');
-        if (engine) {
-            instance.engine = engine;
         }
 
         const cookies: Cookie[] = [];
