@@ -180,7 +180,12 @@ class Viewport extends AutoCastable {
                     description: 'Specify a budget in tokens.\n\nIf the resulting token cost exceeds the budget, the request is rejected.',
                     in: 'header',
                     schema: { type: 'string' }
-                }
+                },
+                'X-Agent': {
+                    description: 'Specify the agent to use for crawling.\n\nDefault: puppeteer, supported: puppeteer, curl',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
             }
         }
     }
@@ -301,6 +306,11 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     viewport?: Viewport;
 
+    @Prop({
+        default: 'puppeteer',
+    })
+    agent?: string;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -393,6 +403,10 @@ export class CrawlerOptions extends AutoCastable {
         }
         if (instance.withShadowDom) {
             instance.timeout ??= null;
+        }
+        const agent = ctx?.req.get('x-agent');
+        if (agent) {
+            instance.agent = agent;
         }
 
         const cookies: Cookie[] = [];

@@ -9,6 +9,7 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
+import { Curl } from 'node-libcurl';
 const pNormalizeUrl = import("@esm2cjs/normalize-url");
 import { Crawled } from '../db/crawled';
 import { randomUUID } from 'crypto';
@@ -585,6 +586,58 @@ export class CrawlerHost extends RPCHost {
 
             yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
 
+            return;
+        }
+
+        if (crawlerOpts?.agent?.toLowerCase() === 'curl') {
+            const html = await new Promise<string>((resolve, reject) => {
+                const curl = new Curl();
+                curl.setOpt('URL', urlToCrawl.toString());
+                curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+
+                if (crawlOpts?.timeoutMs) {
+                    curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
+                }
+                if (crawlOpts?.overrideUserAgent) {
+                    curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+                }
+                if (crawlOpts?.extraHeaders) {
+                    curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
+                }
+                if (crawlOpts?.proxyUrl) {
+                    curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
+                }
+                if (crawlOpts?.cookies) {
+                    curl.setOpt(Curl.option.COOKIE, crawlOpts.cookies.join('; '));
+                }
+                if (crawlOpts?.referer) {
+                    curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+                }
+
+
+                curl.on('end', (statusCode, data, headers) => {
+                    this.logger.info(`Successfully requested ${urlToCrawl} by curl`, { statusCode, headers });
+                    resolve(data.toString());
+                    curl.close();
+                });
+
+                curl.on('error', (err) => {
+                    this.logger.error(`Failed to request ${urlToCrawl} by curl`, { err: marshalErrorLike(err) });
+                    reject(err);
+                    curl.close();
+                });
+
+                curl.perform();
+            });
+
+            const fakeSnapshot = {
+                href: urlToCrawl.toString(),
+                html: html,
+                title: '',
+                text: '',
+            } as PageSnapshot;
+
+            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
             return;
         }
 
