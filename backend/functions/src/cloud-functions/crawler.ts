@@ -759,6 +759,7 @@ export class CrawlerHost extends RPCHost {
         this.threadLocal.set('withImagesSummary', opts.withImagesSummary);
         this.threadLocal.set('keepImgDataUrl', opts.keepImgDataUrl);
         this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
+        this.threadLocal.set('userAgent', opts.userAgent);
         this.threadLocal.set('engine', opts.engine);
         if (opts.timeout) {
             this.threadLocal.set('timeout', opts.timeout * 1000);
@@ -773,6 +774,7 @@ export class CrawlerHost extends RPCHost {
             removeSelector: opts.removeSelector,
             targetSelector: opts.targetSelector,
             waitForSelector: opts.waitForSelector,
+            overrideUserAgent: opts.userAgent,
             engine: opts.engine,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,

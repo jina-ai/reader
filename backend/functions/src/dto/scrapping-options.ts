@@ -161,11 +161,6 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
-                'X-Engine': {
-                    description: `Specify the engine to use for crawling (puppeteer or curl).`,
-                    in: 'header',
-                    schema: { type: 'string' }
-                },
                 'X-Timeout': {
                     description: `Specify timeout in seconds. Max 180.`,
                     in: 'header',
