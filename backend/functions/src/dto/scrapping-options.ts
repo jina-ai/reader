@@ -161,6 +161,11 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Engine': {
+                    description: `Specify the engine to use for crawling (puppeteer or curl).`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Timeout': {
                     description: `Specify timeout in seconds. Max 180.`,
                     in: 'header',
@@ -277,6 +282,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     userAgent?: string;
 
+    @Prop({ default: 'puppeteer' })
+    engine?: string;
+
     @Prop({
         arrayOf: String,
     })
@@ -385,6 +393,11 @@ export class CrawlerOptions extends AutoCastable {
         instance.targetSelector = filterSelector(instance.targetSelector);
         const overrideUserAgent = ctx?.req.get('x-user-agent');
         instance.userAgent ??= overrideUserAgent;
+
+        const engine = ctx?.req.get('x-engine');
+        if (engine) {
+            instance.engine = engine;
+        }
 
         const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
         if (keepImgDataUrl !== undefined) {
