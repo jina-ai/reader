@@ -180,7 +180,12 @@ class Viewport extends AutoCastable {
                     description: 'Specify a budget in tokens.\n\nIf the resulting token cost exceeds the budget, the request is rejected.',
                     in: 'header',
                     schema: { type: 'string' }
-                }
+                },
+                'X-Engine': {
+                    description: 'Specify the engine to use for crawling.\n\nDefault: puppeteer, supported: puppeteer, curl',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
             }
         }
     }
@@ -271,6 +276,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop()
     userAgent?: string;
+
+    @Prop({ default: 'puppeteer' })
+    engine?: string;
 
     @Prop({
         arrayOf: String,
@@ -375,6 +383,11 @@ export class CrawlerOptions extends AutoCastable {
         instance.targetSelector = filterSelector(instance.targetSelector);
         const overrideUserAgent = ctx?.req.get('x-user-agent');
         instance.userAgent ??= overrideUserAgent;
+
+        const engine = ctx?.req.get('x-engine');
+        if (engine) {
+            instance.engine = engine;
+        }
 
         const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
         if (keepImgDataUrl !== undefined) {

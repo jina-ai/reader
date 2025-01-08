@@ -49,6 +49,7 @@
     "linkedom": "^0.18.4",
     "maxmind": "^4.3.18",
     "minio": "^7.1.3",
+    "node-libcurl": "^4.1.0",
     "openai": "^4.20.0",
     "pdfjs-dist": "^4.2.67",
     "puppeteer": "^23.3.0",

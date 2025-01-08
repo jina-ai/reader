@@ -9,6 +9,7 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
+import { Curl } from 'node-libcurl';
 const pNormalizeUrl = import("@esm2cjs/normalize-url");
 import { Crawled } from '../db/crawled';
 import { randomUUID } from 'crypto';
@@ -28,6 +29,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     targetSelector?: string | string[];
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
+    engine?: string;
 }
 
 const indexProto = {
@@ -588,6 +590,58 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
+        if (crawlerOpts?.engine?.toLowerCase() === 'curl') {
+            const html = await new Promise<string>((resolve, reject) => {
+                const curl = new Curl();
+                curl.setOpt('URL', urlToCrawl.toString());
+                curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+
+                if (crawlOpts?.timeoutMs) {
+                    curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
+                }
+                if (crawlOpts?.overrideUserAgent) {
+                    curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+                }
+                if (crawlOpts?.extraHeaders) {
+                    curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
+                }
+                if (crawlOpts?.proxyUrl) {
+                    curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
+                }
+                if (crawlOpts?.cookies) {
+                    curl.setOpt(Curl.option.COOKIE, crawlOpts.cookies.join('; '));
+                }
+                if (crawlOpts?.referer) {
+                    curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+                }
+
+
+                curl.on('end', (statusCode, data, headers) => {
+                    this.logger.info(`Successfully requested ${urlToCrawl} by curl`, { statusCode, headers });
+                    resolve(data.toString());
+                    curl.close();
+                });
+
+                curl.on('error', (err) => {
+                    this.logger.error(`Failed to request ${urlToCrawl} by curl`, { err: marshalErrorLike(err) });
+                    reject(err);
+                    curl.close();
+                });
+
+                curl.perform();
+            });
+
+            const fakeSnapshot = {
+                href: urlToCrawl.toString(),
+                html: html,
+                title: '',
+                text: '',
+            } as PageSnapshot;
+
+            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
+            return;
+        }
+
         let cache;
 
         if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
@@ -706,6 +760,7 @@ export class CrawlerHost extends RPCHost {
         this.threadLocal.set('keepImgDataUrl', opts.keepImgDataUrl);
         this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
         this.threadLocal.set('userAgent', opts.userAgent);
+        this.threadLocal.set('engine', opts.engine);
         if (opts.timeout) {
             this.threadLocal.set('timeout', opts.timeout * 1000);
         }
@@ -720,6 +775,7 @@ export class CrawlerHost extends RPCHost {
             targetSelector: opts.targetSelector,
             waitForSelector: opts.waitForSelector,
             overrideUserAgent: opts.userAgent,
+            engine: opts.engine,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
             withShadowDom: opts.withShadowDom,
