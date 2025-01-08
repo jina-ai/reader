@@ -589,7 +589,7 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (crawlerOpts?.agent?.toLowerCase() === 'curl') {
+        if (crawlerOpts?.engine?.toLowerCase() === 'curl') {
             const html = await new Promise<string>((resolve, reject) => {
                 const curl = new Curl();
                 curl.setOpt('URL', urlToCrawl.toString());
