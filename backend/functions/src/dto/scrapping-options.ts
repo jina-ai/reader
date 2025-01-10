@@ -182,7 +182,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Engine': {
-                    description: 'Specify the engine to use for crawling.\n\nDefault: puppeteer, supported: puppeteer, curl',
+                    description: 'Specify the engine to use for crawling.\n\nSupported: puppeteer, curl',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -277,7 +277,7 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     userAgent?: string;
 
-    @Prop({ default: 'puppeteer' })
+    @Prop()
     engine?: string;
 
     @Prop({

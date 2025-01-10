@@ -16,9 +16,10 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
+import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { DomainBlockade } from '../db/domain-blockade';
+import { DomainProfile } from '../db/domain-profile';
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
@@ -50,6 +51,7 @@ export class CrawlerHost extends RPCHost {
     cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
     abuseBlockMs = 1000 * 3600;
+    domainProfileRetentionMs = 1000 * 3600 * 24 * 30;
 
     constructor(
         protected globalLogger: Logger,
@@ -161,7 +163,9 @@ export class CrawlerHost extends RPCHost {
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
+        let contentFromPuppeteer = '';
+        let contentFromCurl = '';
+        let crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
         const targetUrl = await this.getTargetUrl(decodeURIComponent(ctx.req.url), crawlerOptions);
         if (!targetUrl) {
@@ -213,6 +217,7 @@ export class CrawlerHost extends RPCHost {
                     });
                     apiRoll.chargeAmount = chargeAmount;
                 }
+                this.saveDomainProfile(targetUrl, contentFromPuppeteer, contentFromCurl);
             });
         } else if (ctx.req.ip) {
             const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, [rpcReflect.name.toUpperCase()],
@@ -231,6 +236,7 @@ export class CrawlerHost extends RPCHost {
                         chargeAmount,
                     }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
                 }
+                this.saveDomainProfile(targetUrl, contentFromPuppeteer, contentFromCurl);
             });
         }
 
@@ -245,8 +251,52 @@ export class CrawlerHost extends RPCHost {
                 throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
         }
-        const crawlOpts = await this.configure(crawlerOptions);
 
+        // Engine logic
+        let engine = crawlerOptions?.engine;
+        if (!engine) {
+            const domainProfile = await DomainProfile.fromFirestoreQuery(
+                DomainProfile.COLLECTION
+                    .where('domain', '==', targetUrl.hostname.toLowerCase())
+                    .where('expireAt', '>=', new Date())
+                    .limit(1)
+            ).then(profiles => profiles[0]);
+
+            if (domainProfile) {
+                engine = domainProfile.engine;
+            } else {
+                // Try curl engine first
+                if ((crawlerOptions.respondWith === CONTENT_FORMAT.CONTENT ||
+                    crawlerOptions.respondWith === CONTENT_FORMAT.MARKDOWN) &&
+                    (!crawlerOptions.pdf && !crawlerOptions.html)) {
+                    const curlCrawlerOptions = { ...crawlerOptions, engine: 'curl' } as any;
+                    const curlOpts = await this.configure(curlCrawlerOptions);
+                    let curlSnapshot;
+                    try {
+                        for await (const scrapped of this.cachedScrap(targetUrl, curlOpts, curlCrawlerOptions)) {
+                            if (scrapped?.parsed?.content || scrapped?.title?.trim()) {
+                                curlSnapshot = scrapped;
+                                break;
+                            }
+                        }
+                        if (curlSnapshot) {
+                            const formatted = await this.snapshotFormatter.formatSnapshot(
+                                crawlerOptions.respondWith,
+                                curlSnapshot,
+                                targetUrl,
+                                this.urlValidMs
+                            );
+                            contentFromCurl = formatted.content || '';
+                        }
+                    } catch (err) {
+                        this.logger.warn(`Curl engine failed for ${targetUrl}`, { err: marshalErrorLike(err) });
+                    }
+                }
+            }
+        }
+
+        crawlerOptions.engine = engine;
+        const crawlOpts = await this.configure(crawlerOptions);
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -260,6 +310,7 @@ export class CrawlerHost extends RPCHost {
 
                     const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                     chargeAmount = this.assignChargeAmount(formatted);
+                    contentFromPuppeteer = formatted.content || '';
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
                     }
@@ -294,6 +345,7 @@ export class CrawlerHost extends RPCHost {
 
                 const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                 chargeAmount = this.assignChargeAmount(formatted);
+                contentFromPuppeteer = formatted.content || '';
 
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                     throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -317,6 +369,7 @@ export class CrawlerHost extends RPCHost {
 
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
+            contentFromPuppeteer = formatted.content || '';
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -339,6 +392,7 @@ export class CrawlerHost extends RPCHost {
 
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
+            contentFromPuppeteer = formatted.content || '';
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -370,6 +424,7 @@ export class CrawlerHost extends RPCHost {
 
         const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
         chargeAmount = this.assignChargeAmount(formatted);
+        contentFromPuppeteer = formatted.content || '';
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
             throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
         }
@@ -388,6 +443,26 @@ export class CrawlerHost extends RPCHost {
         }
 
         return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
+
+    }
+
+    async saveDomainProfile(targetUrl: URL, puppeteerResult: string, curlResult: string) {
+        if (targetUrl && puppeteerResult && curlResult) {
+            const preferredEngine = puppeteerResult.trim().length === curlResult.trim().length ? 'curl' : 'puppeteer';
+
+            try {
+                await DomainProfile.save(DomainProfile.from({
+                    domain: targetUrl.hostname.toLowerCase(),
+                    triggerReason: 'Automatically detected',
+                    triggerUrl: targetUrl.toString(),
+                    engine: preferredEngine,
+                    createdAt: new Date(),
+                    expireAt: new Date(Date.now() + this.domainProfileRetentionMs),
+                }));
+            } catch (err) {
+                this.logger.warn(`Failed to save domain profile for ${targetUrl.hostname}`, { err: marshalErrorLike(err) });
+            }
+        }
     }
 
     async getTargetUrl(originPath: string, crawlerOptions: CrawlerOptions) {
