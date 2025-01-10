@@ -477,6 +477,25 @@ export class CrawlerOptions extends AutoCastable {
     isRequestingCompoundContentFormat() {
         return !CONTENT_FORMAT_VALUES.has(this.respondWith);
     }
+
+    isCurlApplicable() {
+        if (this.respondWith !== CONTENT_FORMAT.CONTENT && this.respondWith !== CONTENT_FORMAT.MARKDOWN) {
+            return false;
+        }
+        if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
+        if (this.viewport) {
+            return false;
+        }
+        if (this.pdf) {
+            return false;
+        }
+        if (this.html) {
+            return false;
+        }
+        return true;
+    }
 }
 
 export class CrawlerOptionsHeaderOnly extends CrawlerOptions {

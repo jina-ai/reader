@@ -164,7 +164,7 @@ export class CrawlerHost extends RPCHost {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
         let resultContent = '';
-        let crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
+        const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
         const targetUrl = await this.getTargetUrl(decodeURIComponent(ctx.req.url), crawlerOptions);
         if (!targetUrl) {
@@ -257,19 +257,12 @@ export class CrawlerHost extends RPCHost {
                     .limit(1)
             ).then(profiles => profiles[0]);
 
-            if (domainProfile) {
+            if (domainProfile?.engine) {
                 crawlerOptions.engine = domainProfile.engine;
             } else {
                 rpcReflect.then(async () => {
                     let curlContent = '';
-                    if ((crawlerOptions.respondWith === CONTENT_FORMAT.CONTENT ||
-                        crawlerOptions.respondWith === CONTENT_FORMAT.MARKDOWN) &&
-                        !(crawlerOptions.pdf ||
-                            crawlerOptions.html ||
-                            crawlerOptions.injectPageScript?.length ||
-                            crawlerOptions.viewport?.height
-                        )
-                    ) {
+                    if (crawlerOptions.isCurlApplicable()) {
                         const curlCrawlerOptions = { ...crawlerOptions, engine: 'curl' } as any;
                         const curlOpts = await this.configure(curlCrawlerOptions);
 
