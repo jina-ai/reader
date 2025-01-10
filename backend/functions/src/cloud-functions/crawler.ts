@@ -272,26 +272,9 @@ export class CrawlerHost extends RPCHost {
                     ) {
                         const curlCrawlerOptions = { ...crawlerOptions, engine: 'curl' } as any;
                         const curlOpts = await this.configure(curlCrawlerOptions);
-                        let curlSnapshot;
-                        try {
-                            for await (const scrapped of this.cachedScrap(targetUrl, curlOpts, curlCrawlerOptions)) {
-                                if (scrapped?.parsed?.content || scrapped?.title?.trim()) {
-                                    curlSnapshot = scrapped;
-                                    break;
-                                }
-                            }
-                            if (curlSnapshot) {
-                                const formatted = await this.snapshotFormatter.formatSnapshot(
-                                    crawlerOptions.respondWith,
-                                    curlSnapshot,
-                                    targetUrl,
-                                    this.urlValidMs
-                                );
-                                curlContent = formatted.content?.trim() || '';
-                            }
-                        } catch (err: any) {
-                            this.logger.warn(`Curl engine failed for ${targetUrl}`, { err: marshalErrorLike(err) });
-                        }
+
+                        const formatted = await this.crawlByCurl(targetUrl, curlOpts, crawlerOptions)
+                        curlContent = formatted.content?.trim() || '';
                     }
                     const preferredEngine = curlContent.length && resultContent.trim().length === curlContent.length ? 'curl' : 'puppeteer';
 
@@ -318,6 +301,20 @@ export class CrawlerHost extends RPCHost {
         }
 
         const crawlOpts = await this.configure(crawlerOptions);
+
+        if (crawlerOptions.engine?.toLowerCase() === 'curl') {
+            const formatted = await this.crawlByCurl(targetUrl, crawlOpts, crawlerOptions);
+            if (!formatted) {
+                throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
+            }
+
+            chargeAmount = this.assignChargeAmount(formatted);
+            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+            }
+
+            return formatted;
+        }
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -667,58 +664,6 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (crawlerOpts?.engine?.toLowerCase() === 'curl') {
-            const html = await new Promise<string>((resolve, reject) => {
-                const curl = new Curl();
-                curl.setOpt('URL', urlToCrawl.toString());
-                curl.setOpt(Curl.option.FOLLOWLOCATION, true);
-
-                if (crawlOpts?.timeoutMs) {
-                    curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
-                }
-                if (crawlOpts?.overrideUserAgent) {
-                    curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
-                }
-                if (crawlOpts?.extraHeaders) {
-                    curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-                }
-                if (crawlOpts?.proxyUrl) {
-                    curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
-                }
-                if (crawlOpts?.cookies) {
-                    curl.setOpt(Curl.option.COOKIE, crawlOpts.cookies.join('; '));
-                }
-                if (crawlOpts?.referer) {
-                    curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
-                }
-
-
-                curl.on('end', (statusCode, data, headers) => {
-                    this.logger.info(`Successfully requested ${urlToCrawl} by curl`, { statusCode, headers });
-                    resolve(data.toString());
-                    curl.close();
-                });
-
-                curl.on('error', (err) => {
-                    this.logger.error(`Failed to request ${urlToCrawl} by curl`, { err: marshalErrorLike(err) });
-                    reject(err);
-                    curl.close();
-                });
-
-                curl.perform();
-            });
-
-            const fakeSnapshot = {
-                href: urlToCrawl.toString(),
-                html: html,
-                title: '',
-                text: '',
-            } as PageSnapshot;
-
-            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
-            return;
-        }
-
         let cache;
 
         if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
@@ -752,6 +697,60 @@ export class CrawlerHost extends RPCHost {
                 return;
             }
             throw err;
+        }
+    }
+
+    async crawlByCurl(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
+        const html = await new Promise<string>((resolve, reject) => {
+            const curl = new Curl();
+            curl.setOpt('URL', urlToCrawl.toString());
+            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+
+            if (crawlOpts?.timeoutMs) {
+                curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
+            }
+            if (crawlOpts?.overrideUserAgent) {
+                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+            }
+            if (crawlOpts?.extraHeaders) {
+                curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
+            }
+            if (crawlOpts?.proxyUrl) {
+                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
+            }
+            if (crawlOpts?.cookies) {
+                curl.setOpt(Curl.option.COOKIE, crawlOpts.cookies.join('; '));
+            }
+            if (crawlOpts?.referer) {
+                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+            }
+
+
+            curl.on('end', (statusCode, data, headers) => {
+                this.logger.info(`Successfully requested ${urlToCrawl} by curl`, { statusCode, headers });
+                resolve(data.toString());
+                curl.close();
+            });
+
+            curl.on('error', (err) => {
+                this.logger.error(`Failed to request ${urlToCrawl} by curl`, { err: marshalErrorLike(err) });
+                reject(err);
+                curl.close();
+            });
+
+            curl.perform();
+        });
+
+        const fakeSnapshot = {
+            href: urlToCrawl.toString(),
+            html: html,
+            title: '',
+            text: '',
+        } as PageSnapshot;
+
+        const curlSnapshot = await this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
+        if (crawlerOpts && curlSnapshot) {
+            return this.snapshotFormatter.formatSnapshot(crawlerOpts?.respondWith, curlSnapshot, urlToCrawl, this.urlValidMs);
         }
     }
 
