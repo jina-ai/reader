@@ -252,7 +252,6 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
-        // Engine logic
         let engine = crawlerOptions?.engine;
         if (!engine) {
             const domainProfile = await DomainProfile.fromFirestoreQuery(
@@ -265,10 +264,14 @@ export class CrawlerHost extends RPCHost {
             if (domainProfile) {
                 engine = domainProfile.engine;
             } else {
-                // Try curl engine first
                 if ((crawlerOptions.respondWith === CONTENT_FORMAT.CONTENT ||
                     crawlerOptions.respondWith === CONTENT_FORMAT.MARKDOWN) &&
-                    (!crawlerOptions.pdf && !crawlerOptions.html)) {
+                    !(crawlerOptions.pdf ||
+                        crawlerOptions.html ||
+                        crawlerOptions.injectFrameScript?.length ||
+                        crawlerOptions.injectPageScript?.length ||
+                        crawlerOptions.viewport?.height
+                    )) {
                     const curlCrawlerOptions = { ...crawlerOptions, engine: 'curl' } as any;
                     const curlOpts = await this.configure(curlCrawlerOptions);
                     let curlSnapshot;
@@ -451,14 +454,29 @@ export class CrawlerHost extends RPCHost {
             const preferredEngine = puppeteerResult.trim().length === curlResult.trim().length ? 'curl' : 'puppeteer';
 
             try {
-                await DomainProfile.save(DomainProfile.from({
-                    domain: targetUrl.hostname.toLowerCase(),
-                    triggerReason: 'Automatically detected',
-                    triggerUrl: targetUrl.toString(),
-                    engine: preferredEngine,
-                    createdAt: new Date(),
-                    expireAt: new Date(Date.now() + this.domainProfileRetentionMs),
-                }));
+                const existingProfile = (await DomainProfile.fromFirestoreQuery(
+                    DomainProfile.COLLECTION
+                        .where('domain', '==', targetUrl.hostname.toLowerCase())
+                        .limit(1)
+                ))[0];
+                if (existingProfile) {
+                    existingProfile._ref?.set({
+                        engine: preferredEngine,
+                        triggerReason: 'Automatically updated',
+                        triggerUrl: targetUrl.toString(),
+                        updatedAt: new Date(),
+                        expireAt: new Date(Date.now() + this.domainProfileRetentionMs),
+                    }, { merge: true });
+                } else {
+                    await DomainProfile.save(DomainProfile.from({
+                        domain: targetUrl.hostname.toLowerCase(),
+                        triggerReason: 'Automatically detected',
+                        triggerUrl: targetUrl.toString(),
+                        engine: preferredEngine,
+                        createdAt: new Date(),
+                        expireAt: new Date(Date.now() + this.domainProfileRetentionMs),
+                    }));
+                }
             } catch (err) {
                 this.logger.warn(`Failed to save domain profile for ${targetUrl.hostname}`, { err: marshalErrorLike(err) });
             }
