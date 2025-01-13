@@ -396,7 +396,7 @@ export class CrawlerOptions extends AutoCastable {
         if (engine) {
             instance.engine = engine;
         }
-        if (instance.noCache) {
+        if (instance.noCache || !instance.isGeneralMarkdownRequest()) {
             instance.engine ??= ENGINE_TYPE.BROWSER;
         }
 
