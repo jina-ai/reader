@@ -11,6 +11,12 @@ export enum CONTENT_FORMAT {
     SCREENSHOT = 'screenshot',
 }
 
+export enum ENGINE_TYPE {
+    BROWSER = 'browser',
+    DIRECT = 'direct',
+    VLM = 'vlm',
+}
+
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
 export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
@@ -278,7 +284,7 @@ export class CrawlerOptions extends AutoCastable {
     userAgent?: string;
 
     @Prop()
-    engine?: string;
+    engine?: ENGINE_TYPE;
 
     @Prop({
         arrayOf: String,

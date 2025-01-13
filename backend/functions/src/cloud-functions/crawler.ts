@@ -16,7 +16,7 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
+import { ENGINE_TYPE, CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { DomainBlockade } from '../db/domain-blockade';
 import { DomainProfile } from '../db/domain-profile';
@@ -30,7 +30,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     targetSelector?: string | string[];
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
-    engine?: string;
+    engine?: ENGINE_TYPE;
 }
 
 const indexProto = {
@@ -263,13 +263,13 @@ export class CrawlerHost extends RPCHost {
                 rpcReflect.then(async () => {
                     let curlContent = '';
                     if (crawlerOptions.isCurlApplicable()) {
-                        const curlCrawlerOptions = { ...crawlerOptions, engine: 'curl' } as any;
+                        const curlCrawlerOptions = { ...crawlerOptions, engine: ENGINE_TYPE.DIRECT } as any;
                         const curlOpts = await this.configure(curlCrawlerOptions);
 
                         const formatted = await this.crawlByCurl(targetUrl, curlOpts, crawlerOptions)
                         curlContent = formatted.content?.trim() || '';
                     }
-                    const preferredEngine = curlContent.length && resultContent.trim().length === curlContent.length ? 'curl' : 'puppeteer';
+                    const preferredEngine = curlContent.length && resultContent.trim().length === curlContent.length ? ENGINE_TYPE.DIRECT : ENGINE_TYPE.BROWSER;
 
                     const existingProfiles = (await DomainProfile.fromFirestoreQuery(
                         DomainProfile.COLLECTION
@@ -291,11 +291,16 @@ export class CrawlerHost extends RPCHost {
                     }
                 });
             }
+        } else if (!Object.values(ENGINE_TYPE).includes(crawlerOptions.engine)) {
+            throw new ParamValidationError({
+                path: 'engine',
+                message: `Invalid engine value ${crawlerOptions.engine}, must be one of ${Object.values(ENGINE_TYPE).join(', ')}`,
+            });
         }
 
         const crawlOpts = await this.configure(crawlerOptions);
 
-        if (crawlerOptions.engine?.toLowerCase() === 'curl') {
+        if (crawlerOptions.engine?.toLowerCase() === ENGINE_TYPE.DIRECT) {
             const formatted = await this.crawlByCurl(targetUrl, crawlOpts, crawlerOptions);
             if (!formatted) {
                 throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
@@ -306,7 +311,7 @@ export class CrawlerHost extends RPCHost {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
 
-            return formatted;
+            return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
         }
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
