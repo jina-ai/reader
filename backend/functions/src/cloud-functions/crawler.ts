@@ -830,7 +830,7 @@ export class CrawlerHost extends RPCHost {
         const snapshot = await this.curlControl.urlToSnapshot(targetUrl, crawlerOptions);
 
         const thisFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
-        const knownFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
+        const knownFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', knownSnapshot);
 
         let engine = ENGINE_TYPE.DIRECT;
         if (!(thisFormatted.content && knownFormatted.content &&
