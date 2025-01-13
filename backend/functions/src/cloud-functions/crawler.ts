@@ -9,19 +9,20 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
-import { Curl } from 'node-libcurl';
 const pNormalizeUrl = import("@esm2cjs/normalize-url");
 import { Crawled } from '../db/crawled';
 import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
+import { CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { DomainBlockade } from '../db/domain-blockade';
+import { DomainProfile } from '../db/domain-profile';
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
+import { CurlControl } from '../services/curl';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -50,10 +51,12 @@ export class CrawlerHost extends RPCHost {
     cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
     abuseBlockMs = 1000 * 3600;
+    domainProfileRetentionMs = 1000 * 3600 * 24 * 30;
 
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
+        protected curlControl: CurlControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
@@ -63,7 +66,7 @@ export class CrawlerHost extends RPCHost {
     ) {
         super(...arguments);
 
-        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ScrappingOptions & { url: URL; }) => {
+        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ExtraScrappingOptions & { url: URL; }) => {
             if (!snapshot.title?.trim() && !snapshot.pdfs?.length) {
                 return;
             }
@@ -78,8 +81,15 @@ export class CrawlerHost extends RPCHost {
             if (options.locale) {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
-
             await this.setToCache(options.url, snapshot);
+
+            if (!options.engine) {
+                try {
+                    await this.exploreDirectEngine(options.url, options, snapshot);
+                } catch (err) {
+                    this.logger.warn(`Failed to explore direct engine option for ${options.url.href}`, { err });
+                }
+            }
         });
 
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
@@ -245,8 +255,21 @@ export class CrawlerHost extends RPCHost {
                 throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
         }
+
+
         const crawlOpts = await this.configure(crawlerOptions);
 
+        if (!crawlOpts.engine) {
+            const domainProfile = (await DomainProfile.fromFirestoreQuery(
+                DomainProfile.COLLECTION
+                    .where('origin', '==', targetUrl.origin.toLowerCase())
+                    .limit(1)
+            ))[0];
+
+            if (domainProfile?.engine) {
+                crawlOpts.engine = domainProfile.engine;
+            }
+        }
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -388,6 +411,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
+
     }
 
     async getTargetUrl(originPath: string, crawlerOptions: CrawlerOptions) {
@@ -574,7 +598,6 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlerOpts?.pdf) {
-
             const pdfBuf = crawlerOpts.pdf instanceof Blob ? await crawlerOpts.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOpts.pdf, 'base64');
             const pdfDataUrl = `data:application/pdf;base64,${pdfBuf.toString('base64')}`;
             const fakeSnapshot = {
@@ -590,55 +613,9 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (crawlerOpts?.engine?.toLowerCase() === 'curl') {
-            const html = await new Promise<string>((resolve, reject) => {
-                const curl = new Curl();
-                curl.setOpt('URL', urlToCrawl.toString());
-                curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+        if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
+            yield this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
 
-                if (crawlOpts?.timeoutMs) {
-                    curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
-                }
-                if (crawlOpts?.overrideUserAgent) {
-                    curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
-                }
-                if (crawlOpts?.extraHeaders) {
-                    curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-                }
-                if (crawlOpts?.proxyUrl) {
-                    curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
-                }
-                if (crawlOpts?.cookies) {
-                    curl.setOpt(Curl.option.COOKIE, crawlOpts.cookies.join('; '));
-                }
-                if (crawlOpts?.referer) {
-                    curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
-                }
-
-
-                curl.on('end', (statusCode, data, headers) => {
-                    this.logger.info(`Successfully requested ${urlToCrawl} by curl`, { statusCode, headers });
-                    resolve(data.toString());
-                    curl.close();
-                });
-
-                curl.on('error', (err) => {
-                    this.logger.error(`Failed to request ${urlToCrawl} by curl`, { err: marshalErrorLike(err) });
-                    reject(err);
-                    curl.close();
-                });
-
-                curl.perform();
-            });
-
-            const fakeSnapshot = {
-                href: urlToCrawl.toString(),
-                html: html,
-                title: '',
-                text: '',
-            } as PageSnapshot;
-
-            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
             return;
         }
 
@@ -760,7 +737,6 @@ export class CrawlerHost extends RPCHost {
         this.threadLocal.set('keepImgDataUrl', opts.keepImgDataUrl);
         this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
         this.threadLocal.set('userAgent', opts.userAgent);
-        this.threadLocal.set('engine', opts.engine);
         if (opts.timeout) {
             this.threadLocal.set('timeout', opts.timeout * 1000);
         }
@@ -775,13 +751,13 @@ export class CrawlerHost extends RPCHost {
             targetSelector: opts.targetSelector,
             waitForSelector: opts.waitForSelector,
             overrideUserAgent: opts.userAgent,
-            engine: opts.engine,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
             withShadowDom: opts.withShadowDom,
             locale: opts.locale,
             referer: opts.referer,
             viewport: opts.viewport,
+            engine: opts.engine,
         };
 
         if (opts.locale) {
@@ -848,5 +824,38 @@ export class CrawlerHost extends RPCHost {
         }
 
         return this.snapshotFormatter.formatSnapshot(mode, lastSnapshot, url, this.urlValidMs);
+    }
+
+    async exploreDirectEngine(targetUrl: URL, crawlerOptions: ScrappingOptions, knownSnapshot: PageSnapshot) {
+        const snapshot = await this.curlControl.urlToSnapshot(targetUrl, crawlerOptions);
+
+        const thisFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
+        const knownFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', knownSnapshot);
+
+        let engine = ENGINE_TYPE.DIRECT;
+        if (!(thisFormatted.content && knownFormatted.content &&
+            thisFormatted.content.trim() === knownFormatted.content.trim())) {
+            engine = ENGINE_TYPE.BROWSER;
+        }
+
+        const realUrl = new URL(knownSnapshot.href);
+
+        const profile = (await DomainProfile.fromFirestoreQuery(
+            DomainProfile.COLLECTION
+                .where('domain', '==', targetUrl.origin.toLowerCase())
+                .limit(1)
+        ))[0] || new DomainProfile();
+
+
+        profile.origin = realUrl.origin.toLowerCase();
+        profile.triggerReason ??= 'Auto Explore';
+        profile.triggerUrl = realUrl.href;
+        profile.engine = engine;
+        profile.createdAt ??= new Date();
+        profile.expireAt = new Date(Date.now() + this.domainProfileRetentionMs);
+
+        await DomainProfile.save(profile);
+
+        return true;
     }
 }

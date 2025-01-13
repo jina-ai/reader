@@ -11,6 +11,12 @@ export enum CONTENT_FORMAT {
     SCREENSHOT = 'screenshot',
 }
 
+export enum ENGINE_TYPE {
+    BROWSER = 'browser',
+    DIRECT = 'direct',
+    VLM = 'vlm',
+}
+
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
 export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
@@ -182,7 +188,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Engine': {
-                    description: 'Specify the engine to use for crawling.\n\nDefault: puppeteer, supported: puppeteer, curl',
+                    description: 'Specify the engine to use for crawling.\n\nSupported: browser, direct, vlm',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -277,7 +283,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     userAgent?: string;
 
-    @Prop({ default: 'puppeteer' })
+    @Prop({
+        type: ENGINE_TYPE,
+    })
     engine?: string;
 
     @Prop({
@@ -476,6 +484,26 @@ export class CrawlerOptions extends AutoCastable {
 
     isRequestingCompoundContentFormat() {
         return !CONTENT_FORMAT_VALUES.has(this.respondWith);
+    }
+
+    isGeneralMarkdownRequest() {
+        if (this.respondWith !== CONTENT_FORMAT.CONTENT && this.respondWith !== CONTENT_FORMAT.MARKDOWN) {
+            return false;
+        }
+        if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
+        if (this.viewport) {
+            return false;
+        }
+        if (this.pdf) {
+            return false;
+        }
+        if (this.html) {
+            return false;
+        }
+
+        return true;
     }
 }
 
