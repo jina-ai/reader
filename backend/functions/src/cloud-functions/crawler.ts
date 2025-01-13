@@ -23,6 +23,7 @@ import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
 import { CurlControl } from '../services/curl';
+import { VlmControl } from '../services/vlm';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -57,6 +58,7 @@ export class CrawlerHost extends RPCHost {
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
+        protected vlmControl: VlmControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
@@ -281,7 +283,7 @@ export class CrawlerHost extends RPCHost {
                         continue;
                     }
 
-                    const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
+                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
                     chargeAmount = this.assignChargeAmount(formatted);
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -315,7 +317,7 @@ export class CrawlerHost extends RPCHost {
                     continue;
                 }
 
-                const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
+                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
                 chargeAmount = this.assignChargeAmount(formatted);
 
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
@@ -338,7 +340,7 @@ export class CrawlerHost extends RPCHost {
                 throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
             }
 
-            const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
+            const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -360,7 +362,7 @@ export class CrawlerHost extends RPCHost {
                 continue;
             }
 
-            const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
+            const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -391,7 +393,7 @@ export class CrawlerHost extends RPCHost {
             throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
 
-        const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
+        const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
         chargeAmount = this.assignChargeAmount(formatted);
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
             throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -619,6 +621,14 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
+        if (crawlOpts?.engine === ENGINE_TYPE.VLM) {
+            const finalBrowserSnapshot = await this.getFinalSnapshot(urlToCrawl, crawlOpts);
+
+            yield* this.vlmControl.fromBrowserSnapshot(finalBrowserSnapshot);
+
+            return;
+        }
+
         let cache;
 
         if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
@@ -765,6 +775,10 @@ export class CrawlerHost extends RPCHost {
             crawlOpts.extraHeaders['Accept-Language'] = opts.locale;
         }
 
+        if (opts.engine?.toLowerCase() === ENGINE_TYPE.VLM) {
+            crawlOpts.favorScreenshot = true;
+        }
+
         if (opts.injectFrameScript?.length) {
             crawlOpts.injectFrameScripts = (await Promise.all(
                 opts.injectFrameScript.map((x) => {
@@ -790,6 +804,59 @@ export class CrawlerHost extends RPCHost {
         }
 
         return crawlOpts;
+    }
+
+    formatSnapshot(
+        crawlerOptions: CrawlerOptions,
+        snapshot: PageSnapshot & {
+            screenshotUrl?: string;
+            pageshotUrl?: string;
+        },
+        nominalUrl?: URL,
+        urlValidMs?: number
+    ) {
+        if (crawlerOptions.engine?.toLowerCase() === ENGINE_TYPE.VLM) {
+            const output: FormattedPage = {
+                title: snapshot.title,
+                content: snapshot.parsed?.textContent,
+                url: snapshot.href,
+                pageshotUrl: snapshot.pageshotUrl,
+                [Symbol.dispose]: () => undefined,
+            };
+
+            Object.defineProperty(output, 'textRepresentation', {
+                value: snapshot.parsed?.textContent,
+                enumerable: false,
+            });
+
+            return output;
+        }
+
+        return this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, snapshot, nominalUrl, urlValidMs);
+    }
+
+    async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions): Promise<PageSnapshot | undefined> {
+        const it = this.cachedScrap(url, { ...opts, engine: ENGINE_TYPE.BROWSER });
+
+        let lastSnapshot;
+        let lastError;
+        try {
+            for await (const x of it) {
+                lastSnapshot = x;
+            }
+        } catch (err) {
+            lastError = err;
+        }
+
+        if (!lastSnapshot && lastError) {
+            throw lastError;
+        }
+
+        if (!lastSnapshot) {
+            throw new AssertionFailureError(`No content available`);
+        }
+
+        return lastSnapshot;
     }
 
     async simpleCrawl(mode: string, url: URL, opts?: ExtraScrappingOptions) {
