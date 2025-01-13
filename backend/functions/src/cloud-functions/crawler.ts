@@ -9,20 +9,20 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { Request, Response } from 'express';
-import { Curl } from 'node-libcurl';
 const pNormalizeUrl = import("@esm2cjs/normalize-url");
 import { Crawled } from '../db/crawled';
 import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { ENGINE_TYPE, CrawlerOptions, CrawlerOptionsHeaderOnly } from '../dto/scrapping-options';
+import { CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { DomainBlockade } from '../db/domain-blockade';
 import { DomainProfile } from '../db/domain-profile';
 import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
+import { CurlControl } from '../services/curl';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -30,7 +30,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     targetSelector?: string | string[];
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
-    engine?: ENGINE_TYPE;
+    engine?: string;
 }
 
 const indexProto = {
@@ -56,6 +56,7 @@ export class CrawlerHost extends RPCHost {
     constructor(
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
+        protected curlControl: CurlControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
@@ -65,7 +66,7 @@ export class CrawlerHost extends RPCHost {
     ) {
         super(...arguments);
 
-        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ScrappingOptions & { url: URL; }) => {
+        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ExtraScrappingOptions & { url: URL; }) => {
             if (!snapshot.title?.trim() && !snapshot.pdfs?.length) {
                 return;
             }
@@ -80,8 +81,15 @@ export class CrawlerHost extends RPCHost {
             if (options.locale) {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
-
             await this.setToCache(options.url, snapshot);
+
+            if (!options.engine) {
+                try {
+                    await this.exploreDirectEngine(options.url, options, snapshot);
+                } catch (err) {
+                    this.logger.warn(`Failed to explore direct engine option for ${options.url.href}`, { err });
+                }
+            }
         });
 
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
@@ -163,7 +171,6 @@ export class CrawlerHost extends RPCHost {
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        let resultContent = '';
         const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
         const targetUrl = await this.getTargetUrl(decodeURIComponent(ctx.req.url), crawlerOptions);
@@ -249,69 +256,19 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
-        if (!crawlerOptions?.engine) {
-            const domainProfile = await DomainProfile.fromFirestoreQuery(
-                DomainProfile.COLLECTION
-                    .where('domain', '==', targetUrl.hostname.toLowerCase())
-                    .where('expireAt', '>=', new Date())
-                    .limit(1)
-            ).then(profiles => profiles[0]);
-
-            if (domainProfile?.engine) {
-                crawlerOptions.engine = domainProfile.engine;
-            } else {
-                rpcReflect.then(async () => {
-                    let curlContent = '';
-                    if (crawlerOptions.isCurlApplicable()) {
-                        const curlCrawlerOptions = { ...crawlerOptions, engine: ENGINE_TYPE.DIRECT } as any;
-                        const curlOpts = await this.configure(curlCrawlerOptions);
-
-                        const formatted = await this.crawlByCurl(targetUrl, curlOpts, crawlerOptions)
-                        curlContent = formatted.content?.trim() || '';
-                    }
-                    const preferredEngine = curlContent.length && resultContent.trim().length === curlContent.length ? ENGINE_TYPE.DIRECT : ENGINE_TYPE.BROWSER;
-
-                    const existingProfiles = (await DomainProfile.fromFirestoreQuery(
-                        DomainProfile.COLLECTION
-                            .where('domain', '==', targetUrl.hostname.toLowerCase())
-                            .where('expireAt', '>=', new Date())
-                            .limit(1)
-                    ));
-                    if (!existingProfiles.length) {
-                        await DomainProfile.save(DomainProfile.from({
-                            domain: targetUrl.hostname.toLowerCase(),
-                            triggerReason: 'Automatically detected',
-                            triggerUrl: targetUrl.toString(),
-                            engine: preferredEngine,
-                            createdAt: new Date(),
-                            expireAt: new Date(Date.now() + this.domainProfileRetentionMs),
-                        })).catch((err) => {
-                            this.logger.warn(`Failed to save domain profile for ${targetUrl.hostname}`, { err: marshalErrorLike(err)});
-                        });
-                    }
-                });
-            }
-        } else if (!Object.values(ENGINE_TYPE).includes(crawlerOptions.engine)) {
-            throw new ParamValidationError({
-                path: 'engine',
-                message: `Invalid engine value ${crawlerOptions.engine}, must be one of ${Object.values(ENGINE_TYPE).join(', ')}`,
-            });
-        }
 
         const crawlOpts = await this.configure(crawlerOptions);
 
-        if (crawlerOptions.engine?.toLowerCase() === ENGINE_TYPE.DIRECT) {
-            const formatted = await this.crawlByCurl(targetUrl, crawlOpts, crawlerOptions);
-            if (!formatted) {
-                throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
-            }
+        if (!crawlOpts.engine) {
+            const domainProfile = (await DomainProfile.fromFirestoreQuery(
+                DomainProfile.COLLECTION
+                    .where('origin', '==', targetUrl.origin.toLowerCase())
+                    .limit(1)
+            ))[0];
 
-            chargeAmount = this.assignChargeAmount(formatted);
-            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+            if (domainProfile?.engine) {
+                crawlOpts.engine = domainProfile.engine;
             }
-
-            return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
         }
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -326,7 +283,6 @@ export class CrawlerHost extends RPCHost {
 
                     const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                     chargeAmount = this.assignChargeAmount(formatted);
-                    resultContent = formatted.content || '';
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
                     }
@@ -361,7 +317,6 @@ export class CrawlerHost extends RPCHost {
 
                 const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
                 chargeAmount = this.assignChargeAmount(formatted);
-                resultContent = formatted.content || '';
 
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                     throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -385,7 +340,6 @@ export class CrawlerHost extends RPCHost {
 
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
-            resultContent = formatted.content || '';
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -408,7 +362,6 @@ export class CrawlerHost extends RPCHost {
 
             const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, scrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted);
-            resultContent = formatted.content || '';
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -440,7 +393,6 @@ export class CrawlerHost extends RPCHost {
 
         const formatted = await this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, lastScrapped, targetUrl, this.urlValidMs);
         chargeAmount = this.assignChargeAmount(formatted);
-        resultContent = formatted.content || '';
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
             throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
         }
@@ -646,7 +598,6 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlerOpts?.pdf) {
-
             const pdfBuf = crawlerOpts.pdf instanceof Blob ? await crawlerOpts.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOpts.pdf, 'base64');
             const pdfDataUrl = `data:application/pdf;base64,${pdfBuf.toString('base64')}`;
             const fakeSnapshot = {
@@ -658,6 +609,12 @@ export class CrawlerHost extends RPCHost {
             } as PageSnapshot;
 
             yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
+
+            return;
+        }
+
+        if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
+            yield this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
 
             return;
         }
@@ -695,60 +652,6 @@ export class CrawlerHost extends RPCHost {
                 return;
             }
             throw err;
-        }
-    }
-
-    async crawlByCurl(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
-        const html = await new Promise<string>((resolve, reject) => {
-            const curl = new Curl();
-            curl.setOpt('URL', urlToCrawl.toString());
-            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
-
-            if (crawlOpts?.timeoutMs) {
-                curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
-            }
-            if (crawlOpts?.overrideUserAgent) {
-                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
-            }
-            if (crawlOpts?.extraHeaders) {
-                curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-            }
-            if (crawlOpts?.proxyUrl) {
-                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
-            }
-            if (crawlOpts?.cookies) {
-                curl.setOpt(Curl.option.COOKIE, crawlOpts.cookies.join('; '));
-            }
-            if (crawlOpts?.referer) {
-                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
-            }
-
-
-            curl.on('end', (statusCode, data, headers) => {
-                this.logger.info(`Successfully requested ${urlToCrawl} by curl`, { statusCode, headers });
-                resolve(data.toString());
-                curl.close();
-            });
-
-            curl.on('error', (err) => {
-                this.logger.error(`Failed to request ${urlToCrawl} by curl`, { err: marshalErrorLike(err) });
-                reject(err);
-                curl.close();
-            });
-
-            curl.perform();
-        });
-
-        const fakeSnapshot = {
-            href: urlToCrawl.toString(),
-            html: html,
-            title: '',
-            text: '',
-        } as PageSnapshot;
-
-        const curlSnapshot = await this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
-        if (crawlerOpts && curlSnapshot) {
-            return this.snapshotFormatter.formatSnapshot(crawlerOpts?.respondWith, curlSnapshot, urlToCrawl, this.urlValidMs);
         }
     }
 
@@ -834,7 +737,6 @@ export class CrawlerHost extends RPCHost {
         this.threadLocal.set('keepImgDataUrl', opts.keepImgDataUrl);
         this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
         this.threadLocal.set('userAgent', opts.userAgent);
-        this.threadLocal.set('engine', opts.engine);
         if (opts.timeout) {
             this.threadLocal.set('timeout', opts.timeout * 1000);
         }
@@ -849,13 +751,13 @@ export class CrawlerHost extends RPCHost {
             targetSelector: opts.targetSelector,
             waitForSelector: opts.waitForSelector,
             overrideUserAgent: opts.userAgent,
-            engine: opts.engine,
             timeoutMs: opts.timeout ? opts.timeout * 1000 : undefined,
             withIframe: opts.withIframe,
             withShadowDom: opts.withShadowDom,
             locale: opts.locale,
             referer: opts.referer,
             viewport: opts.viewport,
+            engine: opts.engine,
         };
 
         if (opts.locale) {
@@ -922,5 +824,38 @@ export class CrawlerHost extends RPCHost {
         }
 
         return this.snapshotFormatter.formatSnapshot(mode, lastSnapshot, url, this.urlValidMs);
+    }
+
+    async exploreDirectEngine(targetUrl: URL, crawlerOptions: ScrappingOptions, knownSnapshot: PageSnapshot) {
+        const snapshot = await this.curlControl.urlToSnapshot(targetUrl, crawlerOptions);
+
+        const thisFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
+        const knownFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
+
+        let engine = ENGINE_TYPE.DIRECT;
+        if (!(thisFormatted.content && knownFormatted.content &&
+            thisFormatted.content.trim() === knownFormatted.content.trim())) {
+            engine = ENGINE_TYPE.BROWSER;
+        }
+
+        const realUrl = new URL(knownSnapshot.href);
+
+        const profile = (await DomainProfile.fromFirestoreQuery(
+            DomainProfile.COLLECTION
+                .where('domain', '==', targetUrl.origin.toLowerCase())
+                .limit(1)
+        ))[0] || new DomainProfile();
+
+
+        profile.origin = realUrl.origin.toLowerCase();
+        profile.triggerReason ??= 'Auto Explore';
+        profile.triggerUrl = realUrl.href;
+        profile.engine = engine;
+        profile.createdAt ??= new Date();
+        profile.expireAt = new Date(Date.now() + this.domainProfileRetentionMs);
+
+        await DomainProfile.save(profile);
+
+        return true;
     }
 }

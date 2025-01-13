@@ -188,7 +188,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Engine': {
-                    description: 'Specify the engine to use for crawling.\n\nSupported: puppeteer, curl',
+                    description: 'Specify the engine to use for crawling.\n\nSupported: browser, direct, vlm',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -283,8 +283,10 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     userAgent?: string;
 
-    @Prop()
-    engine?: ENGINE_TYPE;
+    @Prop({
+        type: ENGINE_TYPE,
+    })
+    engine?: string;
 
     @Prop({
         arrayOf: String,
@@ -484,7 +486,7 @@ export class CrawlerOptions extends AutoCastable {
         return !CONTENT_FORMAT_VALUES.has(this.respondWith);
     }
 
-    isCurlApplicable() {
+    isGeneralMarkdownRequest() {
         if (this.respondWith !== CONTENT_FORMAT.CONTENT && this.respondWith !== CONTENT_FORMAT.MARKDOWN) {
             return false;
         }
@@ -500,6 +502,7 @@ export class CrawlerOptions extends AutoCastable {
         if (this.html) {
             return false;
         }
+
         return true;
     }
 }
