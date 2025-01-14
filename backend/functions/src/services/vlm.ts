@@ -37,11 +37,11 @@ export class VlmControl extends AsyncService {
         const it = this.commonLLM.iterRun('vertex-gemini-1.5-flash-002', {
             prompt: [
                 typeof pageshot === 'string' ? new URL(pageshot) : pageshot,
-                `Convert this webpage screenshot into a markdown source file, retaining the page language and semantic structures. No notes and chit-chats allowed`,
+                `Convert this webpage screenshot into a markdown source file that does not contain HTML tags, retaining the page language and visual structures.`,
             ],
 
             options: {
-                system: 'You are Reader-LM-2, a Markdown source file generator model.',
+                system: 'You are Reader-LM-2, a OCR model that generates Markdown source files only. No HTML, notes and chit-chats allowed',
                 stream: true
             }
         });
