@@ -41,7 +41,7 @@ export class VlmControl extends AsyncService {
             ],
 
             options: {
-                system: 'You are Reader-LM-2, an OCR model that generates Markdown source files only. No HTML, notes and chit-chats allowed',
+                system: 'You are Reader-LM-v7, an OCR model that generates Markdown source files only. No HTML, notes and chit-chats allowed',
                 stream: true
             }
         });
