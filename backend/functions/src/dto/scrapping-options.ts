@@ -396,7 +396,7 @@ export class CrawlerOptions extends AutoCastable {
         if (engine) {
             instance.engine = engine;
         }
-        if (instance.noCache || !instance.isGeneralMarkdownRequest()) {
+        if (instance.noCache || !instance.isTypicalRequest()) {
             instance.engine ??= ENGINE_TYPE.BROWSER;
         }
 
@@ -489,8 +489,8 @@ export class CrawlerOptions extends AutoCastable {
         return !CONTENT_FORMAT_VALUES.has(this.respondWith);
     }
 
-    isGeneralMarkdownRequest() {
-        if (this.respondWith !== CONTENT_FORMAT.CONTENT && this.respondWith !== CONTENT_FORMAT.MARKDOWN) {
+    isTypicalRequest() {
+        if (this.respondWith.includes(CONTENT_FORMAT.PAGESHOT) || this.respondWith.includes(CONTENT_FORMAT.SCREENSHOT)) {
             return false;
         }
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
