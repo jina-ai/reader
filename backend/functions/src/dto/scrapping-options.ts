@@ -396,6 +396,9 @@ export class CrawlerOptions extends AutoCastable {
         if (engine) {
             instance.engine = engine;
         }
+        if (instance.noCache || !instance.isGeneralMarkdownRequest()) {
+            instance.engine ??= ENGINE_TYPE.BROWSER;
+        }
 
         const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
         if (keepImgDataUrl !== undefined) {
