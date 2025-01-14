@@ -626,7 +626,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlOpts?.engine === ENGINE_TYPE.VLM) {
-            const finalBrowserSnapshot = await this.getFinalSnapshot(urlToCrawl, crawlOpts);
+            const finalBrowserSnapshot = await this.getFinalSnapshot(urlToCrawl, crawlOpts, crawlerOpts);
 
             yield* this.vlmControl.fromBrowserSnapshot(finalBrowserSnapshot);
 
@@ -839,8 +839,8 @@ export class CrawlerHost extends RPCHost {
         return this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, snapshot, nominalUrl, urlValidMs);
     }
 
-    async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions): Promise<PageSnapshot | undefined> {
-        const it = this.cachedScrap(url, { ...opts, engine: ENGINE_TYPE.BROWSER });
+    async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {
+        const it = this.cachedScrap(url, { ...opts, engine: ENGINE_TYPE.BROWSER }, crawlerOptions);
 
         let lastSnapshot;
         let lastError;
