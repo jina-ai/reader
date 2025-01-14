@@ -35,7 +35,8 @@ export class AltTextService extends AsyncService {
 
             const r = await this.imageInterrogator.interrogate('vertex-gemini-1.5-flash-002', {
                 image: exported,
-                prompt: `Provide a formal caption in one sentence, concise and in the third person: HTML <img> alt text of this image. Return "**NSFW**" if you don't feel comfortable captioning it.`
+                prompt: `Yield a concise image caption sentence in third person.`,
+                system: 'You are BLIP2, an image caption model.',
             });
 
             return r.replaceAll(/[\n\"]|(\.\s*$)/g, '').trim();

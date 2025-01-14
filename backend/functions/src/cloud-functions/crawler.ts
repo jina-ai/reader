@@ -313,6 +313,9 @@ export class CrawlerHost extends RPCHost {
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
+                if (!crawlerOptions.isEarlyReturnApplicable()) {
+                    continue;
+                }
                 if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped?.title?.trim()) && !scrapped?.pdfs?.length)) {
                     continue;
                 }
@@ -324,13 +327,11 @@ export class CrawlerHost extends RPCHost {
                     throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
                 }
 
-                if (crawlerOptions.isEarlyReturnApplicable()) {
-                    return formatted;
+                if (scrapped?.pdfs?.length && !chargeAmount) {
+                    continue;
                 }
 
-                if (chargeAmount && scrapped?.pdfs?.length) {
-                    return formatted;
-                }
+                return formatted;
             }
 
             if (!lastScrapped) {
@@ -358,6 +359,11 @@ export class CrawlerHost extends RPCHost {
 
         for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
             lastScrapped = scrapped;
+
+            if (!crawlerOptions.isEarlyReturnApplicable()) {
+                continue;
+            }
+
             if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped?.title?.trim()) && !scrapped?.pdfs?.length)) {
                 continue;
             }
@@ -368,22 +374,20 @@ export class CrawlerHost extends RPCHost {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
 
-            if (crawlerOptions.isEarlyReturnApplicable()) {
-                if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+            if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
-                    return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-                    );
-                }
-                if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
-
-                    return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
-                    );
-                }
-
-                return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
+                return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
+                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
+                );
             }
+            if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
+
+                return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
+                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
+                );
+            }
+
+            return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
         }
 
         if (!lastScrapped) {
