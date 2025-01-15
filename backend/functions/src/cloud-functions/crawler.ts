@@ -857,12 +857,12 @@ export class CrawlerHost extends RPCHost {
         nominalUrl?: URL,
         urlValidMs?: number
     ) {
-        if (crawlerOptions.engine?.toLowerCase().includes('lm')) {
+        const engine = crawlerOptions.engine?.toLowerCase() || '';
+        if (engine.includes('lm')) {
             const output: FormattedPage = {
                 title: snapshot.title,
                 content: snapshot.parsed?.textContent,
                 url: snapshot.href,
-                pageshotUrl: snapshot.pageshotUrl,
                 [Symbol.dispose]: () => undefined,
             };
 

@@ -2,10 +2,11 @@ import { marshalErrorLike } from 'civkit/lang';
 import { AsyncService } from 'civkit/async-service';
 import { singleton } from 'tsyringe';
 
-import { Curl } from 'node-libcurl';
+import { Curl, HeaderInfo } from 'node-libcurl';
 import { PageSnapshot, ScrappingOptions } from './puppeteer';
 import { Logger } from '../shared/services/logger';
 import { JSDomControl } from './jsdom';
+import { AssertionFailureError } from 'civkit';
 
 @singleton()
 export class CurlControl extends AsyncService {
@@ -26,7 +27,11 @@ export class CurlControl extends AsyncService {
     }
 
     async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions) {
-        const html = await new Promise<string>((resolve, reject) => {
+        const result = await new Promise<{
+            statusCode: number,
+            data: string,
+            headers: Buffer | HeaderInfo[],
+        }>((resolve, reject) => {
             const curl = new Curl();
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
@@ -52,23 +57,31 @@ export class CurlControl extends AsyncService {
             }
 
             curl.on('end', (statusCode, data, headers) => {
-                this.logger.debug(`CURL: ${urlToCrawl}`, { statusCode, headers });
-                resolve(data.toString());
+                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode, headers });
+                resolve({
+                    statusCode,
+                    data: data.toString(),
+                    headers,
+                });
                 curl.close();
             });
 
             curl.on('error', (err) => {
                 this.logger.warn(`Failed to curl ${urlToCrawl}`, { err: marshalErrorLike(err) });
                 curl.close();
-                reject(err);
+                reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: ${err.message}`));
             });
 
             curl.perform();
         });
 
+        if (result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
+            throw new AssertionFailureError(`Failed to directly access ${urlToCrawl}: HTTP ${result.statusCode}`);
+        }
+
         const snapshot = {
             href: urlToCrawl.toString(),
-            html: html,
+            html: result.data,
             title: '',
             text: '',
         } as PageSnapshot;
