@@ -23,7 +23,7 @@ import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
 import { CurlControl } from '../services/curl';
-import { VlmControl } from '../services/vlm';
+import { LmControl } from '../services/lm';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -58,7 +58,7 @@ export class CrawlerHost extends RPCHost {
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
-        protected vlmControl: VlmControl,
+        protected lmControl: LmControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
@@ -284,7 +284,7 @@ export class CrawlerHost extends RPCHost {
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
-                    chargeAmount = this.assignChargeAmount(formatted);
+                    chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
                     }
@@ -321,7 +321,7 @@ export class CrawlerHost extends RPCHost {
                 }
 
                 const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
-                chargeAmount = this.assignChargeAmount(formatted);
+                chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
 
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                     throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -342,7 +342,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
-            chargeAmount = this.assignChargeAmount(formatted);
+            chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -369,7 +369,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
-            chargeAmount = this.assignChargeAmount(formatted);
+            chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -398,7 +398,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
-        chargeAmount = this.assignChargeAmount(formatted);
+        chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
             throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
         }
@@ -625,10 +625,45 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (crawlOpts?.engine === ENGINE_TYPE.VLM) {
-            const finalBrowserSnapshot = await this.getFinalSnapshot(urlToCrawl, crawlOpts, crawlerOpts);
+        // if (crawlOpts?.engine === ENGINE_TYPE.VLM) {
+        //     const rmSelectorEquivalent = [];
+        //     if (typeof crawlOpts.removeSelector === 'string') {
+        //         rmSelectorEquivalent.push(crawlOpts.removeSelector);
+        //     } else if (Array.isArray(crawlOpts.removeSelector)) {
+        //         rmSelectorEquivalent.push(...crawlOpts.removeSelector);
+        //     }
+        //     rmSelectorEquivalent.push('script,link,style,meta,textarea,select>option,header,footer,nav');
 
-            yield* this.vlmControl.fromBrowserSnapshot(finalBrowserSnapshot);
+        //     const finalBrowserSnapshot = await this.getFinalSnapshot(urlToCrawl, {
+        //         ...crawlOpts, removeSelector: rmSelectorEquivalent, engine: ENGINE_TYPE.BROWSER
+        //     }, crawlerOpts);
+
+        //     yield* this.lmControl.geminiFromBrowserSnapshot(finalBrowserSnapshot);
+
+        //     return;
+        // }
+
+        if (crawlOpts?.engine === ENGINE_TYPE.READER_LM) {
+            const rmSelectorEquivalent = [];
+            if (typeof crawlOpts.removeSelector === 'string') {
+                rmSelectorEquivalent.push(crawlOpts.removeSelector);
+            } else if (Array.isArray(crawlOpts.removeSelector)) {
+                rmSelectorEquivalent.push(...crawlOpts.removeSelector);
+            }
+            rmSelectorEquivalent.push('script,link,style,meta,textarea,select>option');
+
+            const finalAutoSnapshot = await this.getFinalSnapshot(urlToCrawl, {
+                ...crawlOpts, removeSelector: rmSelectorEquivalent, engine: undefined
+            }, crawlerOpts);
+
+            if (crawlerOpts?.instruction || crawlerOpts?.jsonSchema) {
+                const jsonSchema = crawlerOpts.jsonSchema ? JSON.stringify(crawlerOpts.jsonSchema, undefined, 2) : undefined;
+                yield* this.lmControl.readerLMFromSnapshot(crawlerOpts.instruction, jsonSchema, finalAutoSnapshot);
+
+                return;
+            }
+
+            yield* this.lmControl.readerLMMarkdownFromSnapshot(finalAutoSnapshot);
 
             return;
         }
@@ -669,14 +704,18 @@ export class CrawlerHost extends RPCHost {
         }
     }
 
-    assignChargeAmount(formatted: FormattedPage) {
+    assignChargeAmount(formatted: FormattedPage, scrappingOptions?: ExtraScrappingOptions) {
         if (!formatted) {
             return 0;
         }
 
         let amount = 0;
         if (formatted.content) {
-            amount += estimateToken(formatted.content);
+            const x1 = estimateToken(formatted.content);
+            if (scrappingOptions?.engine?.toLowerCase().includes('lm')) {
+                amount += x1 * 2;
+            }
+            amount += x1;
         } else if (formatted.description) {
             amount += estimateToken(formatted.description);
         }
@@ -819,7 +858,7 @@ export class CrawlerHost extends RPCHost {
         nominalUrl?: URL,
         urlValidMs?: number
     ) {
-        if (crawlerOptions.engine?.toLowerCase() === ENGINE_TYPE.VLM) {
+        if (crawlerOptions.engine?.toLowerCase().includes('lm')) {
             const output: FormattedPage = {
                 title: snapshot.title,
                 content: snapshot.parsed?.textContent,

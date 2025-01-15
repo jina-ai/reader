@@ -15,6 +15,7 @@ export enum ENGINE_TYPE {
     BROWSER = 'browser',
     DIRECT = 'direct',
     VLM = 'vlm',
+    READER_LM = 'readerlm-v2',
 }
 
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
@@ -188,7 +189,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Engine': {
-                    description: 'Specify the engine to use for crawling.\n\nSupported: browser, direct, vlm',
+                    description: 'Specify the engine to use for crawling.\n\nSupported: browser, direct, vlm, readerlm-v2',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -316,6 +317,12 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop()
     viewport?: Viewport;
+
+    @Prop()
+    instruction?: string;
+
+    @Prop()
+    jsonSchema?: object;
 
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
@@ -461,7 +468,7 @@ export class CrawlerOptions extends AutoCastable {
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
             return false;
         }
-        if (this.engine?.toLowerCase() === ENGINE_TYPE.VLM) {
+        if (this.engine?.toLowerCase().includes('lm')) {
             return false;
         }
 
