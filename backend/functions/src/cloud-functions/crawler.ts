@@ -590,33 +590,26 @@ export class CrawlerHost extends RPCHost {
     }
 
     async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
+        let overrideFinalSnapshot;
         if (crawlerOpts?.html) {
-            const fakeSnapshot = {
+            overrideFinalSnapshot = {
                 href: urlToCrawl.toString(),
                 html: crawlerOpts.html,
                 title: '',
                 text: '',
             } as PageSnapshot;
-
-            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
-
-            return;
         }
 
         if (crawlerOpts?.pdf) {
             const pdfBuf = crawlerOpts.pdf instanceof Blob ? await crawlerOpts.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOpts.pdf, 'base64');
             const pdfDataUrl = `data:application/pdf;base64,${pdfBuf.toString('base64')}`;
-            const fakeSnapshot = {
+            overrideFinalSnapshot = {
                 href: urlToCrawl.toString(),
                 html: `<!DOCTYPE html><html><head></head><body style="height: 100%; width: 100%; overflow: hidden; margin:0px; background-color: rgb(82, 86, 89);"><embed style="position:absolute; left: 0; top: 0;" width="100%" height="100%" src="${pdfDataUrl}"></body></html>`,
                 title: '',
                 text: '',
                 pdfs: [pdfDataUrl],
             } as PageSnapshot;
-
-            yield this.jsdomControl.narrowSnapshot(fakeSnapshot, crawlOpts);
-
-            return;
         }
 
         if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
@@ -664,6 +657,12 @@ export class CrawlerHost extends RPCHost {
             }
 
             yield* this.lmControl.readerLMMarkdownFromSnapshot(finalAutoSnapshot);
+
+            return;
+        }
+
+        if (overrideFinalSnapshot) {
+            yield this.jsdomControl.narrowSnapshot(overrideFinalSnapshot, crawlOpts);
 
             return;
         }
