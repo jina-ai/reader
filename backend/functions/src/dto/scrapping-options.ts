@@ -461,6 +461,9 @@ export class CrawlerOptions extends AutoCastable {
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
             return false;
         }
+        if (this.engine?.toLowerCase() === ENGINE_TYPE.VLM) {
+            return false;
+        }
 
         return true;
     }
