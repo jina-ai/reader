@@ -38,7 +38,7 @@ export class LmControl extends AsyncService {
             throw new AssertionFailureError('Screenshot of the page is not available');
         }
 
-        const html = await this.jsdomControl.cleanHTMLforLMs(snapshot.html, 'script,link,style,textarea,select>option,svg')
+        const html = await this.jsdomControl.cleanHTMLforLMs(snapshot.html, 'script,link,style,textarea,select>option,svg');
 
         const it = this.commonLLM.iterRun('vertex-gemini-1.5-flash-002', {
             prompt: [
@@ -81,7 +81,14 @@ export class LmControl extends AsyncService {
 
             options: {
                 // system: 'You are an AI assistant developed by Jina AI',
-                stream: true
+                stream: true,
+                modelSpecific: {
+                    top_k: 1,
+                    temperature: 0,
+                    repetition_penalty: 1.05,
+                    presence_penalty: 0.25,
+                    max_tokens: 8192,
+                }
             }
         });
 
@@ -112,7 +119,14 @@ export class LmControl extends AsyncService {
             prompt: `${instruction}\n\n${tripleBackTick}html\n${html}\n${tripleBackTick}\n${schema ? `The JSON schema:\n${tripleBackTick}json\n${schema}\n${tripleBackTick}\n` : ''}`,
             options: {
                 // system: 'You are an AI assistant developed by Jina AI',
-                stream: true
+                stream: true,
+                modelSpecific: {
+                    top_k: 1,
+                    temperature: 0,
+                    repetition_penalty: 1.05,
+                    presence_penalty: 0.25,
+                    max_tokens: 8192,
+                }
             }
         });
 
