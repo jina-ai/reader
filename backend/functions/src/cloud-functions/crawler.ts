@@ -832,7 +832,7 @@ export class CrawlerHost extends RPCHost {
         nominalUrl?: URL,
         urlValidMs?: number
     ) {
-        const presumedURL = crawlerOptions.base === 'eventual' ? new URL(snapshot.href) : nominalUrl;
+        const presumedURL = crawlerOptions.base === 'final' ? new URL(snapshot.href) : nominalUrl;
 
         const respondWith = crawlerOptions.respondWith;
         if (respondWith === CONTENT_FORMAT.READER_LM || respondWith === CONTENT_FORMAT.VLM) {

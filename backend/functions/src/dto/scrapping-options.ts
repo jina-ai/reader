@@ -25,7 +25,7 @@ const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
 export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
 const IMAGE_RETENTION_MODE_VALUES = new Set<string>(IMAGE_RETENTION_MODES);
-export const BASE_URL_MODES = ['initial', 'eventual'] as const;
+export const BASE_URL_MODES = ['initial', 'final'] as const;
 const BASE_URL_MODE_VALUES = new Set<string>(BASE_URL_MODES);
 
 class Viewport extends AutoCastable {
@@ -199,7 +199,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Base': {
-                    description: 'Select base modes of relative URLs.\n\nSupported: initial, eventual',
+                    description: 'Select base modes of relative URLs.\n\nSupported: initial, final',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -490,7 +490,9 @@ export class CrawlerOptions extends AutoCastable {
         instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;
 
         const baseMode = ctx?.req.get('x-base') || undefined;
-        instance.base ??= baseMode as any;
+        if (baseMode) {
+            instance.base = baseMode as any;
+        }
 
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
