@@ -85,7 +85,7 @@ export class LmControl extends AsyncService {
                 modelSpecific: {
                     top_k: 1,
                     temperature: 0,
-                    repetition_penalty: 1.05,
+                    repetition_penalty: 1.2,
                     presence_penalty: 0.25,
                     max_tokens: 8192,
                 }
@@ -123,7 +123,7 @@ export class LmControl extends AsyncService {
                 modelSpecific: {
                     top_k: 1,
                     temperature: 0,
-                    repetition_penalty: 1.05,
+                    repetition_penalty: 1.2,
                     presence_penalty: 0.25,
                     max_tokens: 8192,
                 }
