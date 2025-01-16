@@ -28,8 +28,8 @@ export interface FormattedPage {
     screenshot?: Buffer;
     pageshotUrl?: string;
     pageshot?: Buffer;
-    links?: { [k: string]: string; };
-    images?: { [k: string]: string; };
+    links?: { [k: string]: string; } | [string, string][];
+    images?: { [k: string]: string; } | [string, string][];
     warning?: string;
     usage?: {
         total_tokens?: number;
@@ -56,7 +56,7 @@ export function highlightedCodeBlock(turndownService: TurndownService) {
                 highlightRegExp.test(node.className)
             );
         },
-        replacement: (_content, node, options)=> {
+        replacement: (_content, node, options) => {
             const className = (node as any).className || '';
             const language = (className.match(highlightRegExp) || [null, ''])[1];
 
@@ -178,7 +178,14 @@ export class SnapshotFormatter extends AsyncService {
             Object.defineProperty(f, 'textRepresentation', { value: snapshot.text, enumerable: false, configurable: true });
         }
 
-        if (modeOK && !mode.includes('markdown') && !mode.includes('content')) {
+        if (mode.includes('lm')) {
+            modeOK = true;
+            f.content = snapshot.parsed?.textContent;
+        }
+
+        if (modeOK && (mode.includes('lm') ||
+            (!mode.includes('markdown') && !mode.includes('content')))
+        ) {
             const dt = Date.now() - t0;
             this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 
@@ -391,7 +398,13 @@ export class SnapshotFormatter extends AsyncService {
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            formatted.links = _.invert(this.jsdomControl.inferSnapshot(snapshot).links || {});
+            const links = this.jsdomControl.inferSnapshot(snapshot).links;
+
+            if (this.threadLocal.get('withLinksSummary') === 'all') {
+                formatted.links = links;
+            } else {
+                formatted.links = _.fromPairs(links.filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')));
+            }
         }
 
         Object.assign(f, formatted);
@@ -418,8 +431,14 @@ export class SnapshotFormatter extends AsyncService {
             }
             if (this.links) {
                 const linkSummaryChunks = ['Links/Buttons:'];
-                for (const [k, v] of Object.entries(this.links)) {
-                    linkSummaryChunks.push(`- [${k}](${v})`);
+                if (Array.isArray(this.links)) {
+                    for (const [k, v] of this.links) {
+                        linkSummaryChunks.push(`- [${k}](${v})`);
+                    }
+                } else {
+                    for (const [k, v] of Object.entries(this.links)) {
+                        linkSummaryChunks.push(`- [${k}](${v})`);
+                    }
                 }
                 if (linkSummaryChunks.length === 1) {
                     linkSummaryChunks.push('This page does not seem to contain any buttons/links.');
@@ -478,7 +497,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
         if (this.threadLocal.get('withLinksSummary')) {
             inferred ??= this.jsdomControl.inferSnapshot(snapshot);
-            mixin.links = _.invert(inferred.links || {});
+            if (this.threadLocal.get('withLinksSummary') === 'all') {
+                mixin.links = inferred.links;
+            } else {
+                mixin.links = _.fromPairs(inferred.links.filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')));
+            }
         }
         if (snapshot.status) {
             const code = snapshot.status;

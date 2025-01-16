@@ -6,6 +6,7 @@ import { Logger } from '../shared/services/logger';
 import _ from 'lodash';
 import { AssertionFailureError } from 'civkit';
 import { LLMManager } from '../shared/services/common-llm';
+import { JSDomControl } from './jsdom';
 
 const tripleBackTick = '```';
 
@@ -16,7 +17,8 @@ export class LmControl extends AsyncService {
 
     constructor(
         protected globalLogger: Logger,
-        protected commonLLM: LLMManager
+        protected commonLLM: LLMManager,
+        protected jsdomControl: JSDomControl,
     ) {
         super(...arguments);
     }
@@ -25,13 +27,6 @@ export class LmControl extends AsyncService {
         await this.dependencyReady();
 
         this.emit('ready');
-    }
-
-    cleanRedundantEmptyLines(text: string) {
-        const lines = text.split(/\r?\n/g);
-        const mappedFlag = lines.map((line) => Boolean(line.trim()));
-
-        return lines.filter((_line, i) => mappedFlag[i] || mappedFlag[i - 1]).join('\n');
     }
 
     async* geminiFromBrowserSnapshot(snapshot?: PageSnapshot & {
@@ -43,9 +38,11 @@ export class LmControl extends AsyncService {
             throw new AssertionFailureError('Screenshot of the page is not available');
         }
 
+        const html = await this.jsdomControl.cleanHTMLforLMs(snapshot.html, 'script,link,style,textarea,select>option,svg')
+
         const it = this.commonLLM.iterRun('vertex-gemini-1.5-flash-002', {
             prompt: [
-                `HTML: \n${this.cleanRedundantEmptyLines(snapshot.html)}\n\nSCREENSHOT: \n`,
+                `HTML: \n${html}\n\nSCREENSHOT: \n`,
                 typeof pageshot === 'string' ? new URL(pageshot) : pageshot,
                 `Convert this webpage into a markdown source file that does not contain HTML tags, retaining the page language and visual structures.`,
             ],
@@ -76,8 +73,11 @@ export class LmControl extends AsyncService {
         if (!snapshot) {
             throw new AssertionFailureError('Snapshot of the page is not available');
         }
+
+        const html = await this.jsdomControl.cleanHTMLforLMs(snapshot.html, 'script,link,style,textarea,select>option,svg');
+
         const it = this.commonLLM.iterRun('readerlm-v2', {
-            prompt: `Extract the main content from the given HTML and convert it to Markdown format.\n\n${tripleBackTick}html\n${this.cleanRedundantEmptyLines(snapshot.html)}\n${tripleBackTick}\n`,
+            prompt: `Extract the main content from the given HTML and convert it to Markdown format.\n\n${tripleBackTick}html\n${html}\n${tripleBackTick}\n`,
 
             options: {
                 // system: 'You are an AI assistant developed by Jina AI',
@@ -105,8 +105,11 @@ export class LmControl extends AsyncService {
         if (!snapshot) {
             throw new AssertionFailureError('Snapshot of the page is not available');
         }
+
+        const html = await this.jsdomControl.cleanHTMLforLMs(snapshot.html, 'script,link,style,textarea,select>option,svg');
+
         const it = this.commonLLM.iterRun('readerlm-v2', {
-            prompt: `${instruction}\n\n${tripleBackTick}html\n${this.cleanRedundantEmptyLines(snapshot.html)}\n${tripleBackTick}\n${schema ? `The JSON schema:\n${tripleBackTick}json\n${schema}\n${tripleBackTick}\n` : ''}`,
+            prompt: `${instruction}\n\n${tripleBackTick}html\n${html}\n${tripleBackTick}\n${schema ? `The JSON schema:\n${tripleBackTick}json\n${schema}\n${tripleBackTick}\n` : ''}`,
             options: {
                 // system: 'You are an AI assistant developed by Jina AI',
                 stream: true

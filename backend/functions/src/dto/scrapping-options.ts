@@ -1,4 +1,4 @@
-import { Also, AutoCastable, Prop, RPC_CALL_ENVIRONMENT } from 'civkit'; // Adjust the import based on where your decorators are defined
+import { Also, AutoCastable, ParamValidationError, Prop, RPC_CALL_ENVIRONMENT } from 'civkit'; // Adjust the import based on where your decorators are defined
 import type { Request, Response } from 'express';
 import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
 
@@ -9,9 +9,12 @@ export enum CONTENT_FORMAT {
     TEXT = 'text',
     PAGESHOT = 'pageshot',
     SCREENSHOT = 'screenshot',
+    VLM = 'vlm',
+    READER_LM = 'readerlm-v2',
 }
 
 export enum ENGINE_TYPE {
+    AUTO = 'auto',
     BROWSER = 'browser',
     DIRECT = 'direct',
     VLM = 'vlm',
@@ -22,6 +25,8 @@ const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
 export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
 const IMAGE_RETENTION_MODE_VALUES = new Set<string>(IMAGE_RETENTION_MODES);
+export const BASE_URL_MODES = ['initial', 'eventual'] as const;
+const BASE_URL_MODE_VALUES = new Set<string>(BASE_URL_MODES);
 
 class Viewport extends AutoCastable {
     @Prop({
@@ -193,6 +198,11 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Base': {
+                    description: 'Select base modes of relative URLs.\n\nSupported: initial, eventual',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
             }
         }
     }
@@ -204,6 +214,12 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop()
     html?: string;
+
+    @Prop({
+        type: BASE_URL_MODE_VALUES,
+        default: 'initial',
+    })
+    base?: typeof BASE_URL_MODES[number];
 
     @Prop({
         desc: 'Base64 encoded PDF.',
@@ -228,7 +244,7 @@ export class CrawlerOptions extends AutoCastable {
     @Prop({
         default: false,
     })
-    withLinksSummary!: boolean;
+    withLinksSummary!: boolean | string;
 
     @Prop({
         default: false,
@@ -335,6 +351,17 @@ export class CrawlerOptions extends AutoCastable {
         if (customMode !== undefined) {
             instance.respondWith = customMode;
         }
+        if (instance.respondWith) {
+            instance.respondWith = instance.respondWith.toLowerCase();
+        }
+        if (instance.respondWith?.includes('lm')) {
+            if (instance.respondWith.includes('content') || instance.respondWith.includes('markdown')) {
+                throw new ParamValidationError({
+                    path: 'respondWith',
+                    message: `LM formats conflicts with content/markdown.`,
+                });
+            }
+        }
 
         const locale = ctx?.req.get('x-locale');
         if (locale !== undefined) {
@@ -352,7 +379,11 @@ export class CrawlerOptions extends AutoCastable {
         }
         const withLinksSummary = ctx?.req.get('x-with-links-summary');
         if (withLinksSummary !== undefined) {
-            instance.withLinksSummary = Boolean(withLinksSummary);
+            if (withLinksSummary === 'all') {
+                instance.withLinksSummary = withLinksSummary;
+            } else {
+                instance.withLinksSummary = Boolean(withLinksSummary);
+            }
         }
         const withImagesSummary = ctx?.req.get('x-with-images-summary');
         if (withImagesSummary !== undefined) {
@@ -403,8 +434,15 @@ export class CrawlerOptions extends AutoCastable {
         if (engine) {
             instance.engine = engine;
         }
-        if (instance.noCache || !instance.isTypicalRequest()) {
-            instance.engine ??= ENGINE_TYPE.BROWSER;
+        if (instance.engine) {
+            instance.engine = instance.engine.toLowerCase();
+        }
+        if (instance.engine === ENGINE_TYPE.VLM) {
+            instance.engine = ENGINE_TYPE.BROWSER;
+            instance.respondWith = CONTENT_FORMAT.VLM;
+        } else if (instance.engine === ENGINE_TYPE.READER_LM) {
+            instance.engine = undefined;
+            instance.respondWith = CONTENT_FORMAT.READER_LM;
         }
 
         const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
@@ -451,8 +489,15 @@ export class CrawlerOptions extends AutoCastable {
         const tokenBudget = ctx?.req.get('x-token-budget') || undefined;
         instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;
 
+        const baseMode = ctx?.req.get('x-base') || undefined;
+        instance.base ??= baseMode as any;
+
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
+        }
+
+        if (instance.noCache || !instance.isTypicalRequest()) {
+            instance.engine ??= ENGINE_TYPE.BROWSER + '?';
         }
 
         return instance;
@@ -468,7 +513,7 @@ export class CrawlerOptions extends AutoCastable {
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
             return false;
         }
-        if (this.engine?.toLowerCase().includes('lm')) {
+        if (this.respondWith.includes('lm')) {
             return false;
         }
 

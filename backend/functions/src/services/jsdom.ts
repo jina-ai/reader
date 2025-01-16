@@ -6,6 +6,7 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { Threaded } from '../shared/services/threaded';
 import type { ExtraScrappingOptions } from '../cloud-functions/crawler';
+import { tailwindClasses } from '../utils/tailwind-classes';
 
 const pLinkedom = import('linkedom');
 
@@ -184,26 +185,20 @@ export class JSDomControl extends AsyncService {
 
             jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
             const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
-                .map((x: any) => [x.getAttribute('href'), x.textContent.replace(/\s+/g, ' ').trim()])
-                .map(([href, text]) => {
-                    if (!text) {
+                .map((x: any) => [x.textContent.replace(/\s+/g, ' ').trim(), x.getAttribute('href'),])
+                .map(([text, href]) => {
+                    if (!href) {
                         return undefined;
                     }
                     try {
                         const parsed = new URL(href, snapshot.rebase || snapshot.href);
-                        if (parsed.protocol === 'file:' || parsed.protocol === 'javascript:') {
-                            return undefined;
-                        }
-                        return [parsed.toString(), text] as const;
+
+                        return [text, parsed.toString()] as const;
                     } catch (err) {
                         return undefined;
                     }
                 })
-                .filter(Boolean)
-                .reduce((acc, pair) => {
-                    acc[pair![0]] = pair![1];
-                    return acc;
-                }, {} as { [k: string]: string; });
+                .filter(Boolean) as [string, string][];
 
             extendedSnapshot.links = links;
 
@@ -237,6 +232,56 @@ export class JSDomControl extends AsyncService {
 
         return extendedSnapshot;
     }
+
+    cleanRedundantEmptyLines(text: string) {
+        const lines = text.split(/\r?\n/g);
+        const mappedFlag = lines.map((line) => Boolean(line.trim()));
+
+        return lines.filter((_line, i) => mappedFlag[i] || mappedFlag[i - 1]).join('\n');
+    }
+
+    @Threaded()
+    async cleanHTMLforLMs(sourceHTML: string, ...discardSelectors: string[]): Promise<string> {
+        const t0 = Date.now();
+        let jsdom = this.linkedom.parseHTML(sourceHTML);
+        if (!jsdom.window.document.documentElement) {
+            jsdom = this.linkedom.parseHTML(`<html><body>${sourceHTML}</body></html>`);
+        }
+
+        for (const rl of discardSelectors) {
+            jsdom.window.document.querySelectorAll(rl).forEach((x) => x.remove());
+        }
+
+        jsdom.window.document.querySelectorAll('img[src],img[data-src]').forEach((x) => {
+            const src = x.getAttribute('src') || x.getAttribute('data-src');
+            if (src?.startsWith('data:')) {
+                x.setAttribute('src', 'blob:opaque');
+            }
+            x.removeAttribute('data-src');
+            x.removeAttribute('srcset');
+        });
+
+        jsdom.window.document.querySelectorAll('[class]').forEach((x) => {
+            const classes = x.getAttribute('class')?.split(/\s+/g) || [];
+            const newClasses = classes.filter((c) => tailwindClasses.has(c));
+            x.setAttribute('class', newClasses.join(' '));
+        });
+        jsdom.window.document.querySelectorAll('[style]').forEach((x) => {
+            const style = x.getAttribute('style')?.toLocaleLowerCase() || '';
+            if (style.startsWith('display: none')) {
+                return;
+            }
+            x.removeAttribute('style');
+        });
+
+        const dt = Date.now() - t0;
+        if (dt > 1000) {
+            this.logger.warn(`Performance issue: Cleaning HTML for LMs took ${dt}ms`, { dt });
+        }
+
+        return this.cleanRedundantEmptyLines(jsdom.window.document.documentElement.outerHTML);
+    }
+
     snippetToElement(snippet?: string, url?: string) {
         const parsed = this.linkedom.parseHTML(snippet || '<html><body></body></html>');
 

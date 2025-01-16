@@ -26,7 +26,7 @@ export class CurlControl extends AsyncService {
         this.emit('ready');
     }
 
-    async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions) {
+    async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
         const result = await new Promise<{
             statusCode: number,
             data: string,
@@ -75,7 +75,7 @@ export class CurlControl extends AsyncService {
             curl.perform();
         });
 
-        if (result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
+        if (throwOnNon200 && result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
             throw new AssertionFailureError(`Failed to directly access ${urlToCrawl}: HTTP ${result.statusCode}`);
         }
 

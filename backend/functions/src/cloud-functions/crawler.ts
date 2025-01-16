@@ -15,7 +15,7 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/scrapping-options';
+import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/scrapping-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { DomainBlockade } from '../db/domain-blockade';
 import { DomainProfile } from '../db/domain-profile';
@@ -84,14 +84,6 @@ export class CrawlerHost extends RPCHost {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
             await this.setToCache(options.url, snapshot);
-
-            if (!options.engine) {
-                try {
-                    await this.exploreDirectEngine(options.url, options, snapshot);
-                } catch (err) {
-                    this.logger.warn(`Failed to explore direct engine option for ${options.url.href}`, { err });
-                }
-            }
         });
 
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
@@ -152,8 +144,8 @@ export class CrawlerHost extends RPCHost {
             memory: '4GiB',
             cpu: 2,
             timeoutSeconds: 300,
-            concurrency: 8,
-            maxInstances: 1250,
+            concurrency: 10,
+            maxInstances: 1000,
             minInstances: 1,
         },
         tags: ['Crawler'],
@@ -260,25 +252,12 @@ export class CrawlerHost extends RPCHost {
 
 
         const crawlOpts = await this.configure(crawlerOptions);
-
-        if (!crawlOpts.engine) {
-            const domainProfile = (await DomainProfile.fromFirestoreQuery(
-                DomainProfile.COLLECTION
-                    .where('origin', '==', targetUrl.origin.toLowerCase())
-                    .limit(1)
-            ))[0];
-
-            if (domainProfile?.engine) {
-                crawlOpts.engine = domainProfile.engine;
-            }
-        }
-
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
             try {
-                for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
+                for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
                     if (!scrapped) {
                         continue;
                     }
@@ -311,7 +290,7 @@ export class CrawlerHost extends RPCHost {
 
         let lastScrapped;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-            for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
+            for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
                 if (!crawlerOptions.isEarlyReturnApplicable()) {
                     continue;
@@ -357,7 +336,7 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        for await (const scrapped of this.cachedScrap(targetUrl, crawlOpts, crawlerOptions)) {
+        for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
             lastScrapped = scrapped;
 
             if (!crawlerOptions.isEarlyReturnApplicable()) {
@@ -589,46 +568,10 @@ export class CrawlerHost extends RPCHost {
         return r;
     }
 
-    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
-        let overrideFinalSnapshot;
-        if (crawlerOpts?.html) {
-            overrideFinalSnapshot = {
-                href: urlToCrawl.toString(),
-                html: crawlerOpts.html,
-                title: '',
-                text: '',
-            } as PageSnapshot;
-        }
-
-        if (crawlerOpts?.pdf) {
-            const pdfBuf = crawlerOpts.pdf instanceof Blob ? await crawlerOpts.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOpts.pdf, 'base64');
-            const pdfDataUrl = `data:application/pdf;base64,${pdfBuf.toString('base64')}`;
-            overrideFinalSnapshot = {
-                href: urlToCrawl.toString(),
-                html: `<!DOCTYPE html><html><head></head><body style="height: 100%; width: 100%; overflow: hidden; margin:0px; background-color: rgb(82, 86, 89);"><embed style="position:absolute; left: 0; top: 0;" width="100%" height="100%" src="${pdfDataUrl}"></body></html>`,
-                title: '',
-                text: '',
-                pdfs: [pdfDataUrl],
-            } as PageSnapshot;
-        }
-
-        if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
-            yield this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
-
-            return;
-        }
-
-        // if (crawlOpts?.engine === ENGINE_TYPE.VLM) {
-        //     const rmSelectorEquivalent = [];
-        //     if (typeof crawlOpts.removeSelector === 'string') {
-        //         rmSelectorEquivalent.push(crawlOpts.removeSelector);
-        //     } else if (Array.isArray(crawlOpts.removeSelector)) {
-        //         rmSelectorEquivalent.push(...crawlOpts.removeSelector);
-        //     }
-        //     rmSelectorEquivalent.push('script,link,style,meta,textarea,select>option,header,footer,nav');
-
+    async *iterSnapshots(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
+        // if (crawlerOpts?.respondWith.includes(CONTENT_FORMAT.VLM)) {
         //     const finalBrowserSnapshot = await this.getFinalSnapshot(urlToCrawl, {
-        //         ...crawlOpts, removeSelector: rmSelectorEquivalent, engine: ENGINE_TYPE.BROWSER
+        //         ...crawlOpts, engine: ENGINE_TYPE.BROWSER
         //     }, crawlerOpts);
 
         //     yield* this.lmControl.geminiFromBrowserSnapshot(finalBrowserSnapshot);
@@ -636,17 +579,9 @@ export class CrawlerHost extends RPCHost {
         //     return;
         // }
 
-        if (crawlOpts?.engine === ENGINE_TYPE.READER_LM) {
-            const rmSelectorEquivalent = [];
-            if (typeof crawlOpts.removeSelector === 'string') {
-                rmSelectorEquivalent.push(crawlOpts.removeSelector);
-            } else if (Array.isArray(crawlOpts.removeSelector)) {
-                rmSelectorEquivalent.push(...crawlOpts.removeSelector);
-            }
-            rmSelectorEquivalent.push('script,link,style,meta,textarea,select>option');
-
+        if (crawlerOpts?.respondWith.includes(CONTENT_FORMAT.READER_LM)) {
             const finalAutoSnapshot = await this.getFinalSnapshot(urlToCrawl, {
-                ...crawlOpts, removeSelector: rmSelectorEquivalent, engine: undefined
+                ...crawlOpts, engine: ENGINE_TYPE.AUTO
             }, crawlerOpts);
 
             if (crawlerOpts?.instruction || crawlerOpts?.jsonSchema) {
@@ -661,10 +596,50 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (overrideFinalSnapshot) {
-            yield this.jsdomControl.narrowSnapshot(overrideFinalSnapshot, crawlOpts);
+        yield* this.cachedScrap(urlToCrawl, crawlOpts, crawlerOpts);
+    }
+
+    async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
+        if (crawlerOpts?.html) {
+            const snapshot = {
+                href: urlToCrawl.toString(),
+                html: crawlerOpts.html,
+                title: '',
+                text: '',
+            } as PageSnapshot;
+            yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
 
             return;
+        }
+
+        if (crawlerOpts?.pdf) {
+            const pdfBuf = crawlerOpts.pdf instanceof Blob ? await crawlerOpts.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOpts.pdf, 'base64');
+            const pdfDataUrl = `data:application/pdf;base64,${pdfBuf.toString('base64')}`;
+            const snapshot = {
+                href: urlToCrawl.toString(),
+                html: `<!DOCTYPE html><html><head></head><body style="height: 100%; width: 100%; overflow: hidden; margin:0px; background-color: rgb(82, 86, 89);"><embed style="position:absolute; left: 0; top: 0;" width="100%" height="100%" src="${pdfDataUrl}"></body></html>`,
+                title: '',
+                text: '',
+                pdfs: [pdfDataUrl],
+            } as PageSnapshot;
+
+            yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
+
+            return;
+        }
+
+        if (crawlOpts?.engine?.startsWith(ENGINE_TYPE.DIRECT)) {
+            const engine = crawlOpts?.engine;
+            try {
+                const snapshot = await this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
+                yield snapshot;
+
+                return;
+            } catch (err) {
+                if (!engine.endsWith('?')) {
+                    throw err;
+                }
+            }
         }
 
         let cache;
@@ -857,12 +832,14 @@ export class CrawlerHost extends RPCHost {
         nominalUrl?: URL,
         urlValidMs?: number
     ) {
-        const engine = crawlerOptions.engine?.toLowerCase() || '';
-        if (engine.includes('lm')) {
+        const presumedURL = crawlerOptions.base === 'eventual' ? new URL(snapshot.href) : nominalUrl;
+
+        const respondWith = crawlerOptions.respondWith;
+        if (respondWith === CONTENT_FORMAT.READER_LM || respondWith === CONTENT_FORMAT.VLM) {
             const output: FormattedPage = {
                 title: snapshot.title,
                 content: snapshot.parsed?.textContent,
-                url: snapshot.href,
+                url: presumedURL?.href || snapshot.href,
                 [Symbol.dispose]: () => undefined,
             };
 
@@ -874,7 +851,7 @@ export class CrawlerHost extends RPCHost {
             return output;
         }
 
-        return this.snapshotFormatter.formatSnapshot(crawlerOptions.respondWith, snapshot, nominalUrl, urlValidMs);
+        return this.snapshotFormatter.formatSnapshot(respondWith, snapshot, presumedURL, urlValidMs);
     }
 
     async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {
@@ -902,7 +879,7 @@ export class CrawlerHost extends RPCHost {
     }
 
     async simpleCrawl(mode: string, url: URL, opts?: ExtraScrappingOptions) {
-        const it = this.cachedScrap(url, { ...opts, minIntervalMs: 500 });
+        const it = this.iterSnapshots(url, { ...opts, minIntervalMs: 500 });
 
         let lastSnapshot;
         let goodEnough = false;
@@ -936,7 +913,7 @@ export class CrawlerHost extends RPCHost {
     }
 
     async exploreDirectEngine(targetUrl: URL, crawlerOptions: ScrappingOptions, knownSnapshot: PageSnapshot) {
-        const snapshot = await this.curlControl.urlToSnapshot(targetUrl, crawlerOptions);
+        const snapshot = await this.curlControl.urlToSnapshot(targetUrl, crawlerOptions, true);
 
         const thisFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
         const knownFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', knownSnapshot);
