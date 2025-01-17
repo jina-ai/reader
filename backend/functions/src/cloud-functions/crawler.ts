@@ -587,6 +587,10 @@ export class CrawlerHost extends RPCHost {
                 engine: crawlOpts?.engine || ENGINE_TYPE.AUTO,
             }, crawlerOpts);
 
+            if (!finalAutoSnapshot?.html) {
+                throw new AssertionFailureError(`Unexpected non HTML content for ReaderLM: ${urlToCrawl}`);
+            }
+
             if (crawlerOpts?.instruction || crawlerOpts?.jsonSchema) {
                 const jsonSchema = crawlerOpts.jsonSchema ? JSON.stringify(crawlerOpts.jsonSchema, undefined, 2) : undefined;
                 yield* this.lmControl.readerLMFromSnapshot(crawlerOpts.instruction, jsonSchema, finalAutoSnapshot);

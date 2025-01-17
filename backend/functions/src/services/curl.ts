@@ -2,11 +2,13 @@ import { marshalErrorLike } from 'civkit/lang';
 import { AsyncService } from 'civkit/async-service';
 import { singleton } from 'tsyringe';
 
-import { Curl, HeaderInfo } from 'node-libcurl';
+import { Curl, CurlFeature, HeaderInfo } from 'node-libcurl';
 import { PageSnapshot, ScrappingOptions } from './puppeteer';
 import { Logger } from '../shared/services/logger';
 import { JSDomControl } from './jsdom';
-import { AssertionFailureError } from 'civkit';
+import { AssertionFailureError, FancyFile } from 'civkit';
+import { TempFileManager } from '../shared';
+import { readFile } from 'fs/promises';
 
 @singleton()
 export class CurlControl extends AsyncService {
@@ -16,6 +18,7 @@ export class CurlControl extends AsyncService {
     constructor(
         protected globalLogger: Logger,
         protected jsdomControl: JSDomControl,
+        protected tempFileManager: TempFileManager,
     ) {
         super(...arguments);
     }
@@ -27,12 +30,20 @@ export class CurlControl extends AsyncService {
     }
 
     async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
+        const snapshot = {
+            href: urlToCrawl.toString(),
+            html: '',
+            title: '',
+            text: '',
+        } as PageSnapshot;
+
         const result = await new Promise<{
             statusCode: number,
-            data: string,
+            data?: FancyFile,
             headers: Buffer | HeaderInfo[],
         }>((resolve, reject) => {
             const curl = new Curl();
+            curl.enable(CurlFeature.StreamResponse);
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
 
@@ -56,35 +67,91 @@ export class CurlControl extends AsyncService {
                 curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
             }
 
-            curl.on('end', (statusCode, data, headers) => {
+            curl.on('end', (statusCode, _data, headers) => {
                 this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode, headers });
-                resolve({
-                    statusCode,
-                    data: data.toString(),
-                    headers,
-                });
                 curl.close();
             });
 
             curl.on('error', (err) => {
-                this.logger.warn(`Failed to curl ${urlToCrawl}`, { err: marshalErrorLike(err) });
                 curl.close();
+                this.logger.warn(`Curl ${urlToCrawl}: ${err} (Not necessarily an error)`, { err: marshalErrorLike(err) });
                 reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: ${err.message}`));
+            });
+            curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
+            let status = -1;
+            let contentType = '';
+            curl.on('stream', (stream, statusCode, headers) => {
+                status = statusCode;
+                outerLoop:
+                for (const headerVec of headers) {
+                    for (const [k, v] of Object.entries(headerVec)) {
+                        if (k.toLowerCase() === 'content-type') {
+                            contentType = v.toLowerCase();
+                            break outerLoop;
+                        }
+                    }
+                }
+
+                if (!contentType) {
+                    reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: no content-type`));
+                    stream.destroy();
+                    return;
+                }
+                if (contentType.startsWith('application/pdf')) {
+                    snapshot.pdfs = [urlToCrawl.toString()];
+                    stream.destroy();
+                    resolve({
+                        statusCode: status,
+                        headers,
+                    });
+                    return;
+                }
+                if (contentType.startsWith('image/')) {
+                    snapshot.html = `<html style="height: 100%;"><head><meta name="viewport" content="width=device-width, minimum-scale=0.1"><title>${urlToCrawl.origin}${urlToCrawl.pathname}</title></head><body style="margin: 0px; height: 100%; background-color: rgb(14, 14, 14);"><img style="display: block;-webkit-user-select: none;margin: auto;background-color: hsl(0, 0%, 90%);transition: background-color 300ms;" src="${urlToCrawl.href}"></body></html>`;
+                    stream.destroy();
+                    resolve({
+                        statusCode: status,
+                        headers,
+                    });
+                    return;
+                }
+
+                const fpath = this.tempFileManager.alloc();
+                const fancyFile = FancyFile.auto(stream, fpath);
+                this.tempFileManager.bindPathTo(fancyFile, fpath);
+                resolve({
+                    statusCode: status,
+                    data: fancyFile,
+                    headers,
+                });
             });
 
             curl.perform();
         });
 
         if (throwOnNon200 && result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
-            throw new AssertionFailureError(`Failed to directly access ${urlToCrawl}: HTTP ${result.statusCode}`);
+            throw new AssertionFailureError(`Failed to access ${urlToCrawl}: HTTP ${result.statusCode}`);
         }
 
-        const snapshot = {
-            href: urlToCrawl.toString(),
-            html: result.data,
-            title: '',
-            text: '',
-        } as PageSnapshot;
+        if (result.data) {
+            const mimeType: string = await result.data.mimeType;
+            if (mimeType.startsWith('text/html')) {
+                if ((await result.data.size) > 1024 * 1024 * 32) {
+                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
+                }
+                snapshot.html = await readFile(await result.data.filePath, { encoding: 'utf-8' });
+            } else if (mimeType.startsWith('text/')) {
+                if ((await result.data.size) > 1024 * 1024 * 32) {
+                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
+                }
+                snapshot.text = await readFile(await result.data.filePath, { encoding: 'utf-8' });
+                snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
+            } else if (mimeType.startsWith('application/pdf')) {
+                snapshot.pdfs = [urlToCrawl.href];
+            } else {
+                throw new AssertionFailureError(`Failed to access ${urlToCrawl}: unexpected type ${mimeType}`);
+            }
+        }
 
         const curlSnapshot = await this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
 

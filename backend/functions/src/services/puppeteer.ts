@@ -809,8 +809,6 @@ export class PuppeteerControl extends AsyncService {
         }
         const sn = this.snMap.get(page);
         this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
-
-        this.logger.info(`Locale setting: ${options?.locale}`);
         if (options?.locale) {
             // Add headers via request interception to walk around this bug
             // https://github.com/puppeteer/puppeteer/issues/10235
