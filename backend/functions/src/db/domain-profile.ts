@@ -13,10 +13,7 @@ export class DomainProfile extends FirestoreRecord {
     @Prop({
         required: true
     })
-    origin!: string;
-
-    @Prop({ required: true })
-    triggerReason!: string;
+    path!: string;
 
     @Prop()
     triggerUrl?: string;

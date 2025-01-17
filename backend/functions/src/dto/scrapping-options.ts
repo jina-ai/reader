@@ -441,7 +441,7 @@ export class CrawlerOptions extends AutoCastable {
             instance.engine = ENGINE_TYPE.BROWSER;
             instance.respondWith = CONTENT_FORMAT.VLM;
         } else if (instance.engine === ENGINE_TYPE.READER_LM) {
-            instance.engine = undefined;
+            instance.engine = ENGINE_TYPE.AUTO;
             instance.respondWith = CONTENT_FORMAT.READER_LM;
         }
 
@@ -498,10 +498,6 @@ export class CrawlerOptions extends AutoCastable {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
         }
 
-        if (instance.noCache || !instance.isTypicalRequest()) {
-            instance.engine ??= ENGINE_TYPE.BROWSER + '?';
-        }
-
         return instance;
     }
 
@@ -546,11 +542,14 @@ export class CrawlerOptions extends AutoCastable {
         return !CONTENT_FORMAT_VALUES.has(this.respondWith);
     }
 
-    isTypicalRequest() {
+    browserIsNotRequired() {
         if (this.respondWith.includes(CONTENT_FORMAT.PAGESHOT) || this.respondWith.includes(CONTENT_FORMAT.SCREENSHOT)) {
             return false;
         }
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
+        if (this.waitForSelector?.length) {
             return false;
         }
         if (this.viewport) {
