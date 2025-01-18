@@ -955,6 +955,7 @@ export class CrawlerHost extends RPCHost {
 
         profile.origin = realUrl.origin.toLowerCase();
         profile.triggerUrl = realUrl.href;
+        profile.path = path;
         profile.engine = knownSnapshot.htmlModifiedByJs ? ENGINE_TYPE.BROWSER : ENGINE_TYPE.DIRECT;
         profile.expireAt = new Date(Date.now() + this.domainProfileRetentionMs);
 
@@ -965,7 +966,7 @@ export class CrawlerHost extends RPCHost {
 
     getDomainProfileUrlDigest(url: URL) {
         const pathname = url.pathname;
-        const pathVec = pathname.split('/').filter(Boolean);
+        const pathVec = pathname.split('/');
         const parentPath = pathVec.slice(0, -1).join('/');
 
         const finalPath = parentPath || pathname;
