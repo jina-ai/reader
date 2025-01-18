@@ -552,6 +552,9 @@ export class CrawlerOptions extends AutoCastable {
         if (this.waitForSelector?.length) {
             return false;
         }
+        if (this.withIframe || this.withShadowDom) {
+            return false;
+        }
         if (this.viewport) {
             return false;
         }

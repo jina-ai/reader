@@ -47,9 +47,8 @@ export class CurlControl extends AsyncService {
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
 
-            if (crawlOpts?.timeoutMs) {
-                curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts.timeoutMs);
-            }
+            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(10_000, crawlOpts?.timeoutMs || 10_000));
+
             if (crawlOpts?.overrideUserAgent) {
                 curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
             }

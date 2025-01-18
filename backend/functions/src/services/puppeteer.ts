@@ -455,6 +455,7 @@ export class PuppeteerControl extends AsyncService {
     finalizerMap = new WeakMap<Page, ReturnType<typeof setTimeout>>();
     snMap = new WeakMap<Page, number>();
     livePages = new Set<Page>();
+    pagePhase = new WeakMap<Page, 'idle' | 'active' | 'background'>();
     lastPageCratedAt: number = 0;
 
     rpsCap: number = 500;
@@ -618,7 +619,14 @@ export class PuppeteerControl extends AsyncService {
             const dt = Math.ceil((Date.now() - t0) / 1000);
             const rps = reqCounter / dt;
             // console.log(`rps: ${rps}`);
+            const pagePhase = this.pagePhase.get(page);
+            if (pagePhase === 'background') {
+                if (rps > 10 || reqCounter > 1000) {
+                    halt = true;
 
+                    return req.abort('blockedbyclient', 1000);
+                }
+            }
             if (reqCounter > 1000) {
                 if (rps > 60 || reqCounter > 2000) {
                     page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many requests` });
@@ -683,6 +691,7 @@ export class PuppeteerControl extends AsyncService {
         this.logger.info(`Page ${sn} created.`);
         this.lastPageCratedAt = Date.now();
         this.livePages.add(page);
+        this.pagePhase.set(page, 'idle');
 
         return page;
     }
@@ -724,7 +733,6 @@ export class PuppeteerControl extends AsyncService {
         }
         const sn = this.snMap.get(page);
         this.logger.info(`Closing page ${sn}`);
-        this.livePages.delete(page);
         await Promise.race([
             (async () => {
                 const ctx = page.browserContext();
@@ -738,6 +746,8 @@ export class PuppeteerControl extends AsyncService {
         ]).catch((err) => {
             this.logger.error(`Failed to destroy page ${sn}`, { err: marshalErrorLike(err) });
         });
+        this.livePages.delete(page);
+        this.pagePhase.delete(page);
     }
 
     async *scrap(parsedUrl: URL, options?: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
@@ -750,6 +760,7 @@ export class PuppeteerControl extends AsyncService {
         const pdfUrls: string[] = [];
         let navigationResponse: HTTPResponse | undefined;
         const page = await this.getNextPage();
+        this.pagePhase.set(page, 'active');
         page.on('response', (resp) => {
             if (resp.request().isNavigationRequest()) {
                 navigationResponse = resp;
@@ -901,6 +912,10 @@ export class PuppeteerControl extends AsyncService {
         page.on('snapshot', hdl);
         page.once('abuse', (event: any) => {
             this.emit('abuse', { ...event, url: parsedUrl });
+            if (snapshot?.href && parsedUrl.href !== snapshot.href) {
+                this.emit('abuse', { ...event, url: snapshot.href });
+            }
+
             nextSnapshotDeferred.reject(
                 new SecurityCompromiseError(`Abuse detected: ${event.reason}`)
             );
@@ -1076,6 +1091,7 @@ export class PuppeteerControl extends AsyncService {
                 }
             }
         } finally {
+            this.pagePhase.set(page, 'background');
             (waitForPromise ? Promise.allSettled([gotoPromise, waitForPromise]) : gotoPromise).finally(() => {
                 page.off('snapshot', hdl);
                 this.ditchPage(page);
