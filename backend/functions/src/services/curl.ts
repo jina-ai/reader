@@ -9,6 +9,7 @@ import { JSDomControl } from './jsdom';
 import { AssertionFailureError, FancyFile } from 'civkit';
 import { TempFileManager } from '../shared';
 import { readFile } from 'fs/promises';
+import { pathToFileURL } from 'url';
 
 @singleton()
 export class CurlControl extends AsyncService {
@@ -119,15 +120,6 @@ export class CurlControl extends AsyncService {
                     stream.destroy();
                     return;
                 }
-                if (contentType.startsWith('application/pdf')) {
-                    snapshot.pdfs = [urlToCrawl.toString()];
-                    stream.destroy();
-                    resolve({
-                        statusCode: status,
-                        headers,
-                    });
-                    return;
-                }
                 if (contentType.startsWith('image/')) {
                     snapshot.html = `<html style="height: 100%;"><head><meta name="viewport" content="width=device-width, minimum-scale=0.1"><title>${urlToCrawl.origin}${urlToCrawl.pathname}</title></head><body style="margin: 0px; height: 100%; background-color: rgb(14, 14, 14);"><img style="display: block;-webkit-user-select: none;margin: auto;background-color: hsl(0, 0%, 90%);transition: background-color 300ms;" src="${urlToCrawl.href}"></body></html>`;
                     stream.destroy();
@@ -169,7 +161,7 @@ export class CurlControl extends AsyncService {
                 snapshot.text = await readFile(await result.data.filePath, { encoding: 'utf-8' });
                 snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
             } else if (mimeType.startsWith('application/pdf')) {
-                snapshot.pdfs = [urlToCrawl.href];
+                snapshot.pdfs = [pathToFileURL(await result.data.filePath).href];
             } else {
                 throw new AssertionFailureError(`Failed to access ${urlToCrawl}: unexpected type ${mimeType}`);
             }
