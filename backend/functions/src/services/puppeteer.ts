@@ -499,7 +499,8 @@ export class PuppeteerControl extends AsyncService {
             }
         }
         this.browser = await puppeteer.launch({
-            timeout: 10_000
+            timeout: 10_000,
+            args: ['--disable-dev-shm-usage']
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
             process.nextTick(() => {

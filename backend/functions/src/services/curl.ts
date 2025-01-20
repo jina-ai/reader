@@ -29,6 +29,27 @@ export class CurlControl extends AsyncService {
         this.emit('ready');
     }
 
+    curlImpersonateHeader(curl: Curl, headers?: object, chromeVersion: number = 132) {
+        const mixinHeaders = {
+            'sch-ch-ua': `Not A(Brand";v="8", "Chromium";v="${chromeVersion}", "Google Chrome";v="${chromeVersion}"`,
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': 'Windows',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion}.0.0.0 Safari/537.36`,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-User': '?1',
+            'Sec-Fetch-Dest': 'document',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+        };
+
+        curl.setOpt(Curl.option.HTTPHEADER, Object.entries({ ...mixinHeaders, ...headers }).map(([k, v]) => `${k}: ${v}`));
+
+        return curl;
+    }
+
     async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
         const snapshot = {
             href: urlToCrawl.toString(),
@@ -52,9 +73,11 @@ export class CurlControl extends AsyncService {
             if (crawlOpts?.overrideUserAgent) {
                 curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
             }
-            if (crawlOpts?.extraHeaders) {
-                curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-            }
+
+            this.curlImpersonateHeader(curl, crawlOpts?.extraHeaders);
+            // if (crawlOpts?.extraHeaders) {
+            //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
+            // }
             if (crawlOpts?.proxyUrl) {
                 curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
             }
@@ -139,7 +162,7 @@ export class CurlControl extends AsyncService {
                     throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
                 }
                 snapshot.html = await readFile(await result.data.filePath, { encoding: 'utf-8' });
-            } else if (mimeType.startsWith('text/')) {
+            } else if (mimeType.startsWith('text/') || mimeType.startsWith('application/json')) {
                 if ((await result.data.size) > 1024 * 1024 * 32) {
                     throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
                 }
