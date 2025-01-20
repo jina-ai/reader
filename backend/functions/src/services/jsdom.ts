@@ -273,6 +273,24 @@ export class JSDomControl extends AsyncService {
             }
             x.removeAttribute('style');
         });
+        const treeWalker = jsdom.window.document.createTreeWalker(
+            jsdom.window.document, // Start from the root document
+            0x80 // Only show comment nodes
+        );
+
+        let currentNode;
+        while ((currentNode = treeWalker.nextNode())) {
+            currentNode.parentNode?.removeChild(currentNode); // Remove each comment node
+        }
+
+        jsdom.window.document.querySelectorAll('*').forEach((x)=> {
+            const attrs = x.getAttributeNames();
+            for (const attr of attrs) {
+                if (attr.startsWith('data-') || attr.startsWith('aria-')) {
+                    x.removeAttribute(attr);
+                }
+            }
+        });
 
         const dt = Date.now() - t0;
         if (dt > 1000) {
