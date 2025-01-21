@@ -2,9 +2,9 @@ import 'reflect-metadata';
 import { container, singleton } from 'tsyringe';
 import { initializeApp, applicationDefault } from 'firebase-admin/app';
 
-process.env['FIREBASE_CONFIG'] = JSON.stringify({
-    projectId: 'reader-6b7dc',
-    storageBucket: 'reader-6b7dc.appspot.com',
+process.env['FIREBASE_CONFIG'] ??= JSON.stringify({
+    projectId: process.env['GCLOUD_PROJECT'] || 'reader-6b7dc',
+    storageBucket: `${process.env['GCLOUD_PROJECT'] || 'reader-6b7dc'}.appspot.com`,
     credential: applicationDefault(),
 });
 
