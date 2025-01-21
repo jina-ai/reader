@@ -30,7 +30,8 @@ COPY licensed ./licensed
 RUN rm -rf ~/.config/chromium && mkdir -p ~/.config/chromium
 
 ENV LD_PRELOAD=/usr/local/lib/libcurl-impersonate.so CURL_IMPERSONATE=chrome116 CURL_IMPERSONATE_HEADERS=no
+ENV PORT=8080
 
-EXPOSE 3000 3001
+EXPOSE 3000 3001 8080 8081
 ENTRYPOINT ["node"]
 CMD [ "build/stand-alone/crawl.js" ]
