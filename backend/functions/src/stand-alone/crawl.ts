@@ -148,4 +148,4 @@ const instance = container.resolve(CrawlStandAloneServer);
 
 export default instance;
 
-instance.serviceReady().then((s) => s.h2c().listen(parseInt(process.env.PORT || '') || 3000));
+instance.serviceReady().then((s) => s.listen(parseInt(process.env.PORT || '') || 3000));
