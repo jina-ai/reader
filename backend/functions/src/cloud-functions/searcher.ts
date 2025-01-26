@@ -82,7 +82,7 @@ export class SearcherHost extends RPCHost {
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
-        @Param('count', { default: 5, validate: (v) => v >= 3 && v <= 10 })
+        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 10 })
         count: number,
         crawlerOptions: CrawlerOptions,
         braveSearchExplicitOperators: BraveSearchExplicitOperatorsDto,
@@ -144,7 +144,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = braveSearchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            count: Math.floor(count + 2)
+            count: count ? Math.floor(count + 2) : 20
         }, crawlerOptions.noCache);
 
         if (!r.web?.results.length) {
@@ -298,6 +298,26 @@ export class SearcherHost extends RPCHost {
         count?: number,
     ) {
         if (!searchResults) {
+            return;
+        }
+        if (count === 0) {
+            const resultArray = searchResults.map((upstreamSearchResult, i) => ({
+                url: upstreamSearchResult.url,
+                title: upstreamSearchResult.title,
+                description: upstreamSearchResult.description,
+                content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : '',
+                toString() {
+                    return `[${i + 1}] Title: ${this.title}
+[${i + 1}] URL Source: ${this.url}
+[${i + 1}] Description: ${this.description}
+`;
+                }
+
+            })) as FormattedPage[];
+            resultArray.toString = function () {
+                return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
+            };
+            yield resultArray;
             return;
         }
         const urls = searchResults.map((x) => new URL(x.url));
