@@ -43,6 +43,8 @@ jobs:
 
       - name: npm install
         run: npm ci
+      - name: get maxmind mmdb
+        run: mkdir -p licensed && curl -o licensed/GeoLite2-City.mmdb https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb
       - name: build application
         run: npm run build
       - name: Set package version
