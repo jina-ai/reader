@@ -411,10 +411,6 @@ export class SnapshotFormatter extends AsyncService {
         Object.assign(f, formatted);
 
         const textRepresentation = (function (this: typeof formatted) {
-            if (mode.includes('markdown')) {
-                return this.content as string;
-            }
-
             const mixins = [];
             if (this.publishedTime) {
                 mixins.push(`Published Time: ${this.publishedTime}`);
@@ -449,6 +445,11 @@ export class SnapshotFormatter extends AsyncService {
 
             if (this.warning) {
                 mixins.push(`Warning: ${this.warning}`);
+            }
+
+            if (mode.includes('markdown')) {
+                return `${mixins.length ? `${mixins.join('\n\n')}\n\n` : ''}${this.content}
+${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             }
 
             return `Title: ${this.title}

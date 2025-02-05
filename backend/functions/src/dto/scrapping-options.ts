@@ -300,9 +300,7 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     userAgent?: string;
 
-    @Prop({
-        type: ENGINE_TYPE,
-    })
+    @Prop()
     engine?: string;
 
     @Prop({
