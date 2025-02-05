@@ -18,6 +18,7 @@ jobs:
         with:
           lfs: true
           submodules: true
+          token: ${{ secrets.THINAPPS_SHARED_READ_TOKEN }}
       - uses: 'google-github-actions/auth@v2'
         with:
            credentials_json: '${{ secrets.GCLOUD_SERVICE_ACCOUNT_SECRET_JSON }}'
