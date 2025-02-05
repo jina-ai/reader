@@ -10,6 +10,7 @@ import { AssertionFailureError, FancyFile } from 'civkit';
 import { TempFileManager } from '../shared';
 import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
+import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
 
 @singleton()
 export class CurlControl extends AsyncService {
@@ -59,6 +60,7 @@ export class CurlControl extends AsyncService {
             text: '',
         } as PageSnapshot;
 
+        let contentType = '';
         const result = await new Promise<{
             statusCode: number,
             data?: FancyFile,
@@ -102,14 +104,20 @@ export class CurlControl extends AsyncService {
             });
             curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
             let status = -1;
-            let contentType = '';
+            let contentEncoding = '';
             curl.on('stream', (stream, statusCode, headers) => {
                 status = statusCode;
                 outerLoop:
                 for (const headerVec of headers) {
                     for (const [k, v] of Object.entries(headerVec)) {
-                        if (k.toLowerCase() === 'content-type') {
+                        const kl = k.toLowerCase();
+                        if (kl === 'content-type') {
                             contentType = v.toLowerCase();
+                        }
+                        if (kl === 'content-encoding') {
+                            contentEncoding = v.toLowerCase();
+                        }
+                        if (contentType && contentEncoding) {
                             break outerLoop;
                         }
                     }
@@ -130,6 +138,30 @@ export class CurlControl extends AsyncService {
                     return;
                 }
 
+                switch (contentEncoding) {
+                    case 'gzip': {
+                        const decompressed = createGunzip();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'deflate': {
+                        const decompressed = createInflate();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'br': {
+                        const decompressed = createBrotliDecompress();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
+                }
+
                 const fpath = this.tempFileManager.alloc();
                 const fancyFile = FancyFile.auto(stream, fpath);
                 this.tempFileManager.bindPathTo(fancyFile, fpath);
@@ -147,8 +179,13 @@ export class CurlControl extends AsyncService {
             throw new AssertionFailureError(`Failed to access ${urlToCrawl}: HTTP ${result.statusCode}`);
         }
 
+        if (contentType === 'application/octet-stream') {
+            // Content declared as binary is same as unknown.
+            contentType = '';
+        }
+
         if (result.data) {
-            const mimeType: string = await result.data.mimeType;
+            const mimeType: string = contentType || await result.data.mimeType;
             if (mimeType.startsWith('text/html')) {
                 if ((await result.data.size) > 1024 * 1024 * 32) {
                     throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
