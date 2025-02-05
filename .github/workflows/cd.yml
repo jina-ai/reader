@@ -64,7 +64,7 @@ jobs:
         id: container
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: backend/functions
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
