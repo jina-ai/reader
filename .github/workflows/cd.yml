@@ -73,4 +73,4 @@ jobs:
           gcloud run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command build/stand-alone/crawl.js --region us-central1 --async
       - name: Deploy SEARCH with Tag
         run: |
-          gcloud run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command build/stand-alone/search.js --region us-central1 --async
+          gcloud run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command build/stand-alone/search.js --region us-central1 --async
