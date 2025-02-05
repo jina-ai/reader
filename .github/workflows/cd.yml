@@ -1,0 +1,76 @@
+run-name: Build push and deploy (CD)
+on:
+  push:
+    branches:
+      - main
+      - ci-debug
+    tags:
+      - '*'
+
+jobs:
+  build-and-push-to-gcr:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.ref_type == 'branch' && github.ref }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        working-directory: backend/functions
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: true
+          token: ${{ secrets.THINAPPS_SHARED_READ_TOKEN }}
+      - uses: 'google-github-actions/auth@v2'
+        with:
+           credentials_json: '${{ secrets.GCLOUD_SERVICE_ACCOUNT_SECRET_JSON }}'
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v2'
+      - name: "Docker auth"
+        run: |-
+          gcloud auth configure-docker us-docker.pkg.dev --quiet
+      - name: Set controller release version
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: backend/functions/package-lock.json
+
+      - name: npm install
+        run: npm ci
+      - name: get maxmind mmdb
+        run: mkdir -p licensed && curl -o licensed/GeoLite2-City.mmdb https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb
+      - name: build application
+        run: npm run build
+      - name: Set package version
+        run: npm version --no-git-tag-version ${{ env.RELEASE_VERSION }}
+        if: github.ref_type == 'tag'
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            us-docker.pkg.dev/reader-6b7dc/jina-reader/reader
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build and push
+        id: container
+        uses: docker/build-push-action@v6
+        with:
+          context: backend/functions
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+      - name: Deploy CRAWL with Tag
+        run: |
+          gcloud run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/crawl.js --region us-central1 --async --min-instances 0
+      - name: Deploy SEARCH with Tag
+        run: |
+          gcloud run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region us-central1 --async --min-instances 0

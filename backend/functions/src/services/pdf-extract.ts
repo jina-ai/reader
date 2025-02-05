@@ -266,12 +266,12 @@ export class PDFExtractor extends AsyncService {
         return { meta: meta.info as Record<string, any>, content: mdChunks.join(''), text: rawChunks.join('') };
     }
 
-    async cachedExtract(url: string | URL, cacheTolerance: number = 1000 * 3600 * 24) {
+    async cachedExtract(url: string | URL, cacheTolerance: number = 1000 * 3600 * 24, alternativeUrl?: string) {
         if (!url) {
             return undefined;
         }
-
-        const digest = md5Hasher.hash(url.toString());
+        const nameUrl = alternativeUrl || url.toString();
+        const digest = md5Hasher.hash(nameUrl);
 
         const data = url;
         if (typeof url === 'string' && this.isDataUrl(url)) {
@@ -283,8 +283,8 @@ export class PDFExtractor extends AsyncService {
         if (cache) {
             const age = Date.now() - cache?.createdAt.valueOf();
             const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
-            this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for PDF ${url}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
-                url, digest, age, stale, cacheTolerance
+            this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for PDF ${nameUrl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
+                data: url, url: nameUrl, digest, age, stale, cacheTolerance
             });
 
             if (!stale) {
@@ -306,7 +306,7 @@ export class PDFExtractor extends AsyncService {
                         text: cached.text
                     };
                 } catch (err) {
-                    this.logger.warn(`Unable to load cached content for ${url}`, { err });
+                    this.logger.warn(`Unable to load cached content for ${nameUrl}`, { err });
 
                     return undefined;
                 }
@@ -324,17 +324,17 @@ export class PDFExtractor extends AsyncService {
             PDFContent.save(
                 PDFContent.from({
                     _id: theID,
-                    src: url.toString(),
+                    src: nameUrl,
                     meta: extracted?.meta || {},
                     urlDigest: digest,
                     createdAt: new Date(),
                     expireAt: new Date(Date.now() + this.cacheRetentionMs)
                 }).degradeForFireStore()
             ).catch((r) => {
-                this.logger.warn(`Unable to cache PDF content for ${url}`, { err: r });
+                this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
             });
         } catch (err) {
-            this.logger.warn(`Unable to extract from pdf ${url}`, { err });
+            this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err });
         }
 
         return extracted;

@@ -84,6 +84,8 @@ export class CrawlerHost extends RPCHost {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
             await this.setToCache(options.url, snapshot);
+
+            await this.exploreDirectEngine(snapshot).catch(() => undefined);
         });
 
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
@@ -581,8 +583,13 @@ export class CrawlerHost extends RPCHost {
 
         if (crawlerOpts?.respondWith.includes(CONTENT_FORMAT.READER_LM)) {
             const finalAutoSnapshot = await this.getFinalSnapshot(urlToCrawl, {
-                ...crawlOpts, engine: ENGINE_TYPE.AUTO
+                ...crawlOpts,
+                engine: crawlOpts?.engine || ENGINE_TYPE.AUTO,
             }, crawlerOpts);
+
+            if (!finalAutoSnapshot?.html) {
+                throw new AssertionFailureError(`Unexpected non HTML content for ReaderLM: ${urlToCrawl}`);
+            }
 
             if (crawlerOpts?.instruction || crawlerOpts?.jsonSchema) {
                 const jsonSchema = crawlerOpts.jsonSchema ? JSON.stringify(crawlerOpts.jsonSchema, undefined, 2) : undefined;
@@ -628,18 +635,9 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (crawlOpts?.engine?.startsWith(ENGINE_TYPE.DIRECT)) {
-            const engine = crawlOpts?.engine;
-            try {
-                const snapshot = await this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
-                yield snapshot;
-
-                return;
-            } catch (err) {
-                if (!engine.endsWith('?')) {
-                    throw err;
-                }
-            }
+        if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
+            yield this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
+            return;
         }
 
         let cache;
@@ -656,6 +654,24 @@ export class CrawlerHost extends RPCHost {
             yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
 
             return;
+        }
+
+        if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
+            const { digest } = this.getDomainProfileUrlDigest(urlToCrawl);
+            const domainProfile = await DomainProfile.fromFirestore(digest);
+            if (domainProfile?.engine === ENGINE_TYPE.DIRECT) {
+                try {
+                    const snapshot = await this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
+
+                    // Expect downstream code to "break" here if it's satisfied with the direct engine
+                    yield snapshot;
+                    if (crawlOpts?.engine === ENGINE_TYPE.AUTO) {
+                        return;
+                    }
+                } catch (err: any) {
+                    this.logger.warn(`Failed to scrap ${urlToCrawl} with direct engine`, { err: marshalErrorLike(err) });
+                }
+            }
         }
 
         try {
@@ -855,7 +871,7 @@ export class CrawlerHost extends RPCHost {
     }
 
     async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {
-        const it = this.cachedScrap(url, { ...opts, engine: ENGINE_TYPE.BROWSER }, crawlerOptions);
+        const it = this.cachedScrap(url, opts, crawlerOptions);
 
         let lastSnapshot;
         let lastError;
@@ -912,36 +928,54 @@ export class CrawlerHost extends RPCHost {
         return this.snapshotFormatter.formatSnapshot(mode, lastSnapshot, url, this.urlValidMs);
     }
 
-    async exploreDirectEngine(targetUrl: URL, crawlerOptions: ScrappingOptions, knownSnapshot: PageSnapshot) {
-        const snapshot = await this.curlControl.urlToSnapshot(targetUrl, crawlerOptions, true);
+    async exploreDirectEngine(knownSnapshot: PageSnapshot) {
+        const realUrl = new URL(knownSnapshot.href);
+        const { digest, path } = this.getDomainProfileUrlDigest(realUrl);
+        const profile = await DomainProfile.fromFirestore(digest);
 
-        const thisFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', snapshot);
-        const knownFormatted: FormattedPage = await this.snapshotFormatter.formatSnapshot('markdown', knownSnapshot);
+        if (!profile) {
+            const record = DomainProfile.from({
+                _id: digest,
+                origin: realUrl.origin.toLowerCase(),
+                path,
+                triggerUrl: realUrl.href,
+                engine: knownSnapshot.htmlModifiedByJs ? ENGINE_TYPE.BROWSER : ENGINE_TYPE.DIRECT,
+                createdAt: new Date(),
+                expireAt: new Date(Date.now() + this.domainProfileRetentionMs),
+            });
+            await DomainProfile.save(record);
 
-        let engine = ENGINE_TYPE.DIRECT;
-        if (!(thisFormatted.content && knownFormatted.content &&
-            thisFormatted.content.trim() === knownFormatted.content.trim())) {
-            engine = ENGINE_TYPE.BROWSER;
+            return;
         }
 
-        const realUrl = new URL(knownSnapshot.href);
-
-        const profile = (await DomainProfile.fromFirestoreQuery(
-            DomainProfile.COLLECTION
-                .where('domain', '==', targetUrl.origin.toLowerCase())
-                .limit(1)
-        ))[0] || new DomainProfile();
-
+        if (profile.engine === ENGINE_TYPE.BROWSER) {
+            // Mixed engine, always use browser
+            return;
+        }
 
         profile.origin = realUrl.origin.toLowerCase();
-        profile.triggerReason ??= 'Auto Explore';
         profile.triggerUrl = realUrl.href;
-        profile.engine = engine;
-        profile.createdAt ??= new Date();
+        profile.path = path;
+        profile.engine = knownSnapshot.htmlModifiedByJs ? ENGINE_TYPE.BROWSER : ENGINE_TYPE.DIRECT;
         profile.expireAt = new Date(Date.now() + this.domainProfileRetentionMs);
 
         await DomainProfile.save(profile);
 
-        return true;
+        return;
+    }
+
+    getDomainProfileUrlDigest(url: URL) {
+        const pathname = url.pathname;
+        const pathVec = pathname.split('/');
+        const parentPath = pathVec.slice(0, -1).join('/');
+
+        const finalPath = parentPath || pathname;
+
+        const key = url.origin.toLocaleLowerCase() + finalPath;
+
+        return {
+            digest: md5Hasher.hash(key),
+            path: finalPath,
+        };
     }
 }

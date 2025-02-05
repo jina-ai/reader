@@ -152,7 +152,8 @@ export class SnapshotFormatter extends AsyncService {
         // in case of Google Web Cache content
         if (snapshot.pdfs?.length && (!snapshot.title || snapshot.title.startsWith('cache:'))) {
             const pdf = await this.pdfExtractor.cachedExtract(snapshot.pdfs[0],
-                this.threadLocal.get('cacheTolerance')
+                this.threadLocal.get('cacheTolerance'),
+                snapshot.pdfs[0].startsWith('http') ? undefined : snapshot.href,
             );
             if (pdf) {
                 pdfMode = true;
