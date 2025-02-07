@@ -98,6 +98,16 @@ export class CrawlStandAloneServer extends ExpressServer {
         };
     }
 
+    makeIgnoreOPTIONSMiddleware() {
+        return (req: Request, res: Response, next: NextFunction) => {
+            if (req.method === 'OPTIONS') {
+                return res.status(200).end();
+            }
+
+            return next();
+        };
+    }
+
     override listen(port: number) {
         const r = super.listen(port);
         if (this.httpAlternativeServer) {
@@ -132,7 +142,12 @@ export class CrawlStandAloneServer extends ExpressServer {
             res.end(JSON.stringify(content));
         });
 
-        this.expressRootRouter.use('/', ...this.registry.expressMiddlewares, this.makeAssetsServingController(), this.registry.makeShimController('crawl'));
+        this.expressRootRouter.use('/',
+            ...this.registry.expressMiddlewares,
+            this.makeAssetsServingController(),
+            this.makeIgnoreOPTIONSMiddleware(),
+            this.registry.makeShimController('crawl')
+        );
     }
 
     protected override featureSelect(): void {
