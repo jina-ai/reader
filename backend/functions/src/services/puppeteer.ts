@@ -1018,6 +1018,7 @@ export class PuppeteerControl extends AsyncService {
                     );
                 }
             });
+        gotoPromise.catch(() => 'just dont crash anything');
         let waitForPromise: Promise<any> | undefined;
         if (options?.waitForSelector) {
             const t0 = Date.now();
