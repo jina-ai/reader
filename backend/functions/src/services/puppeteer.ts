@@ -886,6 +886,7 @@ export class PuppeteerControl extends AsyncService {
         }
 
         let nextSnapshotDeferred = Defer();
+        nextSnapshotDeferred.promise.catch(()=> 'just dont crash anything');
         const crippleListener = () => nextSnapshotDeferred.reject(new ServiceCrashedError({ message: `Browser crashed, try again` }));
         this.once('crippled', crippleListener);
         nextSnapshotDeferred.promise.finally(() => {
