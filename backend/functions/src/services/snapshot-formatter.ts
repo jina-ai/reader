@@ -231,7 +231,8 @@ export class SnapshotFormatter extends AsyncService {
                         if (imageRetention === 'alt') {
                             return alt ? `(Image ${++imgIdx}: ${alt})` : '';
                         }
-                        let linkPreferredSrc = (node.getAttribute('src') || '').trim();
+                        let originalSrc = (node.getAttribute('src') || '').trim();
+                        let linkPreferredSrc = originalSrc;
                         const maybeSrcSet: string = (node.getAttribute('srcset') || '').trim();
                         if (!linkPreferredSrc && maybeSrcSet) {
                             linkPreferredSrc = maybeSrcSet.split(',').map((x) => x.trim()).filter(Boolean)[0];
@@ -252,7 +253,7 @@ export class SnapshotFormatter extends AsyncService {
                         if (!src) {
                             return '';
                         }
-                        const mapped = urlToAltMap[src];
+                        const mapped = urlToAltMap[originalSrc];
                         const imgSerial = ++imgIdx;
                         const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
                         idxArr.push(imgSerial);
@@ -303,11 +304,13 @@ export class SnapshotFormatter extends AsyncService {
             if (!mode.includes('markdown') && snapshot.parsed?.content) {
                 const jsDomElementOfParsed = this.jsdomControl.snippetToElement(snapshot.parsed.content, snapshot.href);
                 const par1 = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML);
+                imgIdx = 0;
                 const par2 = snapshot.parsed.content ? this.jsdomControl.runTurndown(turnDownService, jsDomElementOfParsed) : '';
 
                 // If Readability did its job
                 if (par2.length >= 0.3 * par1.length) {
                     turnDownService = this.getTurndown({ noRules: true, ...optsMixin });
+                    imgIdx = 0;
                     if (snapshot.parsed.content) {
                         toBeTurnedToMd = jsDomElementOfParsed;
                     }
@@ -336,11 +339,13 @@ export class SnapshotFormatter extends AsyncService {
             if (toBeTurnedToMd) {
                 try {
                     contentText = this.jsdomControl.runTurndown(turnDownService, toBeTurnedToMd).trim();
+                    imgIdx = 0;
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
                     const vanillaTurnDownService = this.getTurndown({ ...optsMixin });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, toBeTurnedToMd).trim();
+                        imgIdx = 0;
                     } catch (err2) {
                         this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }
@@ -354,11 +359,13 @@ export class SnapshotFormatter extends AsyncService {
                 toBeTurnedToMd = jsDomElementOfHTML;
                 try {
                     contentText = this.jsdomControl.runTurndown(turnDownService, jsDomElementOfHTML).trim();
+                    imgIdx = 0;
                 } catch (err) {
                     this.logger.warn(`Turndown failed to run, retrying without plugins`, { err });
                     const vanillaTurnDownService = this.getTurndown({ ...optsMixin });
                     try {
                         contentText = this.jsdomControl.runTurndown(vanillaTurnDownService, jsDomElementOfHTML).trim();
+                        imgIdx = 0;
                     } catch (err2) {
                         this.logger.warn(`Turndown failed to run, giving up`, { err: err2 });
                     }
@@ -393,6 +400,12 @@ export class SnapshotFormatter extends AsyncService {
                     .toPairs()
                     .map(
                         ([url, alt], i) => {
+                            if (imgDataUrlToObjectUrl && url.startsWith('data:')) {
+                                const refUrl = new URL(formatted.url!);
+                                const mappedUrl = new URL(`blob:${refUrl.origin}/${md5Hasher.hash(url)}`);
+
+                                url = mappedUrl.toString();
+                            }
                             return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
                         }
                     ).fromPairs()

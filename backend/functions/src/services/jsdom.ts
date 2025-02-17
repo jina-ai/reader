@@ -1,7 +1,7 @@
 import { container, singleton } from 'tsyringe';
 import { AsyncService, marshalErrorLike } from 'civkit';
 import { Logger } from '../shared/services/logger';
-import { ExtendedSnapshot, PageSnapshot } from './puppeteer';
+import { ExtendedSnapshot, ImgBrief, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { Threaded } from '../shared/services/threaded';
@@ -144,19 +144,33 @@ export class JSDomControl extends AsyncService {
             this.logger.warn(`Failed to parse selected element`, { err: marshalErrorLike(err) });
         }
 
-        const imageTags = Array.from(rootDoc.querySelectorAll('img[src],img[data-src]'))
-            .map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src')])
-            .flat()
-            .map((x) => {
-                try {
-                    return new URL(x, snapshot.rebase || snapshot.href).toString();
-                } catch (err) {
-                    return null;
+        const imgSet = new Set<string>();
+        const rebuiltImgs: ImgBrief[] = [];
+        Array.from(rootDoc.querySelectorAll('img[src],img[data-src]'))
+            .map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src'), x.getAttribute('alt')])
+            .forEach(([u1, u2, alt]) => {
+                if (u1) {
+                    try {
+                        const u1Txt = new URL(u1, snapshot.rebase || snapshot.href).toString();
+                        imgSet.add(u1Txt);
+                    } catch (err) {
+                        // void 0;
+                    }
                 }
-            })
-            .filter(Boolean);
+                if (u2) {
+                    try {
+                        const u2Txt = new URL(u2, snapshot.rebase || snapshot.href).toString();
+                        imgSet.add(u2Txt);
+                    } catch (err) {
+                        // void 0;
+                    }
+                }
+                rebuiltImgs.push({
+                    src: u1 || u2,
+                    alt
+                });
+            });
 
-        const imageSet = new Set(imageTags);
         const r = {
             ...snapshot,
             title: snapshot.title || jsdom.window.document.title,
@@ -165,7 +179,7 @@ export class JSDomControl extends AsyncService {
             parsed,
             html: rootDoc.documentElement.outerHTML,
             text: textChunks.join('\n'),
-            imgs: snapshot.imgs?.filter((x) => imageSet.has(x.src)) || [],
+            imgs: (snapshot.imgs || rebuiltImgs)?.filter((x) => imgSet.has(x.src)) || [],
         } as PageSnapshot;
 
         const dt = Date.now() - t0;
@@ -283,7 +297,7 @@ export class JSDomControl extends AsyncService {
             currentNode.parentNode?.removeChild(currentNode); // Remove each comment node
         }
 
-        jsdom.window.document.querySelectorAll('*').forEach((x)=> {
+        jsdom.window.document.querySelectorAll('*').forEach((x) => {
             const attrs = x.getAttributeNames();
             for (const attr of attrs) {
                 if (attr.startsWith('data-') || attr.startsWith('aria-')) {
