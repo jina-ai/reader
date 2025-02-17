@@ -66,12 +66,20 @@ export class JSDomControl extends AsyncService {
                 } else if (thisSnapshot?.html) {
                     x.innerHTML = thisSnapshot.html;
                     x.querySelectorAll('script, style').forEach((s) => s.remove());
-                    x.querySelectorAll('[src]').forEach((el) => {
-                        el.setAttribute('src', new URL(el.getAttribute('src')!, src!).toString());
-                    });
-                    x.querySelectorAll('[href]').forEach((el) => {
-                        el.setAttribute('href', new URL(el.getAttribute('href')!, src!).toString());
-                    });
+                    if (src) {
+                        x.querySelectorAll('[src]').forEach((el) => {
+                            const imgSrc = el.getAttribute('src')!;
+                            if (URL.canParse(imgSrc, src!)) {
+                                el.setAttribute('src', new URL(imgSrc, src!).toString());
+                            }
+                        });
+                        x.querySelectorAll('[href]').forEach((el) => {
+                            const linkHref = el.getAttribute('href')!;
+                            if (URL.canParse(linkHref, src!)) {
+                                el.setAttribute('href', new URL(linkHref, src!).toString());
+                            }
+                        });
+                    }
                 }
             });
         }
