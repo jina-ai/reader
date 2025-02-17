@@ -231,7 +231,7 @@ export class SnapshotFormatter extends AsyncService {
                         if (imageRetention === 'alt') {
                             return alt ? `(Image ${++imgIdx}: ${alt})` : '';
                         }
-                        let originalSrc = (node.getAttribute('src') || '').trim();
+                        const originalSrc = (node.getAttribute('src') || '').trim();
                         let linkPreferredSrc = originalSrc;
                         const maybeSrcSet: string = (node.getAttribute('srcset') || '').trim();
                         if (!linkPreferredSrc && maybeSrcSet) {
