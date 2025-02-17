@@ -24,6 +24,7 @@ import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
 import { CurlControl } from '../services/curl';
 import { LmControl } from '../services/lm';
+import { tryDecodeURIComponent } from '../utils/misc';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -169,7 +170,8 @@ export class CrawlerHost extends RPCHost {
         let chargeAmount = 0;
         const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
-        const targetUrl = await this.getTargetUrl(decodeURIComponent(ctx.req.url), crawlerOptions);
+        // Note req.url in express is actually unparsed `path`, e.g. `/some-path?abc`. Instead of a real url.
+        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.req.url), crawlerOptions);
         if (!targetUrl) {
             const latestUser = uid ? await auth.assertUser() : undefined;
             if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
