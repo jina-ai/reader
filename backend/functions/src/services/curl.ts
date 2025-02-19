@@ -108,19 +108,17 @@ export class CurlControl extends AsyncService {
             let contentEncoding = '';
             curl.on('stream', (stream, statusCode, headers) => {
                 status = statusCode;
-                outerLoop:
-                for (const headerVec of headers) {
-                    for (const [k, v] of Object.entries(headerVec)) {
-                        const kl = k.toLowerCase();
-                        if (kl === 'content-type') {
-                            contentType = v.toLowerCase();
-                        }
-                        if (kl === 'content-encoding') {
-                            contentEncoding = v.toLowerCase();
-                        }
-                        if (contentType && contentEncoding) {
-                            break outerLoop;
-                        }
+                const lastResHeaders = headers[headers.length - 1];
+                for (const [k, v] of Object.entries(lastResHeaders)) {
+                    const kl = k.toLowerCase();
+                    if (kl === 'content-type') {
+                        contentType = v.toLowerCase();
+                    }
+                    if (kl === 'content-encoding') {
+                        contentEncoding = v.toLowerCase();
+                    }
+                    if (contentType && contentEncoding) {
+                        break;
                     }
                 }
 
