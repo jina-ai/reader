@@ -466,6 +466,7 @@ export class PuppeteerControl extends AsyncService {
     livePages = new Set<Page>();
     pagePhase = new WeakMap<Page, 'idle' | 'active' | 'background'>();
     lastPageCratedAt: number = 0;
+    ua: string = '';
 
     rpsCap: number = 500;
     lastReqSentAt: number = 0;
@@ -527,7 +528,8 @@ export class PuppeteerControl extends AsyncService {
             }
             process.nextTick(() => this.serviceReady());
         });
-        this.logger.info(`Browser launched: ${this.browser.process()?.pid}`);
+        this.ua = await this.browser.userAgent();
+        this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
 
         this.emit('ready');
 
@@ -566,6 +568,7 @@ export class PuppeteerControl extends AsyncService {
         }
         const preparations = [];
 
+        preparations.push(page.setUserAgent(this.ua.replace(/Headless/i, '')));
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));
