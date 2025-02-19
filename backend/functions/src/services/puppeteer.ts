@@ -85,8 +85,8 @@ export interface ScrappingOptions {
 }
 
 
-const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(puppeteerStealth());
+// const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
+// puppeteer.use(puppeteerStealth());
 // const puppeteerUAOverride = require('puppeteer-extra-plugin-stealth/evasions/user-agent-override');
 // puppeteer.use(puppeteerUAOverride({
 //     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
@@ -224,7 +224,16 @@ const MUTATION_IDLE_WATCH = `
 `;
 
 const DONT_MESS_WITH_THE_FUNDAMENTALS = `
-delete Function.prototype.toString;
+(()=> {
+    const fnToStringDesc = Object.getOwnPropertyDescriptor(Function.prototype, 'toString');
+    Object.defineProperty(Function.prototype, 'toString', {
+        get: ()=> fnToStringDesc.value,
+        set: ()=> 'Dont mess with this',
+        writeable: true,
+        configurable: false,
+        enumerable: false,
+    });
+})();
 delete Function.prototype.bind.apply;
 delete Function.prototype.bind.call;
 `;
@@ -500,6 +509,8 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             timeout: 10_000,
+            headless: true,
+            executablePath: process.env.OVERRIDE_CHROME_EXECUTABLE_PATH,
             args: ['--disable-dev-shm-usage']
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
@@ -886,7 +897,7 @@ export class PuppeteerControl extends AsyncService {
         }
 
         let nextSnapshotDeferred = Defer();
-        nextSnapshotDeferred.promise.catch(()=> 'just dont crash anything');
+        nextSnapshotDeferred.promise.catch(() => 'just dont crash anything');
         const crippleListener = () => nextSnapshotDeferred.reject(new ServiceCrashedError({ message: `Browser crashed, try again` }));
         this.once('crippled', crippleListener);
         nextSnapshotDeferred.promise.finally(() => {

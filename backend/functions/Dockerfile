@@ -29,6 +29,7 @@ COPY licensed ./licensed
 
 RUN rm -rf ~/.config/chromium && mkdir -p ~/.config/chromium
 
+ENV OVERRIDE_CHROME_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV LD_PRELOAD=/usr/local/lib/libcurl-impersonate.so CURL_IMPERSONATE=chrome116 CURL_IMPERSONATE_HEADERS=no
 ENV PORT=8080
 
