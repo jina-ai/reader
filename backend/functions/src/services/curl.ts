@@ -11,6 +11,7 @@ import { TempFileManager } from '../shared';
 import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
 import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
+import { ZSTDDecompress } from 'simple-zstd';
 
 @singleton()
 export class CurlControl extends AsyncService {
@@ -43,7 +44,7 @@ export class CurlControl extends AsyncService {
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-User': '?1',
             'Sec-Fetch-Dest': 'document',
-            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Encoding': 'gzip, deflate, br, zstd',
             'Accept-Language': 'en-US,en;q=0.9',
         };
 
@@ -153,6 +154,12 @@ export class CurlControl extends AsyncService {
                     }
                     case 'br': {
                         const decompressed = createBrotliDecompress();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'zstd': {
+                        const decompressed = ZSTDDecompress();
                         stream.pipe(decompressed);
                         stream = decompressed;
                         break;

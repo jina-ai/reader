@@ -14,8 +14,15 @@ declare module 'jsdom' {
         constructor(html: string, options?: any);
         window: typeof window;
     }
-    export class VirtualConsole extends EventEmitter{
+    export class VirtualConsole extends EventEmitter {
         constructor();
         sendTo(console: any, options?: any);
     }
+}
+
+declare module 'simple-zstd' {
+    import { Duplex } from 'stream';
+    export function ZSTDCompress(lvl: Number): Duplex;
+    export function ZSTDDecompress(): Duplex;
+    export function ZSTDDecompressMaybe(): Duplex;
 }

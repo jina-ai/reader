@@ -60,6 +60,7 @@
     "puppeteer-page-proxy": "^1.3.0",
     "robots-parser": "^3.0.1",
     "set-cookie-parser": "^2.6.0",
+    "simple-zstd": "^1.4.2",
     "stripe": "^11.11.0",
     "tiktoken": "^1.0.16",
     "tld-extract": "^2.1.0",
