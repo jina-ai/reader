@@ -11,7 +11,7 @@ import _ from 'lodash';
 import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
-import { SearchResult, SerperSearchResult } from '../db/searched';
+import { SerperSearchResult } from '../db/searched';
 import { CrawlerOptions } from '../dto/scrapping-options';
 import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
 import { GoogleSearchExplicitOperatorsDto, SerperSearchService } from '../services/serper-search';
