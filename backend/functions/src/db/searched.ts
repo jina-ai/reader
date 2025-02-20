@@ -58,3 +58,7 @@ export class SearchResult extends FirestoreRecord {
         return copy;
     }
 }
+
+export class SerperSearchResult extends SearchResult {
+    static override collectionName = 'serperSearchResults';
+}
