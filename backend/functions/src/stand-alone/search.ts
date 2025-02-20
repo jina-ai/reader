@@ -11,7 +11,7 @@ process.env['FIREBASE_CONFIG'] ??= JSON.stringify({
 initializeApp();
 
 
-import { Logger, CloudFunctionRegistry } from '../shared';
+import { Logger, CloudFunctionRegistry, AsyncContext } from '../shared';
 import { AbstractRPCRegistry, OpenAPIManager } from 'civkit/civ-rpc';
 import { ExpressServer } from 'civkit/civ-rpc/express';
 import http2 from 'http2';
@@ -46,6 +46,7 @@ export class SearchStandAloneServer extends ExpressServer {
         protected globalLogger: Logger,
         protected registry: CloudFunctionRegistry,
         protected searcherHost: SearcherHost,
+        protected threadLocal: AsyncContext,
     ) {
         super(...arguments);
 
@@ -98,11 +99,12 @@ export class SearchStandAloneServer extends ExpressServer {
         };
     }
 
-    makeIgnoreOPTIONSMiddleware() {
+    makeMiscMiddleware() {
         return (req: Request, res: Response, next: NextFunction) => {
             if (req.method === 'OPTIONS') {
                 return res.status(200).end();
             }
+            this.threadLocal.set('ip', req.ip);
 
             return next();
         };
@@ -144,7 +146,7 @@ export class SearchStandAloneServer extends ExpressServer {
 
         this.expressRootRouter.use('/',
             ...this.registry.expressMiddlewares,
-            this.makeIgnoreOPTIONSMiddleware(),
+            this.makeMiscMiddleware(),
             this.makeAssetsServingController(),
             this.registry.makeShimController('search')
         );

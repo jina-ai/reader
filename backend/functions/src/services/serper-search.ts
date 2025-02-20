@@ -53,13 +53,13 @@ export class SerperSearchService extends AsyncService {
             if (locationChunks.length) {
                 query.location ??= locationChunks.join(', ');
             }
-
         }
 
         let maxTries = 3;
 
         while (maxTries--) {
             try {
+                this.logger.debug(`Doing external search`, query);
                 const r = await this.serperSearchHTTP.webSearch(query);
 
                 return r.parsed;
