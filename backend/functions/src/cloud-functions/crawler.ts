@@ -25,6 +25,7 @@ import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapsho
 import { CurlControl } from '../services/curl';
 import { LmControl } from '../services/lm';
 import { tryDecodeURIComponent } from '../utils/misc';
+import { pathToFileURL } from 'url';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -266,7 +267,7 @@ export class CrawlerHost extends RPCHost {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
+                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
                     chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -303,7 +304,7 @@ export class CrawlerHost extends RPCHost {
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
+                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
                 chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
 
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
@@ -324,7 +325,7 @@ export class CrawlerHost extends RPCHost {
                 throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
             }
 
-            const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
+            const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
             chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -351,7 +352,7 @@ export class CrawlerHost extends RPCHost {
                 continue;
             }
 
-            const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
+            const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
             chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -380,7 +381,7 @@ export class CrawlerHost extends RPCHost {
             throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
 
-        const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
+        const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
         chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
             throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -841,14 +842,15 @@ export class CrawlerHost extends RPCHost {
         return crawlOpts;
     }
 
-    formatSnapshot(
+    async formatSnapshot(
         crawlerOptions: CrawlerOptions,
         snapshot: PageSnapshot & {
             screenshotUrl?: string;
             pageshotUrl?: string;
         },
         nominalUrl?: URL,
-        urlValidMs?: number
+        urlValidMs?: number,
+        scrappingOptions?: ScrappingOptions
     ) {
         const presumedURL = crawlerOptions.base === 'final' ? new URL(snapshot.href) : nominalUrl;
 
@@ -867,6 +869,16 @@ export class CrawlerHost extends RPCHost {
             });
 
             return output;
+        }
+
+        if (snapshot.pdfs?.length) {
+            const pdfUrl = snapshot.pdfs[0];
+            if (pdfUrl.startsWith('http')) {
+                const r = await this.curlControl.download(new URL(pdfUrl), scrappingOptions);
+                if (r.data) {
+                    snapshot.pdfs[0] = pathToFileURL(await r.data.filePath).href;
+                }
+            }
         }
 
         return this.snapshotFormatter.formatSnapshot(respondWith, snapshot, presumedURL, urlValidMs);

@@ -335,6 +335,7 @@ export class PDFExtractor extends AsyncService {
             });
         } catch (err) {
             this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err });
+            throw err;
         }
 
         return extracted;

@@ -53,6 +53,124 @@ export class CurlControl extends AsyncService {
         return curl;
     }
 
+    async download(urlToDownload: URL, crawlOpts?: ScrappingOptions) {
+        let contentType = '';
+        const result = await new Promise<{
+            statusCode: number,
+            data?: FancyFile,
+            headers: Buffer | HeaderInfo[],
+        }>((resolve, reject) => {
+            const curl = new Curl();
+            curl.enable(CurlFeature.StreamResponse);
+            curl.setOpt('URL', urlToDownload.toString());
+            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+
+            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(120_000, crawlOpts?.timeoutMs || 120_000));
+
+            if (crawlOpts?.overrideUserAgent) {
+                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+            }
+
+            this.curlImpersonateHeader(curl, crawlOpts?.extraHeaders);
+            // if (crawlOpts?.extraHeaders) {
+            //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
+            // }
+            if (crawlOpts?.proxyUrl) {
+                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
+            }
+            if (crawlOpts?.cookies?.length) {
+                const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
+                curl.setOpt(Curl.option.COOKIE, cookieChunks.join('; '));
+            }
+            if (crawlOpts?.referer) {
+                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+            }
+
+            curl.on('end', (statusCode, _data, headers) => {
+                this.logger.debug(`CURL: [${statusCode}] ${urlToDownload}`, { statusCode, headers });
+                curl.close();
+            });
+
+            curl.on('error', (err) => {
+                curl.close();
+                this.logger.warn(`Curl ${urlToDownload}: ${err} (Not necessarily an error)`, { err: marshalErrorLike(err) });
+                reject(new AssertionFailureError(`Failed to download ${urlToDownload}: ${err.message}`));
+            });
+            curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
+            let status = -1;
+            let contentEncoding = '';
+            curl.on('stream', (stream, statusCode, headers) => {
+                status = statusCode;
+                const lastResHeaders = headers[headers.length - 1];
+                for (const [k, v] of Object.entries(lastResHeaders)) {
+                    const kl = k.toLowerCase();
+                    if (kl === 'content-type') {
+                        contentType = v.toLowerCase();
+                    }
+                    if (kl === 'content-encoding') {
+                        contentEncoding = v.toLowerCase();
+                    }
+                    if (contentType && contentEncoding) {
+                        break;
+                    }
+                }
+
+                if (!contentType) {
+                    reject(new AssertionFailureError(`Failed to download ${urlToDownload}: no content-type`));
+                    stream.destroy();
+                    return;
+                }
+
+                switch (contentEncoding) {
+                    case 'gzip': {
+                        const decompressed = createGunzip();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'deflate': {
+                        const decompressed = createInflate();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'br': {
+                        const decompressed = createBrotliDecompress();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'zstd': {
+                        const decompressed = ZSTDDecompress();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
+                }
+
+                const fpath = this.tempFileManager.alloc();
+                const fancyFile = FancyFile.auto(stream, fpath);
+                this.tempFileManager.bindPathTo(fancyFile, fpath);
+                resolve({
+                    statusCode: status,
+                    data: fancyFile,
+                    headers,
+                });
+            });
+
+            curl.perform();
+        });
+
+        if (result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
+            throw new AssertionFailureError(`Failed to download ${urlToDownload}: HTTP ${result.statusCode}`);
+        }
+
+        return result!;
+    }
+
     async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
         const snapshot = {
             href: urlToCrawl.toString(),
@@ -214,5 +332,111 @@ export class CurlControl extends AsyncService {
         return curlSnapshot!;
     }
 
+    async urlToFile(urlToCrawl: URL, crawlOpts?: ScrappingOptions) {
+        let contentType = '';
+        const result = await new Promise<{
+            statusCode: number,
+            data: FancyFile,
+            headers: Buffer | HeaderInfo[],
+        }>((resolve, reject) => {
+            const curl = new Curl();
+            curl.enable(CurlFeature.StreamResponse);
+            curl.setOpt('URL', urlToCrawl.toString());
+            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
 
+            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(10_000, crawlOpts?.timeoutMs || 10_000));
+
+            if (crawlOpts?.overrideUserAgent) {
+                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+            }
+
+            this.curlImpersonateHeader(curl, crawlOpts?.extraHeaders);
+            // if (crawlOpts?.extraHeaders) {
+            //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
+            // }
+            if (crawlOpts?.proxyUrl) {
+                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
+            }
+            if (crawlOpts?.cookies?.length) {
+                const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
+                curl.setOpt(Curl.option.COOKIE, cookieChunks.join('; '));
+            }
+            if (crawlOpts?.referer) {
+                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+            }
+
+            curl.on('end', (statusCode, _data, headers) => {
+                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode, headers });
+                curl.close();
+            });
+
+            curl.on('error', (err) => {
+                curl.close();
+                this.logger.warn(`Curl ${urlToCrawl}: ${err} (Not necessarily an error)`, { err: marshalErrorLike(err) });
+                reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: ${err.message}`));
+            });
+            curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
+            let status = -1;
+            let contentEncoding = '';
+            curl.on('stream', (stream, statusCode, headers) => {
+                status = statusCode;
+                const lastResHeaders = headers[headers.length - 1];
+                for (const [k, v] of Object.entries(lastResHeaders)) {
+                    const kl = k.toLowerCase();
+                    if (kl === 'content-type') {
+                        contentType = v.toLowerCase();
+                    }
+                    if (kl === 'content-encoding') {
+                        contentEncoding = v.toLowerCase();
+                    }
+                    if (contentType && contentEncoding) {
+                        break;
+                    }
+                }
+
+                switch (contentEncoding) {
+                    case 'gzip': {
+                        const decompressed = createGunzip();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'deflate': {
+                        const decompressed = createInflate();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'br': {
+                        const decompressed = createBrotliDecompress();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    case 'zstd': {
+                        const decompressed = ZSTDDecompress();
+                        stream.pipe(decompressed);
+                        stream = decompressed;
+                        break;
+                    }
+                    default: {
+                        break;
+                    }
+                }
+
+                const fpath = this.tempFileManager.alloc();
+                const fancyFile = FancyFile.auto(stream, fpath);
+                this.tempFileManager.bindPathTo(fancyFile, fpath);
+                resolve({
+                    statusCode: status,
+                    data: fancyFile,
+                    headers: headers as HeaderInfo[],
+                });
+            });
+
+            curl.perform();
+        });
+
+        return result;
+    }
 }
