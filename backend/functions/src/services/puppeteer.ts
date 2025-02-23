@@ -82,6 +82,12 @@ export interface ScrappingOptions {
     injectFrameScripts?: string[];
     injectPageScripts?: string[];
     viewport?: Viewport;
+
+    sideLoad?: {
+        impersonate: { [url: string]: { status: number, headers: { [k: string]: string | string[]; }, body: string | Buffer; }; };
+        proxyOrigin: { [origin: string]: string; };
+    };
+
 }
 
 
