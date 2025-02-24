@@ -101,7 +101,7 @@ export class SnapshotFormatter extends AsyncService {
     }, nominalUrl?: URL, urlValidMs = 3600 * 1000 * 4) {
         const t0 = Date.now();
         const f = {
-            ...this.getGeneralSnapshotMixins(snapshot),
+            ...(await this.getGeneralSnapshotMixins(snapshot)),
         };
         let modeOK = false;
 
@@ -189,6 +189,16 @@ export class SnapshotFormatter extends AsyncService {
         ) {
             const dt = Date.now() - t0;
             this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
+
+            const formatted: FormattedPage = {
+                title: (snapshot.parsed?.title || snapshot.title || '').trim(),
+                description: (snapshot.description || '').trim(),
+                url: nominalUrl?.toString() || snapshot.href?.trim(),
+                publishedTime: snapshot.parsed?.publishedTime || undefined,
+                [Symbol.dispose]: () => { },
+            };
+
+            Object.assign(f, formatted);
 
             return f;
         }
@@ -412,7 +422,7 @@ export class SnapshotFormatter extends AsyncService {
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            const links = this.jsdomControl.inferSnapshot(snapshot).links;
+            const links = (await this.jsdomControl.inferSnapshot(snapshot)).links;
 
             if (this.threadLocal.get('withLinksSummary') === 'all') {
                 formatted.links = links;
@@ -482,11 +492,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return f as FormattedPage;
     }
 
-    getGeneralSnapshotMixins(snapshot: PageSnapshot) {
+    async getGeneralSnapshotMixins(snapshot: PageSnapshot) {
         let inferred;
         const mixin: any = {};
         if (this.threadLocal.get('withImagesSummary')) {
-            inferred ??= this.jsdomControl.inferSnapshot(snapshot);
+            inferred ??= await this.jsdomControl.inferSnapshot(snapshot);
             const imageSummary = {} as { [k: string]: string; };
             const imageIdxTrack = new Map<string, number[]>();
 
@@ -511,7 +521,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            inferred ??= this.jsdomControl.inferSnapshot(snapshot);
+            inferred ??= await this.jsdomControl.inferSnapshot(snapshot);
             if (this.threadLocal.get('withLinksSummary') === 'all') {
                 mixin.links = inferred.links;
             } else {

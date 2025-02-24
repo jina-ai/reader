@@ -752,7 +752,7 @@ export class CrawlerHost extends RPCHost {
             }
         };
 
-        Promise.all(
+        Promise.allSettled(
             iterators.map((it, idx) => handler(it, idx))
         ).finally(() => {
             concluded = true;
@@ -767,6 +767,7 @@ export class CrawlerHost extends RPCHost {
 
                 yield results;
             }
+            yield results;
         } finally {
             for (const x of iterators) {
                 x.return();
