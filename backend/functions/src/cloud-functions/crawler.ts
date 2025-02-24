@@ -26,6 +26,7 @@ import { CurlControl } from '../services/curl';
 import { LmControl } from '../services/lm';
 import { tryDecodeURIComponent } from '../utils/misc';
 import { pathToFileURL } from 'url';
+import { ProxyProvider } from '../shared/services/proxy-provider';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -60,6 +61,7 @@ export class CrawlerHost extends RPCHost {
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
+        protected proxyProvider: ProxyProvider,
         protected lmControl: LmControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
@@ -108,6 +110,8 @@ export class CrawlerHost extends RPCHost {
 
     override async init() {
         await this.dependencyReady();
+
+        this.curlControl.impersonateChrome(this.puppeteerControl.ua);
 
         this.emit('ready');
     }
@@ -659,22 +663,33 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
-            const { digest } = this.getDomainProfileUrlDigest(urlToCrawl);
-            const domainProfile = await DomainProfile.fromFirestore(digest);
-            if (domainProfile?.engine === ENGINE_TYPE.DIRECT) {
-                try {
-                    const snapshot = await this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
+        try {
+            let sideLoaded = await this.sideLoad(urlToCrawl, crawlOpts);
+            if (!sideLoaded.contentType.startsWith('text/html')) {
+                yield sideLoaded.snapshot;
+                return;
+            }
 
-                    // Expect downstream code to "break" here if it's satisfied with the direct engine
-                    yield snapshot;
-                    if (crawlOpts?.engine === ENGINE_TYPE.AUTO) {
-                        return;
-                    }
-                } catch (err: any) {
-                    this.logger.warn(`Failed to scrap ${urlToCrawl} with direct engine`, { err: marshalErrorLike(err) });
+            const analyzed1 = await this.jsdomControl.analyzeHTMLTextLite(sideLoaded.snapshot.html);
+            analyzed1.title ??= analyzed1.title;
+            if (analyzed1.tokens < 200) {
+                const proxyUrl = await this.proxyProvider.alloc();
+                const proxyLoaded = await this.sideLoad(urlToCrawl, { ...crawlOpts, proxyUrl: proxyUrl.href, timeoutMs: 6_000 });
+                const analyzed2 = await this.jsdomControl.analyzeHTMLTextLite(proxyLoaded.snapshot.html);
+                if (analyzed2.tokens >= 200) {
+                    sideLoaded = proxyLoaded;
                 }
             }
+
+            if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
+                yield sideLoaded.snapshot;
+            }
+
+            if (crawlOpts) {
+                crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
+            }
+        } catch (err: any) {
+            this.logger.warn(`Failed to Curl ${urlToCrawl}`, { err: marshalErrorLike(err) });
         }
 
         try {
@@ -991,5 +1006,40 @@ export class CrawlerHost extends RPCHost {
             digest: md5Hasher.hash(key),
             path: finalPath,
         };
+    }
+
+    async sideLoad(targetUrl: URL, crawlOpts?: ScrappingOptions) {
+        const curlResult = await this.curlControl.urlToFile(targetUrl, crawlOpts);
+        let finalURL = targetUrl;
+        const sideLoadOpts: ScrappingOptions['sideLoad'] = {
+            impersonate: {},
+            proxyOrigin: {},
+        };
+        for (const headers of curlResult.headers) {
+            sideLoadOpts.impersonate[finalURL.href] = {
+                status: headers.result?.code || -1,
+                headers,
+                body: ''
+            };
+            if (crawlOpts?.proxyUrl) {
+                sideLoadOpts.proxyOrigin[finalURL.origin] = crawlOpts.proxyUrl;
+            }
+            if (headers.result?.code && [301, 302, 307, 308].includes(headers.result.code)) {
+                const location = headers.Location || headers.location;
+                if (!location) {
+                    throw new Error(`Bad redirection: ${curlResult.headers.length} times`);
+                }
+                finalURL = new URL(location, finalURL);
+            }
+        }
+        const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
+        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type']).toLowerCase();
+        const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
+        const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
+
+        const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(finalURL, curlResult.data, contentType, fileName);
+        draftSnapshot.status = curlResult.statusCode;
+
+        return { snapshot: draftSnapshot, sideLoadOpts, contentType, lastHeaders };
     }
 }

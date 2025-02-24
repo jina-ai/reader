@@ -18,6 +18,9 @@ export class CurlControl extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
+    chromeVersion: string = `132`;
+    safariVersion: string = `537.36`;
+
     constructor(
         protected globalLogger: Logger,
         protected jsdomControl: JSDomControl,
@@ -32,13 +35,18 @@ export class CurlControl extends AsyncService {
         this.emit('ready');
     }
 
-    curlImpersonateHeader(curl: Curl, headers?: object, chromeVersion: number = 132) {
+    impersonateChrome(ua: string) {
+        this.chromeVersion = ua.match(/Chrome\/(\d+)/)![1];
+        this.safariVersion = ua.match(/AppleWebKit\/([\d\.]+)/)![1];
+    }
+
+    curlImpersonateHeader(curl: Curl, headers?: object) {
         const mixinHeaders = {
-            'sch-ch-ua': `Not A(Brand";v="8", "Chromium";v="${chromeVersion}", "Google Chrome";v="${chromeVersion}"`,
+            'sch-ch-ua': `Not A(Brand";v="8", "Chromium";v="${this.chromeVersion}", "Google Chrome";v="${this.chromeVersion}"`,
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': 'Windows',
             'Upgrade-Insecure-Requests': '1',
-            'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion}.0.0.0 Safari/537.36`,
+            'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/${this.safariVersion} (KHTML, like Gecko) Chrome/${this.chromeVersion}.0.0.0 Safari/${this.safariVersion}`,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
             'Sec-Fetch-Site': 'none',
             'Sec-Fetch-Mode': 'navigate',
@@ -189,6 +197,7 @@ export class CurlControl extends AsyncService {
             curl.enable(CurlFeature.StreamResponse);
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+            curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
 
             curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(10_000, crawlOpts?.timeoutMs || 10_000));
 
@@ -337,14 +346,14 @@ export class CurlControl extends AsyncService {
         const result = await new Promise<{
             statusCode: number,
             data: FancyFile,
-            headers: Buffer | HeaderInfo[],
+            headers: HeaderInfo[],
         }>((resolve, reject) => {
             const curl = new Curl();
             curl.enable(CurlFeature.StreamResponse);
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
-
-            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(10_000, crawlOpts?.timeoutMs || 10_000));
+            curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
+            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
 
             if (crawlOpts?.overrideUserAgent) {
                 curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
@@ -355,8 +364,20 @@ export class CurlControl extends AsyncService {
             //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
             // }
             if (crawlOpts?.proxyUrl) {
+                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
+                const username = proxyUrlCopy.username;
+                const password = proxyUrlCopy.password;
+                proxyUrlCopy.username = '';
+                proxyUrlCopy.password = '';
+                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
+                curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
+                if (username && password) {
+                    curl.setOpt(Curl.option.PROXYUSERNAME, username);
+                    curl.setOpt(Curl.option.PROXYPASSWORD, password);
+                }
                 curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
             }
+
             if (crawlOpts?.cookies?.length) {
                 const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
                 curl.setOpt(Curl.option.COOKIE, cookieChunks.join('; '));

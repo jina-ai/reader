@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { container, singleton } from 'tsyringe';
-import { AsyncService, HashManager, marshalErrorLike } from 'civkit';
+import { AssertionFailureError, AsyncService, FancyFile, HashManager, marshalErrorLike } from 'civkit';
 import TurndownService, { Filter, Rule } from 'turndown';
 import { Logger } from '../shared/services/logger';
 import { PageSnapshot } from './puppeteer';
@@ -14,6 +14,8 @@ import { cleanAttribute } from '../utils/misc';
 import _ from 'lodash';
 import { STATUS_CODES } from 'http';
 import type { CrawlerOptions } from '../dto/scrapping-options';
+import { readFile } from 'fs/promises';
+import { pathToFileURL } from 'url';
 
 
 export interface FormattedPage {
@@ -101,7 +103,7 @@ export class SnapshotFormatter extends AsyncService {
     }, nominalUrl?: URL, urlValidMs = 3600 * 1000 * 4) {
         const t0 = Date.now();
         const f = {
-            ...this.getGeneralSnapshotMixins(snapshot),
+            ... await this.getGeneralSnapshotMixins(snapshot),
         };
         let modeOK = false;
 
@@ -412,7 +414,7 @@ export class SnapshotFormatter extends AsyncService {
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            const links = this.jsdomControl.inferSnapshot(snapshot).links;
+            const links = (await this.jsdomControl.inferSnapshot(snapshot)).links;
 
             if (this.threadLocal.get('withLinksSummary') === 'all') {
                 formatted.links = links;
@@ -482,11 +484,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return f as FormattedPage;
     }
 
-    getGeneralSnapshotMixins(snapshot: PageSnapshot) {
+    async getGeneralSnapshotMixins(snapshot: PageSnapshot) {
         let inferred;
         const mixin: any = {};
         if (this.threadLocal.get('withImagesSummary')) {
-            inferred ??= this.jsdomControl.inferSnapshot(snapshot);
+            inferred ??= await this.jsdomControl.inferSnapshot(snapshot);
             const imageSummary = {} as { [k: string]: string; };
             const imageIdxTrack = new Map<string, number[]>();
 
@@ -511,7 +513,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     .value();
         }
         if (this.threadLocal.get('withLinksSummary')) {
-            inferred ??= this.jsdomControl.inferSnapshot(snapshot);
+            inferred ??= await this.jsdomControl.inferSnapshot(snapshot);
             if (this.threadLocal.get('withLinksSummary') === 'all') {
                 mixin.links = inferred.links;
             } else {
@@ -685,6 +687,52 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         }
 
         return false;
+    }
+
+    async createSnapshotFromFile(url: URL, file: FancyFile, overrideContentType?: string, overrideFileName?: string) {
+        if (overrideContentType === 'application/octet-stream') {
+            overrideContentType = undefined;
+        }
+
+        const contentType = (overrideContentType || await file.mimeType).toLowerCase();
+        const fileName = overrideFileName || `${url.origin}${url.pathname}`;
+        const snapshot: PageSnapshot = {
+            title: '',
+            href: url.href,
+            html: '',
+            text: ''
+        };
+
+        if (contentType.startsWith('image/')) {
+            snapshot.html = `<html style="height: 100%;"><head><meta name="viewport" content="width=device-width, minimum-scale=0.1"><title>${fileName}</title></head><body style="margin: 0px; height: 100%; background-color: rgb(14, 14, 14);"><img style="display: block;-webkit-user-select: none;margin: auto;background-color: hsl(0, 0%, 90%);transition: background-color 300ms;" src="${url.href}"></body></html>`;
+            snapshot.title = fileName;
+
+            return snapshot;
+        }
+        if (contentType.startsWith('text/html')) {
+            if ((await file.size) > 1024 * 1024 * 32) {
+                throw new AssertionFailureError(`Failed to access ${url}: file too large`);
+            }
+            snapshot.html = await readFile(await file.filePath, { encoding: 'utf-8' });
+
+            return snapshot;
+        }
+        if (contentType.startsWith('text/') || contentType.startsWith('application/json')) {
+            if ((await file.size) > 1024 * 1024 * 32) {
+                throw new AssertionFailureError(`Failed to access ${url}: file too large`);
+            }
+            snapshot.text = await readFile(await file.filePath, { encoding: 'utf-8' });
+            snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
+
+            return snapshot;
+        }
+        if (contentType.startsWith('application/pdf')) {
+            snapshot.pdfs = [pathToFileURL(await file.filePath).href];
+
+            return snapshot;
+        }
+
+        throw new AssertionFailureError(`Failed to access ${url}: unexpected type ${contentType}`);
     }
 }
 

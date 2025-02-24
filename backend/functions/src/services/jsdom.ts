@@ -7,6 +7,7 @@ import TurndownService from 'turndown';
 import { Threaded } from '../shared/services/threaded';
 import type { ExtraScrappingOptions } from '../cloud-functions/crawler';
 import { tailwindClasses } from '../utils/tailwind-classes';
+import { countGPTToken } from '../shared';
 
 const pLinkedom = import('linkedom');
 
@@ -199,7 +200,7 @@ export class JSDomControl extends AsyncService {
     }
 
     @Threaded()
-    inferSnapshot(snapshot: PageSnapshot): ExtendedSnapshot {
+    async inferSnapshot(snapshot: PageSnapshot): Promise<ExtendedSnapshot> {
         const t0 = Date.now();
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {
@@ -347,6 +348,22 @@ export class JSDomControl extends AsyncService {
                 this.logger.warn(`Performance issue: Turndown took ${dt}ms`, { dt });
             }
         }
+    }
+
+    @Threaded()
+    async analyzeHTMLTextLite(sourceHTML: string) {
+        let jsdom = this.linkedom.parseHTML(sourceHTML);
+        if (!jsdom.window.document.documentElement) {
+            jsdom = this.linkedom.parseHTML(`<html><body>${sourceHTML}</body></html>`);
+        }
+        jsdom.window.document.querySelectorAll('script,style,link,svg').forEach((s) => s.remove());
+        const text = jsdom.window.document.body.innerText || '';
+
+        return {
+            title: jsdom.window.document.title,
+            text,
+            tokens: countGPTToken(text.replaceAll(/[\s\r\n\t]+/g, ' ')),
+        };
     }
 }
 
