@@ -230,7 +230,7 @@ const DONT_MESS_WITH_THE_FUNDAMENTALS = `
         get: ()=> fnToStringDesc.value,
         set: ()=> 'Dont mess with this',
         writeable: true,
-        configurable: false,
+        configurable: true,
         enumerable: false,
     });
 })();
