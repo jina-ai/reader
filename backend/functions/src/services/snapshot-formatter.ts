@@ -208,9 +208,9 @@ export class SnapshotFormatter extends AsyncService {
             if (
                 snapshot.maxElemDepth! > 256 ||
                 (!uid && snapshot.elemCount! > 10_000) ||
-                snapshot.elemCount! > 70_000
+                snapshot.elemCount! > 80_000
             ) {
-                this.logger.warn('Degrading to text to protect the server', { url: snapshot.href });
+                this.logger.warn('Degrading to text to protect the server', { url: snapshot.href, elemDepth: snapshot.maxElemDepth, elemCount: snapshot.elemCount });
                 contentText = (snapshot.text || '').trimEnd();
                 break;
             }
@@ -371,7 +371,7 @@ export class SnapshotFormatter extends AsyncService {
                     }
                 }
             }
-            if (this.isPoorlyTransformed(contentText, toBeTurnedToMd)) {
+            if (mode === 'content' && this.isPoorlyTransformed(contentText, toBeTurnedToMd)) {
                 contentText = (snapshot.text || '').trimEnd();
             }
         } while (false);
