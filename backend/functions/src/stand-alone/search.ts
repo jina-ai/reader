@@ -15,7 +15,7 @@ import { Logger, CloudFunctionRegistry, AsyncContext } from '../shared';
 import { AbstractRPCRegistry, OpenAPIManager } from 'civkit/civ-rpc';
 import { ExpressServer } from 'civkit/civ-rpc/express';
 import http2 from 'http2';
-import { SearcherHost } from '../cloud-functions/searcher';
+import { SearcherHost } from '../cloud-functions/searcher-serper';
 import { FsWalk, WalkOutEntity } from 'civkit/fswalk';
 import path from 'path';
 import fs from 'fs';
