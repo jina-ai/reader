@@ -147,7 +147,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count ? (isVersion2 ? count : Math.min(Math.floor(count + 2)), 10) : 10
+            num: count ? (isVersion2 ? count : Math.min(Math.floor(count + 2), 12)) : 12
         }, crawlerOptions.noCache);
 
         if (!r.organic.length) {
