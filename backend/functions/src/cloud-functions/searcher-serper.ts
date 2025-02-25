@@ -81,13 +81,17 @@ export class SearcherHost extends RPCHost {
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
-        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 10 })
+        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
         count: number,
+        @Param('version', { default: 1, validate: (v) => v >= 1 })
+        version: number,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
+        const isVersion2 = version === 2;
+
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
         if (!noSlashPath && !q) {
@@ -143,7 +147,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count ? Math.floor(count + 2) : 10
+            num: count ? (isVersion2 ? count : Math.min(Math.floor(count + 2)), 10) : 10
         }, crawlerOptions.noCache);
 
         if (!r.organic.length) {
@@ -152,6 +156,30 @@ export class SearcherHost extends RPCHost {
 
         if (crawlOpts.timeoutMs && crawlOpts.timeoutMs < 30_000) {
             delete crawlOpts.timeoutMs;
+        }
+
+        if (isVersion2) {
+            chargeAmount = 1000;
+            const result = [];
+            for (const x of r.organic) {
+                const url = new URL(x.link);
+                const favicon = await this.getFavicon(url.origin);
+
+                result.push({
+                    url: x.link,
+                    title: x.title,
+                    snippet: x.snippet,
+                    domain: url.origin,
+                    favicon: favicon,
+                });
+            }
+
+            return {
+                result,
+                usage: {
+                    tokens: chargeAmount,
+                }
+            };
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, count + 2), crawlOpts,
@@ -451,6 +479,24 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
 
     searchResultsQualified(results: FormattedPage[], targetResultCount = this.targetResultCount) {
         return _.every(results, (x) => this.pageQualified(x)) && results.length >= targetResultCount;
+    }
+
+    async getFavicon (domain: string) {
+        const url = `https://www.google.com/s2/favicons?sz=32&domain_url=${domain}`;
+
+        try {
+            const response = await fetch(url);
+            if (!response.ok) {
+                return '';
+            }
+            const ab = await response.arrayBuffer();
+            const buffer = Buffer.from(ab);
+            const base64 = buffer.toString('base64');
+            return `data:image/png;base64,${base64}`;
+        } catch (error: any) {
+            this.logger.warn(`Failed to get favicon base64 string`, { err: marshalErrorLike(error) });
+            return '';
+        }
     }
 
     async cachedWebSearch(query: SerperSearchQueryParams, noCache: boolean = false) {
