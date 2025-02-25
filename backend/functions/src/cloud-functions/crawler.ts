@@ -664,28 +664,31 @@ export class CrawlerHost extends RPCHost {
         }
 
         try {
-            let sideLoaded = await this.sideLoad(urlToCrawl, crawlOpts);
+            let sideLoaded = await this.curlControl.sideLoad(urlToCrawl, crawlOpts);
+            let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
             if (!sideLoaded.contentType.startsWith('text/html')) {
-                yield sideLoaded.snapshot;
+                yield draftSnapshot;
                 return;
             }
 
-            const analyzed1 = await this.jsdomControl.analyzeHTMLTextLite(sideLoaded.snapshot.html);
+            const analyzed1 = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
             analyzed1.title ??= analyzed1.title;
-            if (analyzed1.tokens < 200) {
+            if (analyzed1.tokens < 200 || sideLoaded.status !== 200) {
                 const proxyUrl = await this.proxyProvider.alloc();
-                const proxyLoaded = await this.sideLoad(urlToCrawl, { ...crawlOpts, proxyUrl: proxyUrl.href, timeoutMs: 6_000 });
-                const analyzed2 = await this.jsdomControl.analyzeHTMLTextLite(proxyLoaded.snapshot.html);
+                const proxyLoaded = await this.curlControl.sideLoad(urlToCrawl, { ...crawlOpts, proxyUrl: proxyUrl.href, timeoutMs: 6_000 });
+                const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
+                const analyzed2 = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
                 if (analyzed2.tokens >= 200) {
+                    draftSnapshot = proxySnapshot;
                     sideLoaded = proxyLoaded;
                 }
             }
 
             if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
-                yield sideLoaded.snapshot;
+                yield draftSnapshot;
             }
 
-            if (crawlOpts) {
+            if (crawlOpts && sideLoaded.status === 200) {
                 crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
             }
         } catch (err: any) {
@@ -1006,40 +1009,5 @@ export class CrawlerHost extends RPCHost {
             digest: md5Hasher.hash(key),
             path: finalPath,
         };
-    }
-
-    async sideLoad(targetUrl: URL, crawlOpts?: ScrappingOptions) {
-        const curlResult = await this.curlControl.urlToFile(targetUrl, crawlOpts);
-        let finalURL = targetUrl;
-        const sideLoadOpts: ScrappingOptions['sideLoad'] = {
-            impersonate: {},
-            proxyOrigin: {},
-        };
-        for (const headers of curlResult.headers) {
-            sideLoadOpts.impersonate[finalURL.href] = {
-                status: headers.result?.code || -1,
-                headers,
-                body: ''
-            };
-            if (crawlOpts?.proxyUrl) {
-                sideLoadOpts.proxyOrigin[finalURL.origin] = crawlOpts.proxyUrl;
-            }
-            if (headers.result?.code && [301, 302, 307, 308].includes(headers.result.code)) {
-                const location = headers.Location || headers.location;
-                if (!location) {
-                    throw new Error(`Bad redirection: ${curlResult.headers.length} times`);
-                }
-                finalURL = new URL(location, finalURL);
-            }
-        }
-        const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
-        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type']).toLowerCase();
-        const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
-        const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
-
-        const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(finalURL, curlResult.data, contentType, fileName);
-        draftSnapshot.status = curlResult.statusCode;
-
-        return { snapshot: draftSnapshot, sideLoadOpts, contentType, lastHeaders };
     }
 }

@@ -12,6 +12,13 @@ import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
 import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
 import { ZSTDDecompress } from 'simple-zstd';
+import _ from 'lodash';
+import { isReadable } from 'stream';
+
+export interface CURLScrappingOptions extends ScrappingOptions {
+    method?: string;
+    body?: string | Buffer;
+}
 
 @singleton()
 export class CurlControl extends AsyncService {
@@ -61,7 +68,7 @@ export class CurlControl extends AsyncService {
         return curl;
     }
 
-    async download(urlToDownload: URL, crawlOpts?: ScrappingOptions) {
+    async download(urlToDownload: URL, crawlOpts?: CURLScrappingOptions) {
         let contentType = '';
         const result = await new Promise<{
             statusCode: number,
@@ -72,26 +79,40 @@ export class CurlControl extends AsyncService {
             curl.enable(CurlFeature.StreamResponse);
             curl.setOpt('URL', urlToDownload.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
-
-            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(120_000, crawlOpts?.timeoutMs || 120_000));
-
-            if (crawlOpts?.overrideUserAgent) {
-                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+            curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
+            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
+            if (crawlOpts?.method) {
+                curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
+            }
+            if (crawlOpts?.body) {
+                curl.setOpt(Curl.option.POSTFIELDS, crawlOpts.body.toString());
             }
 
-            this.curlImpersonateHeader(curl, crawlOpts?.extraHeaders);
-            // if (crawlOpts?.extraHeaders) {
-            //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-            // }
-            if (crawlOpts?.proxyUrl) {
-                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
-            }
+            const headersToSet = { ...crawlOpts?.extraHeaders };
             if (crawlOpts?.cookies?.length) {
                 const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-                curl.setOpt(Curl.option.COOKIE, cookieChunks.join('; '));
+                headersToSet['Cookie'] = cookieChunks.join('; ');
             }
             if (crawlOpts?.referer) {
-                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+                headersToSet['Referer'] = crawlOpts.referer;
+            }
+            if (crawlOpts?.overrideUserAgent) {
+                headersToSet['User-Agent'] = crawlOpts.overrideUserAgent;
+            }
+
+            this.curlImpersonateHeader(curl, headersToSet);
+            if (crawlOpts?.proxyUrl) {
+                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
+                const username = proxyUrlCopy.username;
+                const password = proxyUrlCopy.password;
+                proxyUrlCopy.username = '';
+                proxyUrlCopy.password = '';
+                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
+                curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
+                if (username && password) {
+                    curl.setOpt(Curl.option.PROXYUSERNAME, username);
+                    curl.setOpt(Curl.option.PROXYPASSWORD, password);
+                }
             }
 
             curl.on('end', (statusCode, _data, headers) => {
@@ -179,7 +200,7 @@ export class CurlControl extends AsyncService {
         return result!;
     }
 
-    async urlToSnapshot(urlToCrawl: URL, crawlOpts?: ScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
+    async urlToSnapshot(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
         const snapshot = {
             href: urlToCrawl.toString(),
             html: '',
@@ -198,26 +219,39 @@ export class CurlControl extends AsyncService {
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
-
-            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(10_000, crawlOpts?.timeoutMs || 10_000));
-
-            if (crawlOpts?.overrideUserAgent) {
-                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
+            if (crawlOpts?.method) {
+                curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
+            }
+            if (crawlOpts?.body) {
+                curl.setOpt(Curl.option.POSTFIELDS, crawlOpts.body.toString());
             }
 
-            this.curlImpersonateHeader(curl, crawlOpts?.extraHeaders);
-            // if (crawlOpts?.extraHeaders) {
-            //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-            // }
-            if (crawlOpts?.proxyUrl) {
-                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
-            }
+            const headersToSet = { ...crawlOpts?.extraHeaders };
             if (crawlOpts?.cookies?.length) {
                 const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-                curl.setOpt(Curl.option.COOKIE, cookieChunks.join('; '));
+                headersToSet['Cookie'] = cookieChunks.join('; ');
             }
             if (crawlOpts?.referer) {
-                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+                headersToSet['Referer'] = crawlOpts.referer;
+            }
+            if (crawlOpts?.overrideUserAgent) {
+                headersToSet['User-Agent'] = crawlOpts.overrideUserAgent;
+            }
+
+            this.curlImpersonateHeader(curl, headersToSet);
+            if (crawlOpts?.proxyUrl) {
+                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
+                const username = proxyUrlCopy.username;
+                const password = proxyUrlCopy.password;
+                proxyUrlCopy.username = '';
+                proxyUrlCopy.password = '';
+                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
+                curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
+                if (username && password) {
+                    curl.setOpt(Curl.option.PROXYUSERNAME, username);
+                    curl.setOpt(Curl.option.PROXYPASSWORD, password);
+                }
             }
 
             curl.on('end', (statusCode, _data, headers) => {
@@ -341,7 +375,7 @@ export class CurlControl extends AsyncService {
         return curlSnapshot!;
     }
 
-    async urlToFile(urlToCrawl: URL, crawlOpts?: ScrappingOptions) {
+    async urlToFile(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
         let contentType = '';
         const result = await new Promise<{
             statusCode: number,
@@ -354,41 +388,48 @@ export class CurlControl extends AsyncService {
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
-
-            if (crawlOpts?.overrideUserAgent) {
-                curl.setOpt(Curl.option.USERAGENT, crawlOpts.overrideUserAgent);
+            if (crawlOpts?.method) {
+                curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
+            }
+            if (crawlOpts?.body) {
+                curl.setOpt(Curl.option.POSTFIELDS, crawlOpts.body.toString());
             }
 
-            this.curlImpersonateHeader(curl, crawlOpts?.extraHeaders);
-            // if (crawlOpts?.extraHeaders) {
-            //     curl.setOpt(Curl.option.HTTPHEADER, Object.entries(crawlOpts.extraHeaders).map(([k, v]) => `${k}: ${v}`));
-            // }
-            if (crawlOpts?.proxyUrl) {
-                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
-                const username = proxyUrlCopy.username;
-                const password = proxyUrlCopy.password;
-                proxyUrlCopy.username = '';
-                proxyUrlCopy.password = '';
-                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
-                curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
-                if (username && password) {
-                    curl.setOpt(Curl.option.PROXYUSERNAME, username);
-                    curl.setOpt(Curl.option.PROXYPASSWORD, password);
-                }
-                curl.setOpt(Curl.option.PROXY, crawlOpts.proxyUrl);
-            }
-
+            const headersToSet = { ...crawlOpts?.extraHeaders };
             if (crawlOpts?.cookies?.length) {
                 const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-                curl.setOpt(Curl.option.COOKIE, cookieChunks.join('; '));
+                headersToSet['Cookie'] = cookieChunks.join('; ');
             }
             if (crawlOpts?.referer) {
-                curl.setOpt(Curl.option.REFERER, crawlOpts.referer);
+                headersToSet['Referer'] = crawlOpts.referer;
+            }
+            if (crawlOpts?.overrideUserAgent) {
+                headersToSet['User-Agent'] = crawlOpts.overrideUserAgent;
             }
 
-            curl.on('end', (statusCode, _data, headers) => {
+            this.curlImpersonateHeader(curl, headersToSet);
+
+            if (crawlOpts?.proxyUrl) {
+                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
+                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
+                // const username = proxyUrlCopy.username;
+                // const password = proxyUrlCopy.password;
+                // proxyUrlCopy.username = '';
+                // proxyUrlCopy.password = '';
+                // curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
+                // if (username && password) {
+                //     curl.setOpt(Curl.option.PROXYUSERNAME, username);
+                //     curl.setOpt(Curl.option.PROXYPASSWORD, password);
+                // }
+            }
+
+            curl.on('end', (statusCode, data, headers) => {
                 this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode, headers });
-                curl.close();
+                if (typeof data === 'string' || Buffer.isBuffer(data)) {
+                    curl.close()
+                } else if (isReadable(data)) {
+                    (data as any).once('end', ()=> curl.close());
+                }
             });
 
             curl.on('error', (err) => {
@@ -459,5 +500,50 @@ export class CurlControl extends AsyncService {
         });
 
         return result;
+    }
+
+    async sideLoad(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
+        const curlResult = await this.urlToFile(targetUrl, crawlOpts);
+        let finalURL = targetUrl;
+        const sideLoadOpts: CURLScrappingOptions['sideLoad'] = {
+            impersonate: {},
+            proxyOrigin: {},
+        };
+        for (const headers of curlResult.headers) {
+            sideLoadOpts.impersonate[finalURL.href] = {
+                status: headers.result?.code || -1,
+                headers: _.omit(headers, 'result'),
+                contentType: headers['Content-Type'] || headers['content-type'],
+            };
+            if (crawlOpts?.proxyUrl) {
+                sideLoadOpts.proxyOrigin[finalURL.origin] = crawlOpts.proxyUrl;
+            }
+            if (headers.result?.code && [301, 302, 307, 308].includes(headers.result.code)) {
+                const location = headers.Location || headers.location;
+                if (!location) {
+                    throw new Error(`Bad redirection: ${curlResult.headers.length} times`);
+                }
+                finalURL = new URL(location, finalURL);
+            }
+        }
+        const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
+        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type']).toLowerCase() || await curlResult.data.mimeType;
+        const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
+        const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
+
+        if (sideLoadOpts.impersonate[finalURL.href] && await curlResult.data.size){
+            sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
+        }
+
+        return {
+            sideLoadOpts,
+            chain: curlResult.headers,
+            status: curlResult.statusCode,
+            headers: lastHeaders,
+            contentType,
+            contentDisposition,
+            fileName,
+            file: curlResult.data
+        };
     }
 }

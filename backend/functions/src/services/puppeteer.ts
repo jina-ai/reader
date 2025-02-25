@@ -1,7 +1,7 @@
 import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
-import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick, ParamValidationError } from 'civkit';
+import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick, ParamValidationError, FancyFile } from 'civkit';
 import { Logger } from '../shared/services/logger';
 
 import type { Browser, CookieParam, GoToOptions, HTTPResponse, Page, Viewport } from 'puppeteer';
@@ -14,6 +14,8 @@ import { SecurityCompromiseError, ServiceCrashedError, ServiceNodeResourceDrainE
 import { TimeoutError } from 'puppeteer';
 import _ from 'lodash';
 import { isIP } from 'net';
+import { CurlControl } from './curl';
+import { readFile } from 'fs/promises';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -84,7 +86,14 @@ export interface ScrappingOptions {
     viewport?: Viewport;
 
     sideLoad?: {
-        impersonate: { [url: string]: { status: number, headers: { [k: string]: string | string[]; }, body: string | Buffer; }; };
+        impersonate: {
+            [url: string]: {
+                status: number;
+                headers: { [k: string]: string | string[]; };
+                contentType?: string;
+                body?: FancyFile;
+            };
+        };
         proxyOrigin: { [origin: string]: string; };
     };
 
@@ -466,6 +475,7 @@ export class PuppeteerControl extends AsyncService {
 
     constructor(
         protected globalLogger: Logger,
+        protected curlControl: CurlControl,
     ) {
         super(...arguments);
         this.setMaxListeners(2 * Math.floor(os.totalmem() / (256 * 1024 * 1024)) + 1); 148 - 95;
@@ -520,6 +530,7 @@ export class PuppeteerControl extends AsyncService {
         });
         this.ua = await this.browser.userAgent();
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
+        this.curlControl.impersonateChrome(this.ua);
 
         this.emit('ready');
 
@@ -755,7 +766,7 @@ export class PuppeteerControl extends AsyncService {
         this.pagePhase.delete(page);
     }
 
-    async *scrap(parsedUrl: URL, options?: ScrappingOptions): AsyncGenerator<PageSnapshot | undefined> {
+    async *scrap(parsedUrl: URL, options: ScrappingOptions = {}): AsyncGenerator<PageSnapshot | undefined> {
         // parsedUrl.search = '';
         const url = parsedUrl.toString();
 
@@ -767,7 +778,8 @@ export class PuppeteerControl extends AsyncService {
         const page = await this.getNextPage();
         this.pagePhase.set(page, 'active');
         page.on('response', (resp) => {
-            if (resp.request().isNavigationRequest()) {
+            const req = resp.request();
+            if (req.frame() === page.mainFrame() && req.isNavigationRequest()) {
                 navigationResponse = resp;
             }
             if (!resp.ok()) {
@@ -780,7 +792,82 @@ export class PuppeteerControl extends AsyncService {
                 pdfUrls.push(url);
             }
         });
-        if (options?.extraHeaders) {
+        page.on('request', async (req) => {
+            if (req.isInterceptResolutionHandled()) {
+                return;
+            };
+            const reqUrlParsed = new URL(req.url());
+            const sideload = options.sideLoad;
+
+            const impersonate = sideload?.impersonate[reqUrlParsed.href];
+            if (impersonate) {
+                let body;
+                if (impersonate.body) {
+                    body = await readFile(await impersonate.body.filePath);
+                    if (req.isInterceptResolutionHandled()) {
+                        return;
+                    }
+                }
+                return req.respond({
+                    status: impersonate.status,
+                    headers: impersonate.headers,
+                    contentType: impersonate.contentType,
+                    body,
+                }, 999);
+            }
+
+            const proxy = options.proxyUrl || sideload?.proxyOrigin?.[reqUrlParsed.origin];
+
+            if (proxy) {
+                const curled = await this.curlControl.sideLoad(reqUrlParsed, {
+                    ...options,
+                    method: req.method(),
+                    body: req.postData(),
+                    extraHeaders: {
+                        ...req.headers(),
+                        ...options.extraHeaders,
+                    },
+                    proxyUrl: proxy
+                });
+                if (req.isInterceptResolutionHandled()) {
+                    return;
+                };
+
+                if (curled.chain.length === 1) {
+                    const body = await readFile(await curled.file.filePath);
+                    if (req.isInterceptResolutionHandled()) {
+                        return;
+                    };
+                    return req.respond({
+                        status: curled.status,
+                        headers: _.omit(curled.headers, 'result'),
+                        contentType: curled.contentType,
+                        body,
+                    }, 999);
+                }
+                options.sideLoad ??= curled.sideLoadOpts;
+                _.merge(options.sideLoad, curled.sideLoadOpts);
+                const firstReq = curled.chain[0];
+
+                return req.respond({
+                    status: firstReq.result!.code,
+                    headers: _.omit(firstReq, 'result'),
+                }, 999);
+            }
+
+            const overrides = req.continueRequestOverrides();
+            const continueArgs = [{
+                ...overrides,
+                headers: {
+                    ...req.headers(),
+                    ...overrides?.headers,
+                    ...options.extraHeaders,
+                }
+            }, 1] as const;
+
+            return req.continue(continueArgs[0], continueArgs[1]);
+        });
+        if (options.extraHeaders) {
             page.on('request', async (req) => {
                 if (req.isInterceptResolutionHandled()) {
                     return;
@@ -801,7 +888,7 @@ export class PuppeteerControl extends AsyncService {
         }
         let pageScriptEvaluations: Promise<unknown>[] = [];
         let frameScriptEvaluations: Promise<unknown>[] = [];
-        if (options?.injectPageScripts?.length) {
+        if (options.injectPageScripts?.length) {
             page.on('framenavigated', (frame) => {
                 if (frame !== page.mainFrame()) {
                     return;
@@ -814,7 +901,7 @@ export class PuppeteerControl extends AsyncService {
                 );
             });
         }
-        if (options?.injectFrameScripts?.length) {
+        if (options.injectFrameScripts?.length) {
             page.on('framenavigated', (frame) => {
                 frameScriptEvaluations.push(
                     Promise.allSettled(options.injectFrameScripts!.map((x) => frame.evaluate(x).catch((err) => {
@@ -825,34 +912,34 @@ export class PuppeteerControl extends AsyncService {
         }
         const sn = this.snMap.get(page);
         this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
-        if (options?.locale) {
+        if (options.locale) {
             // Add headers via request interception to walk around this bug
             // https://github.com/puppeteer/puppeteer/issues/10235
             // await page.setExtraHTTPHeaders({
-            //     'Accept-Language': options?.locale
+            //     'Accept-Language': options.locale
             // });
 
             await page.evaluateOnNewDocument(() => {
                 Object.defineProperty(navigator, "language", {
                     get: function () {
-                        return options?.locale;
+                        return options.locale;
                     }
                 });
                 Object.defineProperty(navigator, "languages", {
                     get: function () {
-                        return [options?.locale];
+                        return [options.locale];
                     }
                 });
             });
         }
 
-        if (options?.proxyUrl) {
+        if (options.proxyUrl) {
             await page.useProxy(options.proxyUrl, {
                 headers: options.extraHeaders,
                 interceptResolutionPriority: 2,
             });
         }
-        if (options?.cookies) {
+        if (options.cookies) {
             const mapped = options.cookies.map((x) => {
                 const draft: CookieParam = {
                     name: x.name,
@@ -882,10 +969,10 @@ export class PuppeteerControl extends AsyncService {
                 });
             }
         }
-        if (options?.overrideUserAgent) {
+        if (options.overrideUserAgent) {
             await page.setUserAgent(options.overrideUserAgent);
         }
-        if (options?.viewport) {
+        if (options.viewport) {
             await page.setViewport(options.viewport);
         }
 
@@ -927,13 +1014,13 @@ export class PuppeteerControl extends AsyncService {
             );
         });
 
-        const timeout = options?.timeoutMs || 30_000;
+        const timeout = options.timeoutMs || 30_000;
         const goToOptions: GoToOptions = {
             waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
             timeout,
         };
 
-        if (options?.referer) {
+        if (options.referer) {
             goToOptions.referer = options.referer;
         }
 
@@ -1025,7 +1112,7 @@ export class PuppeteerControl extends AsyncService {
             });
         gotoPromise.catch(() => 'just dont crash anything');
         let waitForPromise: Promise<any> | undefined;
-        if (options?.waitForSelector) {
+        if (options.waitForSelector) {
             const t0 = Date.now();
             waitForPromise = nextSnapshotDeferred.promise.then(() => {
                 const t1 = Date.now();
@@ -1060,7 +1147,7 @@ export class PuppeteerControl extends AsyncService {
                 if (waitForPromise) {
                     ckpt.push(waitForPromise);
                 }
-                if (options?.minIntervalMs) {
+                if (options.minIntervalMs) {
                     ckpt.push(delay(options.minIntervalMs));
                 }
                 let error;
@@ -1080,7 +1167,7 @@ export class PuppeteerControl extends AsyncService {
                     } as PageSnapshot;
                     break;
                 }
-                if (options?.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
+                if (options.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
                     screenshot = Buffer.from(await page.screenshot());
                     pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
                     lastHTML = snapshot.html;

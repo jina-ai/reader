@@ -56,5 +56,41 @@
       "preLaunchTask": "Fullstack:prepare",
       "killBehavior": "polite"
     },
+    {
+      "name": "Debug Stand Alone Crawl",
+      "request": "launch",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
+      },
+      "cwd": "${workspaceFolder}/backend/functions",
+      "program": "build/stand-alone/crawl.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "preLaunchTask": "Backend:build:watch",
+      "killBehavior": "forceful"
+    },
+    {
+      "name": "Debug Stand Alone Search",
+      "request": "launch",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
+      },
+      "cwd": "${workspaceFolder}/backend/functions",
+      "program": "build/stand-alone/search.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "preLaunchTask": "Backend:build:watch",
+      "killBehavior": "forceful"
+    },
   ]
 }
