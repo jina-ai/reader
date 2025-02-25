@@ -804,7 +804,6 @@ export class CrawlerHost extends RPCHost {
             referer: opts.referer,
             viewport: opts.viewport,
             engine: opts.engine,
-            version: opts.version,
         };
 
         if (opts.locale) {

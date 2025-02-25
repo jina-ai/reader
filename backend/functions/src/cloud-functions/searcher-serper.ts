@@ -83,11 +83,15 @@ export class SearcherHost extends RPCHost {
         auth: JinaEmbeddingsAuthDTO,
         @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
         count: number,
+        @Param('version', { default: 1, validate: (v) => v >= 1 && v <= 2 })
+        version: number,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
+        const isVersion2 = version === 2;
+
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
         if (!noSlashPath && !q) {
@@ -143,7 +147,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count ? (crawlOpts.version === 2 ? count : Math.min(Math.floor(count + 2)), 10) : 10
+            num: count ? (isVersion2 ? count : Math.min(Math.floor(count + 2)), 10) : 10
         }, crawlerOptions.noCache);
 
         if (!r.organic.length) {
@@ -154,21 +158,18 @@ export class SearcherHost extends RPCHost {
             delete crawlOpts.timeoutMs;
         }
 
-        if (crawlOpts.version === 2) {
+        if (isVersion2) {
             const result = [];
             for (const x of r.organic) {
                 const url = new URL(x.link);
                 const favicon = await this.getFavicon(url.origin);
 
-                const formatted = await this.snapshotFormatter.formatSnapshot('text', {
+                const tokens = this.assignChargeAmount([{
                     title: x.title,
-                    description: q + x.snippet + x.title + x.link,
-                    href: x.link,
-                    html: '',
+                    url: x.link,
                     text: q + x.snippet + x.title + x.link,
-                });
-
-                const tokens = this.assignChargeAmount([formatted]);
+                    [Symbol.dispose]: () => { },
+                }]);
                 chargeAmount += tokens;
 
                 result.push({
