@@ -82,6 +82,7 @@ export interface ScrappingOptions {
     injectFrameScripts?: string[];
     injectPageScripts?: string[];
     viewport?: Viewport;
+    version?: number
 }
 
 
