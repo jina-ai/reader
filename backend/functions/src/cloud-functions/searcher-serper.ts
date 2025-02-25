@@ -159,18 +159,11 @@ export class SearcherHost extends RPCHost {
         }
 
         if (isVersion2) {
+            chargeAmount = 1000;
             const result = [];
             for (const x of r.organic) {
                 const url = new URL(x.link);
                 const favicon = await this.getFavicon(url.origin);
-
-                const tokens = this.assignChargeAmount([{
-                    title: x.title,
-                    url: x.link,
-                    text: q + x.snippet + x.title + x.link,
-                    [Symbol.dispose]: () => { },
-                }]);
-                chargeAmount += tokens;
 
                 result.push({
                     url: x.link,
@@ -178,13 +171,15 @@ export class SearcherHost extends RPCHost {
                     snippet: x.snippet,
                     domain: url.origin,
                     favicon: favicon,
-                    usage: {
-                        tokens
-                    }
                 });
             }
 
-            return result;
+            return {
+                result,
+                usage: {
+                    tokens: chargeAmount,
+                }
+            };
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, count + 2), crawlOpts,
