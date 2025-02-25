@@ -12,7 +12,7 @@ import { Request, Response } from 'express';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { SerperSearchResult } from '../db/searched';
-import { CrawlerOptions } from '../dto/scrapping-options';
+import { CrawlerOptions } from '../dto/crawler-options';
 import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
 import { GoogleSearchExplicitOperatorsDto, SerperSearchService } from '../services/serper-search';
 import { SerperSearchQueryParams, SerperSearchResponse } from '../shared/3rd-party/serper-search';

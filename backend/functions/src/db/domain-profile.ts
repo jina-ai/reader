@@ -1,6 +1,6 @@
 import { Also, Prop } from 'civkit';
 import { FirestoreRecord } from '../shared/lib/firestore';
-import { ENGINE_TYPE } from '../dto/scrapping-options';
+import { ENGINE_TYPE } from '../dto/crawler-options';
 
 @Also({
     dictOf: Object

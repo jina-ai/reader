@@ -125,6 +125,11 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Proxy': {
+                    description: `Use a proxy server provided by Jina AI.\n\nOptionally specify two-letter country code.`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Set-Cookie': {
                     description: `Sets cookie(s) to the headless browser for your request. \n\n` +
                         `Syntax is the same with standard Set-Cookie`,
@@ -296,6 +301,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop()
     proxyUrl?: string;
+
+    @Prop()
+    proxy?: string;
 
     @Prop()
     userAgent?: string;
@@ -479,6 +487,8 @@ export class CrawlerOptions extends AutoCastable {
 
         const proxyUrl = ctx?.req.get('x-proxy-url');
         instance.proxyUrl ??= proxyUrl;
+        const proxy = ctx?.req.get('x-proxy');
+        instance.proxy ??= proxy;
 
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;

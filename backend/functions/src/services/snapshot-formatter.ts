@@ -13,7 +13,7 @@ import { PDFExtractor } from './pdf-extract';
 import { cleanAttribute } from '../utils/misc';
 import _ from 'lodash';
 import { STATUS_CODES } from 'http';
-import type { CrawlerOptions } from '../dto/scrapping-options';
+import type { CrawlerOptions } from '../dto/crawler-options';
 import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
 

@@ -14,7 +14,7 @@ import robotsParser from 'robots-parser';
 import { DOMParser } from '@xmldom/xmldom';
 
 import { AdaptiveCrawlerOptions } from '../dto/adaptive-crawler-options';
-import { CrawlerOptions } from '../dto/scrapping-options';
+import { CrawlerOptions } from '../dto/crawler-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { AdaptiveCrawlTask, AdaptiveCrawlTaskStatus } from '../db/adaptive-crawl-task';
 import { getFunctions } from 'firebase-admin/functions';

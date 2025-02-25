@@ -254,8 +254,8 @@ export class CurlControl extends AsyncService {
                 }
             }
 
-            curl.on('end', (statusCode, _data, headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode, headers });
+            curl.on('end', (statusCode, _data, _headers) => {
+                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode });
                 curl.close();
             });
 
@@ -426,9 +426,9 @@ export class CurlControl extends AsyncService {
             curl.on('end', (statusCode, data, headers) => {
                 this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode, headers });
                 if (typeof data === 'string' || Buffer.isBuffer(data)) {
-                    curl.close()
+                    curl.close();
                 } else if (isReadable(data)) {
-                    (data as any).once('end', ()=> curl.close());
+                    (data as any).once('end', () => curl.close());
                 }
             });
 
@@ -531,7 +531,7 @@ export class CurlControl extends AsyncService {
         const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
         const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
 
-        if (sideLoadOpts.impersonate[finalURL.href] && await curlResult.data.size){
+        if (sideLoadOpts.impersonate[finalURL.href] && await curlResult.data.size) {
             sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
         }
 

@@ -15,7 +15,7 @@ import { randomUUID } from 'crypto';
 import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/scrapping-options';
+import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/crawler-options';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { DomainBlockade } from '../db/domain-blockade';
 import { DomainProfile } from '../db/domain-profile';
@@ -671,14 +671,14 @@ export class CrawlerHost extends RPCHost {
                 return;
             }
 
-            const analyzed1 = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
-            analyzed1.title ??= analyzed1.title;
-            if (analyzed1.tokens < 200 || sideLoaded.status !== 200) {
+            let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
+            draftSnapshot.title ??= analyzed.title;
+            if (!crawlOpts?.proxyUrl && analyzed.tokens < 200 || sideLoaded.status !== 200) {
                 const proxyUrl = await this.proxyProvider.alloc();
                 const proxyLoaded = await this.curlControl.sideLoad(urlToCrawl, { ...crawlOpts, proxyUrl: proxyUrl.href, timeoutMs: 6_000 });
                 const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
-                const analyzed2 = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
-                if (analyzed2.tokens >= 200) {
+                analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
+                if (proxyLoaded.status === 200 && analyzed.tokens >= 200) {
                     draftSnapshot = proxySnapshot;
                     sideLoaded = proxyLoaded;
                 }
@@ -688,7 +688,7 @@ export class CrawlerHost extends RPCHost {
                 yield draftSnapshot;
             }
 
-            if (crawlOpts && sideLoaded.status === 200) {
+            if (crawlOpts && sideLoaded.status === 200 && analyzed.tokens >= 200) {
                 crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
             }
         } catch (err: any) {
@@ -823,6 +823,11 @@ export class CrawlerHost extends RPCHost {
             viewport: opts.viewport,
             engine: opts.engine,
         };
+
+        if (opts.proxy && !crawlOpts.proxyUrl) {
+            const proxyUrl = await this.proxyProvider.alloc(opts.proxy);
+            crawlOpts.proxyUrl = proxyUrl.href;
+        }
 
         if (opts.locale) {
             crawlOpts.extraHeaders ??= {};
