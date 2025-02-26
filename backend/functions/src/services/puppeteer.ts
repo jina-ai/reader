@@ -797,6 +797,11 @@ export class PuppeteerControl extends AsyncService {
                 return;
             };
             const reqUrlParsed = new URL(req.url());
+            if (!reqUrlParsed.protocol.startsWith('http')) {
+                const overrides = req.continueRequestOverrides();
+
+                return req.continue(overrides, 0);
+            }
             const sideload = options.sideLoad;
 
             const impersonate = sideload?.impersonate[reqUrlParsed.href];
@@ -819,42 +824,50 @@ export class PuppeteerControl extends AsyncService {
             const proxy = options.proxyUrl || sideload?.proxyOrigin?.[reqUrlParsed.origin];
 
             if (proxy) {
-                const curled = await this.curlControl.sideLoad(reqUrlParsed, {
-                    ...options,
-                    method: req.method(),
-                    body: req.postData(),
-                    extraHeaders: {
-                        ...req.headers(),
-                        ...options.extraHeaders,
-                    },
-                    proxyUrl: proxy
-                });
-                if (req.isInterceptResolutionHandled()) {
-                    return;
-                };
-
-                if (curled.chain.length === 1) {
-                    const body = await readFile(await curled.file.filePath);
+                try {
+                    const curled = await this.curlControl.sideLoad(reqUrlParsed, {
+                        ...options,
+                        method: req.method(),
+                        body: req.postData(),
+                        extraHeaders: {
+                            ...req.headers(),
+                            ...options.extraHeaders,
+                        },
+                        proxyUrl: proxy
+                    });
                     if (req.isInterceptResolutionHandled()) {
                         return;
                     };
-                    return req.respond({
-                        status: curled.status,
-                        headers: _.omit(curled.headers, 'result'),
-                        contentType: curled.contentType,
-                        body,
-                    }, 999);
-                }
-                options.sideLoad ??= curled.sideLoadOpts;
-                _.merge(options.sideLoad, curled.sideLoadOpts);
-                const firstReq = curled.chain[0];
 
-                return req.respond({
-                    status: firstReq.result!.code,
-                    headers: _.omit(firstReq, 'result'),
-                }, 999);
+                    if (curled.chain.length === 1) {
+                        const body = await readFile(await curled.file.filePath);
+                        if (req.isInterceptResolutionHandled()) {
+                            return;
+                        };
+                        return req.respond({
+                            status: curled.status,
+                            headers: _.omit(curled.headers, 'result'),
+                            contentType: curled.contentType,
+                            body,
+                        }, 999);
+                    }
+                    options.sideLoad ??= curled.sideLoadOpts;
+                    _.merge(options.sideLoad, curled.sideLoadOpts);
+                    const firstReq = curled.chain[0];
+
+                    return req.respond({
+                        status: firstReq.result!.code,
+                        headers: _.omit(firstReq, 'result'),
+                    }, 999);
+                } catch (err: any) {
+                    this.logger.warn(`Failed to sideload ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err: marshalErrorLike(err) });
+
+                }
             }
 
+            if (req.isInterceptResolutionHandled()) {
+                return;
+            };
             const overrides = req.continueRequestOverrides();
             const continueArgs = [{
                 ...overrides,
@@ -933,12 +946,6 @@ export class PuppeteerControl extends AsyncService {
             });
         }
 
-        if (options.proxyUrl) {
-            await page.useProxy(options.proxyUrl, {
-                headers: options.extraHeaders,
-                interceptResolutionPriority: 2,
-            });
-        }
         if (options.cookies) {
             const mapped = options.cookies.map((x) => {
                 const draft: CookieParam = {

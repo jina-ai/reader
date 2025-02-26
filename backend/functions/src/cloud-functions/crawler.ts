@@ -2,6 +2,7 @@ import {
     assignTransferProtocolMeta, marshalErrorLike,
     RPCHost, RPCReflection,
     AssertionFailureError, ParamValidationError, Defer,
+    retry,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, BudgetExceededError, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect, SecurityCompromiseError } from '../shared';
@@ -35,6 +36,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     removeSelector?: string | string[];
     keepImgDataUrl?: boolean;
     engine?: string;
+    allocProxy?: string;
 }
 
 const indexProto = {
@@ -664,23 +666,31 @@ export class CrawlerHost extends RPCHost {
         }
 
         try {
-            let sideLoaded = await this.curlControl.sideLoad(urlToCrawl, crawlOpts);
+            const altOpts = { ...crawlOpts, timeoutMs: 6_000 };
+            let sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
+                await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts) :
+                await this.curlControl.sideLoad(urlToCrawl, altOpts).catch((err) => {
+                    this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
+                    return this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
+                });
             let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
-            if (!sideLoaded.contentType.startsWith('text/html')) {
+            if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
                 yield draftSnapshot;
                 return;
             }
 
             let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
             draftSnapshot.title ??= analyzed.title;
-            if (!crawlOpts?.proxyUrl && analyzed.tokens < 200 || sideLoaded.status !== 200) {
-                const proxyUrl = await this.proxyProvider.alloc();
-                const proxyLoaded = await this.curlControl.sideLoad(urlToCrawl, { ...crawlOpts, proxyUrl: proxyUrl.href, timeoutMs: 6_000 });
+            let fallbackProxyIsUsed = false;
+            if (!crawlOpts?.proxyUrl && (analyzed.tokens < 200 || sideLoaded.status !== 200)) {
+                const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
+
                 const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
                 analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
-                if (proxyLoaded.status === 200 && analyzed.tokens >= 200) {
+                if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
                     draftSnapshot = proxySnapshot;
                     sideLoaded = proxyLoaded;
+                    fallbackProxyIsUsed = true;
                 }
             }
 
@@ -688,11 +698,15 @@ export class CrawlerHost extends RPCHost {
                 yield draftSnapshot;
             }
 
-            if (crawlOpts && sideLoaded.status === 200 && analyzed.tokens >= 200) {
+            if (crawlOpts && (sideLoaded.status === 200 || analyzed.tokens >= 200 || crawlOpts.allocProxy)) {
                 crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
+                this.logger.info(`Side load seems to work, applying side load.`, { url: urlToCrawl.href });
+                if (fallbackProxyIsUsed) {
+                    this.logger.info(`Proxy seems to salvage the page`, { url: urlToCrawl.href });
+                }
             }
         } catch (err: any) {
-            this.logger.warn(`Failed to Curl ${urlToCrawl}`, { err: marshalErrorLike(err) });
+            this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
         }
 
         try {
@@ -822,12 +836,8 @@ export class CrawlerHost extends RPCHost {
             referer: opts.referer,
             viewport: opts.viewport,
             engine: opts.engine,
+            allocProxy: opts.proxy,
         };
-
-        if (opts.proxy && !crawlOpts.proxyUrl) {
-            const proxyUrl = await this.proxyProvider.alloc(opts.proxy);
-            crawlOpts.proxyUrl = proxyUrl.href;
-        }
 
         if (opts.locale) {
             crawlOpts.extraHeaders ??= {};
@@ -894,17 +904,25 @@ export class CrawlerHost extends RPCHost {
             return output;
         }
 
-        if (snapshot.pdfs?.length) {
-            const pdfUrl = snapshot.pdfs[0];
+        const snapshotCopy = _.cloneDeep(snapshot);
+
+        if (snapshotCopy.pdfs?.length) {
+            const pdfUrl = snapshotCopy.pdfs[0];
             if (pdfUrl.startsWith('http')) {
+                const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
+                if (sideLoaded?.body) {
+                    snapshotCopy.pdfs[0] = pathToFileURL(await sideLoaded?.body.filePath).href;
+                    return this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
+                }
+
                 const r = await this.curlControl.download(new URL(pdfUrl), scrappingOptions);
                 if (r.data) {
-                    snapshot.pdfs[0] = pathToFileURL(await r.data.filePath).href;
+                    snapshotCopy.pdfs[0] = pathToFileURL(await r.data.filePath).href;
                 }
             }
         }
 
-        return this.snapshotFormatter.formatSnapshot(respondWith, snapshot, presumedURL, urlValidMs);
+        return this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
     }
 
     async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {
@@ -1014,5 +1032,20 @@ export class CrawlerHost extends RPCHost {
             digest: md5Hasher.hash(key),
             path: finalPath,
         };
+    }
+
+    @retry(3)
+    async sideLoadWithAllocatedProxy(url: URL, opts?: ExtraScrappingOptions) {
+        const proxy = await this.proxyProvider.alloc(opts?.allocProxy);
+        const r = await this.curlControl.sideLoad(url, {
+            ...opts,
+            proxyUrl: proxy.href,
+        });
+
+        if (opts && opts.allocProxy) {
+            opts.proxyUrl ??= proxy.href;
+        }
+
+        return { ...r, proxy };
     }
 }

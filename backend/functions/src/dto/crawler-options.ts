@@ -530,6 +530,9 @@ export class CrawlerOptions extends AutoCastable {
         if (this.noCache) {
             return false;
         }
+        if (this.proxy || this.proxyUrl) {
+            return false;
+        }
         if (this.cacheTolerance === 0) {
             return false;
         }
