@@ -147,7 +147,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count ? (isVersion2 ? count : Math.min(Math.floor(count + 2), 12)) : 12
+            num: count > 10 ? 20 : 10
         }, crawlerOptions.noCache);
 
         if (!r.organic.length) {
@@ -161,7 +161,7 @@ export class SearcherHost extends RPCHost {
         if (isVersion2) {
             chargeAmount = 10000;
             const result = [];
-            for (const x of r.organic) {
+            for (const x of r.organic.slice(0, count)) {
                 const url = new URL(x.link);
                 const favicon = await this.getFavicon(url.origin);
 
@@ -481,7 +481,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
         return _.every(results, (x) => this.pageQualified(x)) && results.length >= targetResultCount;
     }
 
-    async getFavicon (domain: string) {
+    async getFavicon(domain: string) {
         const url = `https://www.google.com/s2/favicons?sz=32&domain_url=${domain}`;
 
         try {
