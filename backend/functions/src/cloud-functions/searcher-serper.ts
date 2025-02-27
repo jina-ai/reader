@@ -159,7 +159,7 @@ export class SearcherHost extends RPCHost {
         }
 
         if (isVersion2) {
-            chargeAmount = 1000;
+            chargeAmount = 10000;
             const result = [];
             for (const x of r.organic) {
                 const url = new URL(x.link);
