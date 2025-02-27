@@ -83,14 +83,13 @@ export class SearcherHost extends RPCHost {
         auth: JinaEmbeddingsAuthDTO,
         @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
         count: number,
-        @Param('version', { default: 1, validate: (v) => v >= 1 })
-        version: number,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
-        const isVersion2 = version === 2;
+        const version = ctx?.req.get('x-version');
+        const isVersion2 = version?.replace('v', '') === '2';
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
