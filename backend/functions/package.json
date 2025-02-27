@@ -82,6 +82,7 @@
     "eslint-config-google": "^0.14.0",
     "eslint-plugin-import": "^2.25.4",
     "firebase-functions-test": "^3.0.0",
+    "pino-pretty": "^13.0.0",
     "replicate": "^0.16.1",
     "typescript": "^5.5.4"
   },
