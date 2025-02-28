@@ -200,7 +200,7 @@ export class JSDomControl extends AsyncService {
     }
 
     @Threaded()
-    async inferSnapshot(snapshot: PageSnapshot): Promise<ExtendedSnapshot> {
+    async inferSnapshot(snapshot: PageSnapshot) {
         const t0 = Date.now();
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
         try {

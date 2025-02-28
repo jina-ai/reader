@@ -33,6 +33,7 @@ export interface FormattedPage {
     links?: { [k: string]: string; } | [string, string][];
     images?: { [k: string]: string; } | [string, string][];
     warning?: string;
+    favicon?: string;
     usage?: {
         total_tokens?: number;
         totalTokens?: number;
@@ -103,7 +104,7 @@ export class SnapshotFormatter extends AsyncService {
     }, nominalUrl?: URL, urlValidMs = 3600 * 1000 * 4) {
         const t0 = Date.now();
         const f = {
-            ... await this.getGeneralSnapshotMixins(snapshot),
+            ...(await this.getGeneralSnapshotMixins(snapshot)),
         };
         let modeOK = false;
 
@@ -191,6 +192,16 @@ export class SnapshotFormatter extends AsyncService {
         ) {
             const dt = Date.now() - t0;
             this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
+
+            const formatted: FormattedPage = {
+                title: (snapshot.parsed?.title || snapshot.title || '').trim(),
+                description: (snapshot.description || '').trim(),
+                url: nominalUrl?.toString() || snapshot.href?.trim(),
+                publishedTime: snapshot.parsed?.publishedTime || undefined,
+                [Symbol.dispose]: () => { },
+            };
+
+            Object.assign(f, formatted);
 
             return f;
         }

@@ -155,7 +155,7 @@ export class SearcherHost extends RPCHost {
             delete crawlOpts.timeoutMs;
         }
 
-        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results, crawlOpts,
+        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.web?.results.slice(0, count + 2), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
         );
@@ -325,7 +325,7 @@ export class SearcherHost extends RPCHost {
         for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
             const mapped = scrapped.map((x, i) => {
                 const upstreamSearchResult = searchResults[i];
-                if (!x || (!x.parsed && mode !== 'markdown')) {
+                if (!x) {
                     return {
                         url: upstreamSearchResult.url,
                         title: upstreamSearchResult.title,
@@ -371,18 +371,17 @@ export class SearcherHost extends RPCHost {
         }
 
         const filtered = searchResults.filter((x) => acceptSet.has(x)).slice(0, targetResultCount);
-        filtered.toString = searchResults.toString;
 
         const resultArray = filtered.map((x, i) => {
-
             return {
                 ...x,
                 toString(this: any) {
                     if (!this.content && this.description) {
-                        if (this.title) {
+                        if (this.title || x.textRepresentation) {
+                            const textRep = x.textRepresentation ? `\n[${i + 1}] Content: \n${x.textRepresentation}` : '';
                             return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}
+[${i + 1}] Description: ${this.description}${textRep}
 `;
                         }
 
@@ -445,6 +444,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
         return formattedPage.title &&
             formattedPage.content ||
             formattedPage.screenshotUrl ||
+            formattedPage.pageshotUrl ||
             formattedPage.text ||
             formattedPage.html;
     }
