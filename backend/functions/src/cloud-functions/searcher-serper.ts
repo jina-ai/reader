@@ -88,6 +88,7 @@ export class SearcherHost extends RPCHost {
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
+        // Return content by default
         const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
         const crawlWithoutContent = !respondWith.includes('content');
 
@@ -176,6 +177,7 @@ export class SearcherHost extends RPCHost {
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
+            crawlWithoutContent
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -328,18 +330,9 @@ export class SearcherHost extends RPCHost {
         } as FormattedPage;
 
         const dataItems = [
-            {
-                key: 'title',
-                label: 'Title',
-            },
-            {
-                key: 'url',
-                label: 'URL Source',
-            },
-            {
-                key: 'description',
-                label: 'Description',
-            },
+            { key: 'title', label: 'Title' },
+            { key: 'url', label: 'URL Source' },
+            { key: 'description', label: 'Description'},
         ]
 
         if (withContent) {
@@ -367,12 +360,11 @@ export class SearcherHost extends RPCHost {
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
+        withContent?: boolean
     ) {
         if (!searchResults) {
             return;
         }
-
-        const withContent = ['html', 'text', 'screenshot', 'markdown', 'content'].some(x => mode.includes(x));
 
         if (count === 0 || !withContent) {
             const resultArray = await Promise.all(searchResults.map((upstreamSearchResult, i) => {
