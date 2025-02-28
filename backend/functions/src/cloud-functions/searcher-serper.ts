@@ -338,13 +338,11 @@ export class SearcherHost extends RPCHost {
             }
         } else {
             const url = new URL(upstreamSearchResult.link);
-            result.domain = url.origin;
             result.favicon = await this.getFavicon(url.origin);
             result.toString = function () {
                 return `[${index + 1}] Title: ${this.title}
 [${index + 1}] URL Source: ${this.url}
 [${index + 1}] Description: ${this.description}
-[${index + 1}] Domain: ${this.domain}
 [${index + 1}] Favicon: ${this.favicon}
 `;
             }
