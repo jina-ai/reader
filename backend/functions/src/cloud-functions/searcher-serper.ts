@@ -3,6 +3,7 @@ import {
     RPCHost, RPCReflection,
     AssertionFailureError,
     objHashMd5B64Of,
+    assignMeta,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, Param, RPCReflect } from '../shared';
@@ -88,8 +89,9 @@ export class SearcherHost extends RPCHost {
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
-        const version = ctx?.req.get('x-version');
-        const isVersion2 = version?.replace('v', '') === '2';
+        // Return content by default
+        const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
+        const crawlWithoutContent = !respondWith.includes('content');
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
@@ -157,31 +159,26 @@ export class SearcherHost extends RPCHost {
             delete crawlOpts.timeoutMs;
         }
 
-        if (isVersion2) {
-            chargeAmount = 10000;
-            const result = [];
-            for (const x of r.organic.slice(0, count)) {
-                const url = new URL(x.link);
-                const favicon = await this.getFavicon(url.origin);
 
-                result.push({
-                    url: x.link,
-                    title: x.title,
-                    snippet: x.snippet,
-                    domain: url.origin,
-                    favicon: favicon,
-                });
+        let lastScrapped: any[] | undefined;
+        const targetResultCount = crawlWithoutContent ? count : count + 2;
+        const organicSearchResults = r.organic.slice(0, targetResultCount);
+        if (crawlWithoutContent || count === 0) {
+            const fakeResults = await this.fakeResult(crawlerOptions.respondWith, organicSearchResults, !crawlWithoutContent);
+            lastScrapped = fakeResults;
+            if (!crawlWithoutContent) {
+                chargeAmount = this.assignChargeAmount(lastScrapped);
+            } else {
+                chargeAmount = 10000;
             }
-
-            return {
-                result,
-                usage: {
-                    tokens: chargeAmount,
-                }
-            };
+            this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
+            if ((!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) || count === 0) {
+                return lastScrapped;
+            }
+            return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
         }
 
-        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, count + 2), crawlOpts,
+        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
         );
@@ -217,7 +214,6 @@ export class SearcherHost extends RPCHost {
             return sseStream;
         }
 
-        let lastScrapped: any[] | undefined;
         let earlyReturn = false;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
@@ -248,6 +244,7 @@ export class SearcherHost extends RPCHost {
                 }
                 chargeAmount = this.assignChargeAmount(scrapped);
 
+                this.assignTokenUsage(scrapped, chargeAmount, crawlWithoutContent);
                 return scrapped;
             }
 
@@ -263,6 +260,7 @@ export class SearcherHost extends RPCHost {
                 chargeAmount = this.assignChargeAmount(lastScrapped);
             }
 
+            this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
             return lastScrapped;
         }
 
@@ -316,8 +314,69 @@ export class SearcherHost extends RPCHost {
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
     }
 
-    async *fetchSearchResults(
+    assignTokenUsage(result: FormattedPage[], chargeAmount: number, crawlWithoutContent: boolean) {
+        if (crawlWithoutContent) {
+            chargeAmount = 10000;
+            if (result) {
+                result.forEach((x) => {
+                    delete x.usage;
+                });
+            }
+        }
+
+        assignMeta(result, { usage: { tokens: chargeAmount } });
+    }
+
+    async fakeResult(
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
+        searchResults?: SerperSearchResponse['organic'],
+        withContent: boolean = false
+    ) {
+        if (!searchResults) {
+            return [];
+        }
+
+        const resultArray = await Promise.all(searchResults.map(async (upstreamSearchResult, index) => {
+            const result = {
+                url: upstreamSearchResult.link,
+                title: upstreamSearchResult.title,
+                description: upstreamSearchResult.snippet,
+            } as FormattedPage;
+
+            const dataItems = [
+                { key: 'title', label: 'Title' },
+                { key: 'url', label: 'URL Source' },
+                { key: 'description', label: 'Description'},
+            ]
+
+            if (withContent) {
+                result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
+            }
+            if (mode.includes('favicon')) {
+                const url = new URL(upstreamSearchResult.link);
+                result.favicon = await this.getFavicon(url.origin);
+                dataItems.push({
+                    key: 'favicon',
+                    label: 'Favicon',
+                });
+            }
+
+            result.toString = function () {
+                const self = this as any;
+                return dataItems.map((x) => `[${index + 1}] ${x.label}: ${self[x.key]}`).join('\n') + '\n';
+            }
+            return result;
+        }));
+
+        resultArray.toString = function () {
+            return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
+        };
+
+        return resultArray;
+    }
+
+    async *fetchSearchResults(
+        mode: string | 'markdown' | 'html' | 'text' | 'screenshot' | 'favicon' | 'content',
         searchResults?: SerperSearchResponse['organic'],
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
@@ -326,26 +385,7 @@ export class SearcherHost extends RPCHost {
         if (!searchResults) {
             return;
         }
-        if (count === 0) {
-            const resultArray = searchResults.map((upstreamSearchResult, i) => ({
-                url: upstreamSearchResult.link,
-                title: upstreamSearchResult.title,
-                description: upstreamSearchResult.snippet,
-                content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : '',
-                toString() {
-                    return `[${i + 1}] Title: ${this.title}
-[${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}
-`;
-                }
 
-            })) as FormattedPage[];
-            resultArray.toString = function () {
-                return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
-            };
-            yield resultArray;
-            return;
-        }
         const urls = searchResults.map((x) => new URL(x.link));
         const snapshotMap = new WeakMap();
         for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
