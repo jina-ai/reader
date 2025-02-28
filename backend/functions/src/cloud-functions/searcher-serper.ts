@@ -131,6 +131,20 @@ export class SearcherHost extends RPCHost {
         );
 
         rpcReflect.finally(() => {
+            if (resultMode === 'minimal') {
+                chargeAmount = 10000;
+                if (lastScrapped) {
+                    lastScrapped.forEach((x, ind) => {
+                        delete x.usage;
+                        if (ind === lastScrapped!.length - 1) {
+                            x.usage = {
+                                tokens: chargeAmount,
+                            };
+                        }
+                    })
+                }
+            }
+
             if (chargeAmount) {
                 auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
                     this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
@@ -156,34 +170,12 @@ export class SearcherHost extends RPCHost {
             delete crawlOpts.timeoutMs;
         }
 
-        if (resultMode === 'minimal') {
-            chargeAmount = 10000;
 
-            const result = await Promise.all(r.organic.slice(0, count).map(async (x, ind) => {
-                const url = new URL(x.link);
-                const favicon = await this.getFavicon(url.origin);
-                const item: Partial<FormattedPage> = {
-                    url: x.link,
-                    title: x.title,
-                    description: x.snippet,
-                    domain: url.origin,
-                    favicon: favicon,
-                };
-
-                if (ind === count - 1) {
-                    item.usage = {
-                        tokens: chargeAmount,
-                    };
-                }
-                return item;
-            }))
-
-            return result;
-        }
-
-        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, count + 2), crawlOpts,
+        const targetResultCount = resultMode === 'minimal' ? count : count + 2;
+        const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
+            resultMode !== 'minimal'
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -300,7 +292,7 @@ export class SearcherHost extends RPCHost {
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
-
+        console.log('lastScrapped', lastScrapped);
         if (earlyReturnTimer) {
             clearTimeout(earlyReturnTimer);
         }
@@ -316,29 +308,64 @@ export class SearcherHost extends RPCHost {
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
     }
 
+    async generateResult(
+        mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
+        upstreamSearchResult: {
+            title: string;
+            link: string;
+            snippet: string;
+            date: string;
+            siteLinks?: { title: string; link: string; }[];
+            position: number,
+        },
+        index: number,
+        withContent: boolean = false
+    ) {
+        const result = {
+            url: upstreamSearchResult.link,
+            title: upstreamSearchResult.title,
+            description: upstreamSearchResult.snippet,
+        } as FormattedPage;
+
+        if (withContent) {
+            result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
+            result.toString = function () {
+                return `[${index + 1}] Title: ${this.title}
+[${index + 1}] URL Source: ${this.url}
+[${index + 1}] Description: ${this.description}
+`;
+            }
+        } else {
+            const url = new URL(upstreamSearchResult.link);
+            result.domain = url.origin;
+            result.favicon = await this.getFavicon(url.origin);
+            result.toString = function () {
+                return `[${index + 1}] Title: ${this.title}
+[${index + 1}] URL Source: ${this.url}
+[${index + 1}] Description: ${this.description}
+[${index + 1}] Domain: ${this.domain}
+[${index + 1}] Favicon: ${this.favicon}
+`;
+            }
+        }
+        return result;
+    }
+
     async *fetchSearchResults(
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
         searchResults?: SerperSearchResponse['organic'],
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
+        withContent?: boolean
     ) {
+        console.log(withContent)
         if (!searchResults) {
             return;
         }
-        if (count === 0) {
-            const resultArray = searchResults.map((upstreamSearchResult, i) => ({
-                url: upstreamSearchResult.link,
-                title: upstreamSearchResult.title,
-                description: upstreamSearchResult.snippet,
-                content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : '',
-                toString() {
-                    return `[${i + 1}] Title: ${this.title}
-[${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}
-`;
-                }
-
+        if (count === 0 || withContent === false) {
+            const resultArray = await Promise.all(searchResults.map((upstreamSearchResult, i) => {
+                return this.generateResult(mode, upstreamSearchResult, i, withContent);
             })) as FormattedPage[];
             resultArray.toString = function () {
                 return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
