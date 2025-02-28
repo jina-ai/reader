@@ -88,8 +88,7 @@ export class SearcherHost extends RPCHost {
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
-        const version = ctx?.req.get('x-version');
-        const isVersion2 = version?.replace('v', '') === '2';
+        const resultMode = ctx?.req.get('x-result-mode');
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
@@ -157,28 +156,29 @@ export class SearcherHost extends RPCHost {
             delete crawlOpts.timeoutMs;
         }
 
-        if (isVersion2) {
+        if (resultMode === 'minimal') {
             chargeAmount = 10000;
-            const result = [];
-            for (const x of r.organic.slice(0, count)) {
+
+            const result = await Promise.all(r.organic.slice(0, count).map(async (x, ind) => {
                 const url = new URL(x.link);
                 const favicon = await this.getFavicon(url.origin);
-
-                result.push({
+                const item: Partial<FormattedPage> = {
                     url: x.link,
                     title: x.title,
-                    snippet: x.snippet,
+                    description: x.snippet,
                     domain: url.origin,
                     favicon: favicon,
-                });
-            }
+                };
 
-            return {
-                result,
-                usage: {
-                    tokens: chargeAmount,
+                if (ind === count - 1) {
+                    item.usage = {
+                        tokens: chargeAmount,
+                    };
                 }
-            };
+                return item;
+            }))
+
+            return result;
         }
 
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, count + 2), crawlOpts,
