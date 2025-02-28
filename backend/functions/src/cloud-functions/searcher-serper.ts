@@ -294,7 +294,7 @@ export class SearcherHost extends RPCHost {
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
-        console.log('lastScrapped', lastScrapped);
+
         if (earlyReturnTimer) {
             clearTimeout(earlyReturnTimer);
         }
