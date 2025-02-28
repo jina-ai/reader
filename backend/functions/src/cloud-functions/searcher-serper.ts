@@ -88,7 +88,8 @@ export class SearcherHost extends RPCHost {
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
-        const resultMode = ctx?.req.get('x-result-mode');
+        const details = ctx?.req.get('x-details');
+        const withDetails = details !== 'none';
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
@@ -131,7 +132,7 @@ export class SearcherHost extends RPCHost {
         );
 
         rpcReflect.finally(() => {
-            if (resultMode === 'minimal') {
+            if (!withDetails) {
                 chargeAmount = 10000;
                 if (lastScrapped) {
                     lastScrapped.forEach((x, ind) => {
@@ -171,11 +172,11 @@ export class SearcherHost extends RPCHost {
         }
 
 
-        const targetResultCount = resultMode === 'minimal' ? count : count + 2;
+        const targetResultCount = !withDetails ? count : count + 2;
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
-            resultMode !== 'minimal'
+            withDetails
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -319,7 +320,7 @@ export class SearcherHost extends RPCHost {
             position: number,
         },
         index: number,
-        withContent: boolean = false
+        withDetails: boolean = false
     ) {
         const result = {
             url: upstreamSearchResult.link,
@@ -327,7 +328,7 @@ export class SearcherHost extends RPCHost {
             description: upstreamSearchResult.snippet,
         } as FormattedPage;
 
-        if (withContent) {
+        if (withDetails) {
             result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
             result.toString = function () {
                 return `[${index + 1}] Title: ${this.title}
@@ -357,15 +358,14 @@ export class SearcherHost extends RPCHost {
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
-        withContent?: boolean
+        withDetails?: boolean
     ) {
-        console.log(withContent)
         if (!searchResults) {
             return;
         }
-        if (count === 0 || withContent === false) {
+        if (count === 0 || withDetails === false) {
             const resultArray = await Promise.all(searchResults.map((upstreamSearchResult, i) => {
-                return this.generateResult(mode, upstreamSearchResult, i, withContent);
+                return this.generateResult(mode, upstreamSearchResult, i, withDetails);
             })) as FormattedPage[];
             resultArray.toString = function () {
                 return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
