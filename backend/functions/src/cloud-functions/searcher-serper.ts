@@ -88,8 +88,8 @@ export class SearcherHost extends RPCHost {
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
-        const details = ctx?.req.get('x-details');
-        const withDetails = details !== 'none';
+        const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
+        const crawlWithoutContent = !respondWith.includes('content');
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
@@ -132,7 +132,7 @@ export class SearcherHost extends RPCHost {
         );
 
         rpcReflect.finally(() => {
-            if (!withDetails) {
+            if (crawlWithoutContent) {
                 chargeAmount = 10000;
                 if (lastScrapped) {
                     lastScrapped.forEach((x, ind) => {
@@ -172,11 +172,10 @@ export class SearcherHost extends RPCHost {
         }
 
 
-        const targetResultCount = !withDetails ? count : count + 2;
+        const targetResultCount = crawlWithoutContent ? count : count + 2;
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
-            withDetails
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -320,7 +319,7 @@ export class SearcherHost extends RPCHost {
             position: number,
         },
         index: number,
-        withDetails: boolean = false
+        withContent: boolean = false
     ) {
         const result = {
             url: upstreamSearchResult.link,
@@ -328,42 +327,56 @@ export class SearcherHost extends RPCHost {
             description: upstreamSearchResult.snippet,
         } as FormattedPage;
 
-        if (withDetails) {
+        const dataItems = [
+            {
+                key: 'title',
+                label: 'Title',
+            },
+            {
+                key: 'url',
+                label: 'URL Source',
+            },
+            {
+                key: 'description',
+                label: 'Description',
+            },
+        ]
+
+        if (withContent) {
             result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
-            result.toString = function () {
-                return `[${index + 1}] Title: ${this.title}
-[${index + 1}] URL Source: ${this.url}
-[${index + 1}] Description: ${this.description}
-`;
-            }
-        } else {
+        }
+        if (mode.includes('favicon')) {
             const url = new URL(upstreamSearchResult.link);
             result.favicon = await this.getFavicon(url.origin);
-            result.toString = function () {
-                return `[${index + 1}] Title: ${this.title}
-[${index + 1}] URL Source: ${this.url}
-[${index + 1}] Description: ${this.description}
-[${index + 1}] Favicon: ${this.favicon}
-`;
-            }
+            dataItems.push({
+                key: 'favicon',
+                label: 'Favicon',
+            });
+        }
+
+        result.toString = function () {
+            const self = this as any;
+            return dataItems.map((x) => `[${index + 1}] ${x.label}: ${self[x.key]}`).join('\n') + '\n';
         }
         return result;
     }
 
     async *fetchSearchResults(
-        mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
+        mode: string | 'markdown' | 'html' | 'text' | 'screenshot' | 'favicon' | 'content',
         searchResults?: SerperSearchResponse['organic'],
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
-        withDetails?: boolean
     ) {
         if (!searchResults) {
             return;
         }
-        if (count === 0 || withDetails === false) {
+
+        const withContent = ['html', 'text', 'screenshot', 'markdown', 'content'].some(x => mode.includes(x));
+
+        if (count === 0 || !withContent) {
             const resultArray = await Promise.all(searchResults.map((upstreamSearchResult, i) => {
-                return this.generateResult(mode, upstreamSearchResult, i, withDetails);
+                return this.generateResult(mode, upstreamSearchResult, i, withContent);
             })) as FormattedPage[];
             resultArray.toString = function () {
                 return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
