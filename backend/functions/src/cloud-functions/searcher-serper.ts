@@ -3,6 +3,7 @@ import {
     RPCHost, RPCReflection,
     AssertionFailureError,
     objHashMd5B64Of,
+    assignMeta,
 } from 'civkit';
 import { singleton } from 'tsyringe';
 import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, Param, RPCReflect } from '../shared';
@@ -133,20 +134,6 @@ export class SearcherHost extends RPCHost {
         );
 
         rpcReflect.finally(() => {
-            if (crawlWithoutContent) {
-                chargeAmount = 10000;
-                if (lastScrapped) {
-                    lastScrapped.forEach((x, ind) => {
-                        delete x.usage;
-                        if (ind === lastScrapped!.length - 1) {
-                            x.usage = {
-                                tokens: chargeAmount,
-                            };
-                        }
-                    })
-                }
-            }
-
             if (chargeAmount) {
                 auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
                     this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
@@ -173,11 +160,27 @@ export class SearcherHost extends RPCHost {
         }
 
 
+        let lastScrapped: any[] | undefined;
         const targetResultCount = crawlWithoutContent ? count : count + 2;
+        const organicSearchResults = r.organic.slice(0, targetResultCount);
+        if (crawlWithoutContent || count === 0) {
+            const fakeResults = await this.fakeResult(crawlerOptions.respondWith, organicSearchResults, !crawlWithoutContent);
+            lastScrapped = fakeResults;
+            if (!crawlWithoutContent) {
+                chargeAmount = this.assignChargeAmount(lastScrapped);
+            } else {
+                chargeAmount = 10000;
+            }
+            this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
+            if ((!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) || count === 0) {
+                return lastScrapped;
+            }
+            return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
+        }
+
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
-            crawlWithoutContent
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -211,7 +214,6 @@ export class SearcherHost extends RPCHost {
             return sseStream;
         }
 
-        let lastScrapped: any[] | undefined;
         let earlyReturn = false;
         if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
             let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
@@ -242,6 +244,7 @@ export class SearcherHost extends RPCHost {
                 }
                 chargeAmount = this.assignChargeAmount(scrapped);
 
+                this.assignTokenUsage(scrapped, chargeAmount, crawlWithoutContent);
                 return scrapped;
             }
 
@@ -257,6 +260,7 @@ export class SearcherHost extends RPCHost {
                 chargeAmount = this.assignChargeAmount(lastScrapped);
             }
 
+            this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
             return lastScrapped;
         }
 
@@ -310,48 +314,65 @@ export class SearcherHost extends RPCHost {
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
     }
 
-    async generateResult(
+    assignTokenUsage(result: FormattedPage[], chargeAmount: number, crawlWithoutContent: boolean) {
+        if (crawlWithoutContent) {
+            chargeAmount = 10000;
+            if (result) {
+                result.forEach((x) => {
+                    delete x.usage;
+                });
+            }
+        }
+
+        assignMeta(result, { usage: { tokens: chargeAmount } });
+    }
+
+    async fakeResult(
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
-        upstreamSearchResult: {
-            title: string;
-            link: string;
-            snippet: string;
-            date: string;
-            siteLinks?: { title: string; link: string; }[];
-            position: number,
-        },
-        index: number,
+        searchResults?: SerperSearchResponse['organic'],
         withContent: boolean = false
     ) {
-        const result = {
-            url: upstreamSearchResult.link,
-            title: upstreamSearchResult.title,
-            description: upstreamSearchResult.snippet,
-        } as FormattedPage;
-
-        const dataItems = [
-            { key: 'title', label: 'Title' },
-            { key: 'url', label: 'URL Source' },
-            { key: 'description', label: 'Description'},
-        ]
-
-        if (withContent) {
-            result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
-        }
-        if (mode.includes('favicon')) {
-            const url = new URL(upstreamSearchResult.link);
-            result.favicon = await this.getFavicon(url.origin);
-            dataItems.push({
-                key: 'favicon',
-                label: 'Favicon',
-            });
+        if (!searchResults) {
+            return [];
         }
 
-        result.toString = function () {
-            const self = this as any;
-            return dataItems.map((x) => `[${index + 1}] ${x.label}: ${self[x.key]}`).join('\n') + '\n';
-        }
-        return result;
+        const resultArray = await Promise.all(searchResults.map(async (upstreamSearchResult, index) => {
+            const result = {
+                url: upstreamSearchResult.link,
+                title: upstreamSearchResult.title,
+                description: upstreamSearchResult.snippet,
+            } as FormattedPage;
+
+            const dataItems = [
+                { key: 'title', label: 'Title' },
+                { key: 'url', label: 'URL Source' },
+                { key: 'description', label: 'Description'},
+            ]
+
+            if (withContent) {
+                result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
+            }
+            if (mode.includes('favicon')) {
+                const url = new URL(upstreamSearchResult.link);
+                result.favicon = await this.getFavicon(url.origin);
+                dataItems.push({
+                    key: 'favicon',
+                    label: 'Favicon',
+                });
+            }
+
+            result.toString = function () {
+                const self = this as any;
+                return dataItems.map((x) => `[${index + 1}] ${x.label}: ${self[x.key]}`).join('\n') + '\n';
+            }
+            return result;
+        }));
+
+        resultArray.toString = function () {
+            return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
+        };
+
+        return resultArray;
     }
 
     async *fetchSearchResults(
@@ -360,22 +381,11 @@ export class SearcherHost extends RPCHost {
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
-        withContent?: boolean
     ) {
         if (!searchResults) {
             return;
         }
 
-        if (count === 0 || !withContent) {
-            const resultArray = await Promise.all(searchResults.map((upstreamSearchResult, i) => {
-                return this.generateResult(mode, upstreamSearchResult, i, withContent);
-            })) as FormattedPage[];
-            resultArray.toString = function () {
-                return this.map((x, i) => x ? x.toString() : '').join('\n\n').trimEnd() + '\n';
-            };
-            yield resultArray;
-            return;
-        }
         const urls = searchResults.map((x) => new URL(x.link));
         const snapshotMap = new WeakMap();
         for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
