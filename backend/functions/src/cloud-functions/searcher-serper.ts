@@ -91,7 +91,7 @@ export class SearcherHost extends RPCHost {
         const uid = await auth.solveUID();
         // Return content by default
         const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
-        const crawlWithoutContent = !respondWith.includes('content');
+        const crawlWithoutContent = respondWith.includes('no-content');
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
