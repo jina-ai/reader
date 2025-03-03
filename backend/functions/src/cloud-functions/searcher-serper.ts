@@ -164,7 +164,7 @@ export class SearcherHost extends RPCHost {
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const organicSearchResults = r.organic.slice(0, targetResultCount);
         if (crawlWithoutContent || count === 0) {
-            const fakeResults = await this.fakeResult(crawlerOptions.respondWith, organicSearchResults, !crawlWithoutContent);
+            const fakeResults = await this.fakeResult(crawlerOptions, organicSearchResults, !crawlWithoutContent);
             lastScrapped = fakeResults;
             if (!crawlWithoutContent) {
                 chargeAmount = this.assignChargeAmount(lastScrapped);
@@ -328,10 +328,12 @@ export class SearcherHost extends RPCHost {
     }
 
     async fakeResult(
-        mode: string | 'markdown' | 'html' | 'text' | 'screenshot',
+        crawlerOptions: CrawlerOptions,
         searchResults?: SerperSearchResponse['organic'],
         withContent: boolean = false
     ) {
+        const mode: string | 'markdown' | 'html' | 'text' | 'screenshot' = crawlerOptions.respondWith;
+
         if (!searchResults) {
             return [];
         }
@@ -352,7 +354,8 @@ export class SearcherHost extends RPCHost {
             if (withContent) {
                 result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
             }
-            if (mode.includes('no-content')) {
+
+            if (crawlerOptions.withFavicon) {
                 const url = new URL(upstreamSearchResult.link);
                 result.favicon = await this.getFavicon(url.origin);
                 dataItems.push({
@@ -391,9 +394,11 @@ export class SearcherHost extends RPCHost {
         for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
             const mapped = scrapped.map((x, i) => {
                 const upstreamSearchResult = searchResults[i];
+                const url = upstreamSearchResult.link;
+
                 if (!x) {
                     return {
-                        url: upstreamSearchResult.link,
+                        url,
                         title: upstreamSearchResult.title,
                         description: upstreamSearchResult.snippet,
                         content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : ''
@@ -412,12 +417,19 @@ export class SearcherHost extends RPCHost {
                     this.logger.error(`Failed to format snapshot for ${urls[i].href}`, { err: marshalErrorLike(err) });
 
                     return {
-                        url: upstreamSearchResult.link,
+                        url,
                         title: upstreamSearchResult.title,
                         description: upstreamSearchResult.snippet,
                         content: x.text,
                     };
                 });
+            }).map(async (x) => {
+                const page = await x;
+                if (crawlerOptions?.withFavicon && page.url) {
+                    const url = new URL(page.url);
+                    page.favicon = await this.getFavicon(url.origin);
+                }
+                return page;
             });
 
             const resultArray = await Promise.all(mapped) as FormattedPage[];
@@ -448,11 +460,11 @@ export class SearcherHost extends RPCHost {
                             const textRep = x.textRepresentation ? `\n[${i + 1}] Content: \n${x.textRepresentation}` : '';
                             return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}${textRep}
+[${i + 1}] Description: ${this.description}${textRep}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}
 `;
                         }
 
-                        return `[${i + 1}] No content available for ${this.url}`;
+                        return `[${i + 1}] No content available for ${this.url}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}`;
                     }
 
                     const mixins = [];
@@ -486,7 +498,7 @@ export class SearcherHost extends RPCHost {
                     }
 
                     return `[${i + 1}] Title: ${this.title}
-[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}
+[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
 ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;

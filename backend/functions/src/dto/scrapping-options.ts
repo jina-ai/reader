@@ -338,6 +338,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     jsonSchema?: object;
 
+    @Prop()
+    withFavicon?: boolean;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
@@ -495,6 +498,9 @@ export class CrawlerOptions extends AutoCastable {
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
         }
+
+        const withFavicon = ctx?.req.get('x-with-favicon');
+        instance.withFavicon = instance.withFavicon ?? Boolean(withFavicon);
 
         return instance;
     }
