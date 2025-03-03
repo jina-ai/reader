@@ -19,6 +19,7 @@ export enum ENGINE_TYPE {
     DIRECT = 'direct',
     VLM = 'vlm',
     READER_LM = 'readerlm-v2',
+    CF_BROWSER_RENDERING = 'cf-browser-rendering',
 }
 
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));

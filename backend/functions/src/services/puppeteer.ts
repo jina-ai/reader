@@ -817,7 +817,7 @@ export class PuppeteerControl extends AsyncService {
                     status: impersonate.status,
                     headers: impersonate.headers,
                     contentType: impersonate.contentType,
-                    body,
+                    body: body ? Uint8Array.from(body) : undefined,
                 }, 999);
             }
 
@@ -848,7 +848,7 @@ export class PuppeteerControl extends AsyncService {
                             status: curled.status,
                             headers: _.omit(curled.headers, 'result'),
                             contentType: curled.contentType,
-                            body,
+                            body: Uint8Array.from(body),
                         }, 999);
                     }
                     options.sideLoad ??= curled.sideLoadOpts;

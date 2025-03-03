@@ -28,6 +28,7 @@ import { LmControl } from '../services/lm';
 import { tryDecodeURIComponent } from '../utils/misc';
 import { pathToFileURL } from 'url';
 import { ProxyProvider } from '../shared/services/proxy-provider';
+import { CFBrowserRendering } from '../services/cf-browser-rendering';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -63,6 +64,7 @@ export class CrawlerHost extends RPCHost {
         protected globalLogger: Logger,
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
+        protected cfBrowserRendering: CFBrowserRendering,
         protected proxyProvider: ProxyProvider,
         protected lmControl: LmControl,
         protected jsdomControl: JSDomControl,
@@ -645,7 +647,19 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
-            yield this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
+            const snapshot = await this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
+            yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
+            return;
+        }
+        if (crawlOpts?.engine === ENGINE_TYPE.CF_BROWSER_RENDERING) {
+            const html = await this.cfBrowserRendering.fetchContent(urlToCrawl.href);
+            const snapshot = {
+                href: urlToCrawl.toString(),
+                html,
+                title: '',
+                text: '',
+            } as PageSnapshot;
+            yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
             return;
         }
 
@@ -682,7 +696,7 @@ export class CrawlerHost extends RPCHost {
             let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
             draftSnapshot.title ??= analyzed.title;
             let fallbackProxyIsUsed = false;
-            if (!crawlOpts?.proxyUrl && (analyzed.tokens < 200 || sideLoaded.status !== 200)) {
+            if ((!crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) && (analyzed.tokens < 200 || sideLoaded.status !== 200)) {
                 const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
 
                 const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
@@ -699,8 +713,8 @@ export class CrawlerHost extends RPCHost {
             }
 
             if (crawlOpts && (sideLoaded.status === 200 || analyzed.tokens >= 200 || crawlOpts.allocProxy)) {
+                this.logger.info(`Side load seems to work, applying to crawler.`, { url: urlToCrawl.href });
                 crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
-                this.logger.info(`Side load seems to work, applying side load.`, { url: urlToCrawl.href });
                 if (fallbackProxyIsUsed) {
                     this.logger.info(`Proxy seems to salvage the page`, { url: urlToCrawl.href });
                 }

@@ -5,7 +5,6 @@ import { singleton } from 'tsyringe';
 import { Curl, CurlFeature, HeaderInfo } from 'node-libcurl';
 import { PageSnapshot, ScrappingOptions } from './puppeteer';
 import { Logger } from '../shared/services/logger';
-import { JSDomControl } from './jsdom';
 import { AssertionFailureError, FancyFile } from 'civkit';
 import { TempFileManager } from '../shared';
 import { readFile } from 'fs/promises';
@@ -32,7 +31,6 @@ export class CurlControl extends AsyncService {
 
     constructor(
         protected globalLogger: Logger,
-        protected jsdomControl: JSDomControl,
         protected tempFileManager: TempFileManager,
     ) {
         super(...arguments);
@@ -235,6 +233,7 @@ export class CurlControl extends AsyncService {
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
+            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
             if (crawlOpts?.method) {
                 curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
             }
@@ -382,9 +381,7 @@ export class CurlControl extends AsyncService {
             }
         }
 
-        const curlSnapshot = await this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
-
-        return curlSnapshot!;
+        return snapshot;
     }
 
     async urlToFile(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
@@ -400,6 +397,7 @@ export class CurlControl extends AsyncService {
             curl.setOpt(Curl.option.FOLLOWLOCATION, true);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
+            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
             if (crawlOpts?.method) {
                 curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
             }
