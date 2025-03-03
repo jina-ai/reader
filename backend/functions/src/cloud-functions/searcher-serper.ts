@@ -352,7 +352,7 @@ export class SearcherHost extends RPCHost {
             if (withContent) {
                 result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
             }
-            if (mode.includes('favicon')) {
+            if (mode.includes('no-content')) {
                 const url = new URL(upstreamSearchResult.link);
                 result.favicon = await this.getFavicon(url.origin);
                 dataItems.push({
