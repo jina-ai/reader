@@ -4,6 +4,7 @@ on:
     branches:
       - main
       - ci-debug
+      - dev
     tags:
       - '*'
 
