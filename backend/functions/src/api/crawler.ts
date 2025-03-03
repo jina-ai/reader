@@ -392,7 +392,7 @@ export class CrawlerHost extends RPCHost {
                 );
             }
 
-            return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
+            return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null });
         }
 
         if (!lastScrapped) {
@@ -421,7 +421,7 @@ export class CrawlerHost extends RPCHost {
             );
         }
 
-        return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain', envelope: null });
+        return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null });
 
     }
 
