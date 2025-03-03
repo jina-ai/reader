@@ -1,22 +1,30 @@
-import {
-    assignTransferProtocolMeta, marshalErrorLike,
-    RPCHost, RPCReflection,
-    AssertionFailureError,
-    objHashMd5B64Of,
-} from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, Param, RPCReflect } from '../shared';
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import _ from 'lodash';
-import { Request, Response } from 'express';
-import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
-import { BraveSearchExplicitOperatorsDto, BraveSearchService } from '../services/brave-search';
-import { CrawlerHost, ExtraScrappingOptions } from './crawler';
-import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
-import { SearchResult } from '../db/searched';
+
+import {
+    assignTransferProtocolMeta, RPCHost, RPCReflection,
+    AssertionFailureError,
+    RawString,
+} from 'civkit/civ-rpc';
+import { marshalErrorLike } from 'civkit/lang';
+import { objHashMd5B64Of } from 'civkit/hash';
+
+import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import { WebSearchApiResponse, SearchResult as WebSearchResult } from '../shared/3rd-party/brave-types';
+import { WebSearchQueryParams } from '../shared/3rd-party/brave-search';
+
+import { CrawlerHost, ExtraScrappingOptions } from './crawler';
+import { SearchResult } from '../db/searched';
+import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { CrawlerOptions } from '../dto/crawler-options';
+import { BraveSearchExplicitOperatorsDto, BraveSearchService } from '../services/brave-search';
+
 import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
+import { GlobalLogger } from '../services/logger';
+import { AsyncLocalContext } from '../services/async-context';
+import { OutputServerEventStream } from '../lib/transform-server-event-stream';
+import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
+import { InsufficientBalanceError } from '../services/errors';
 
 
 @singleton()
@@ -32,9 +40,9 @@ export class SearcherHost extends RPCHost {
     targetResultCount = 5;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected rateLimitControl: RateLimitControl,
-        protected threadLocal: AsyncContext,
+        protected threadLocal: AsyncLocalContext,
         protected braveSearchService: BraveSearchService,
         protected crawler: CrawlerHost,
         protected snapshotFormatter: SnapshotFormatter,
@@ -48,39 +56,30 @@ export class SearcherHost extends RPCHost {
         this.emit('ready');
     }
 
-    @CloudHTTPv2({
-        name: 'search2',
-        runtime: {
-            cpu: 4,
-            memory: '4GiB',
-            timeoutSeconds: 300,
-            concurrency: 4,
+    @Method({
+        name: 'searchIndex',
+        ext: {
+            http: {
+                action: ['get', 'post'],
+                path: '/search'
+            }
         },
-        tags: ['Searcher'],
-        httpMethod: ['get', 'post'],
+        tags: ['search'],
         returnType: [String, OutputServerEventStream],
-        exposeRoot: true,
     })
-    @CloudHTTPv2({
-        runtime: {
-            cpu: 4,
-            memory: '16GiB',
-            timeoutSeconds: 300,
-            concurrency: 4,
-            maxInstances: 200,
-            minInstances: 1,
+    @Method({
+        ext: {
+            http: {
+                action: ['get', 'post'],
+                path: '::q'
+            }
         },
-        tags: ['Searcher'],
-        httpMethod: ['get', 'post'],
-        returnType: [String, OutputServerEventStream],
-        exposeRoot: true,
+        tags: ['search'],
+        returnType: [String, OutputServerEventStream, RawString],
     })
     async search(
         @RPCReflect() rpcReflect: RPCReflection,
-        @Ctx() ctx: {
-            req: Request,
-            res: Response,
-        },
+        @Ctx() ctx: Context,
         auth: JinaEmbeddingsAuthDTO,
         @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 10 })
         count: number,
@@ -90,14 +89,13 @@ export class SearcherHost extends RPCHost {
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
+        const noSlashPath = decodeURIComponent(ctx.path).slice(1);
         if (!noSlashPath && !q) {
-            const latestUser = uid ? await auth.assertUser() : undefined;
-            const index = this.crawler.getIndex(latestUser);
+            const index = await this.crawler.getIndex(ctx, auth);
             if (!uid) {
                 index.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
             }
-            if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+            if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
 
                 return index;
             }
@@ -160,7 +158,7 @@ export class SearcherHost extends RPCHost {
             count,
         );
 
-        if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
+        if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
@@ -193,7 +191,7 @@ export class SearcherHost extends RPCHost {
 
         let lastScrapped: any[] | undefined;
         let earlyReturn = false;
-        if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+        if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
             let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
             const setEarlyReturnTimer = () => {
                 if (earlyReturnTimer) {

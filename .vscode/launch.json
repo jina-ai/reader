@@ -63,6 +63,7 @@
         "--env-file=.secret.local",
       ],
       "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
         "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
       },
       "cwd": "${workspaceFolder}/backend/functions",
@@ -71,6 +72,7 @@
         "<node_internals>/**"
       ],
       "type": "node",
+      "outputCapture": "std",
       "preLaunchTask": "Backend:build:watch",
       "killBehavior": "forceful"
     },
@@ -81,6 +83,7 @@
         "--env-file=.secret.local",
       ],
       "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
         "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
       },
       "cwd": "${workspaceFolder}/backend/functions",
@@ -89,6 +92,7 @@
         "<node_internals>/**"
       ],
       "type": "node",
+      "outputCapture": "std",
       "preLaunchTask": "Backend:build:watch",
       "killBehavior": "forceful"
     },

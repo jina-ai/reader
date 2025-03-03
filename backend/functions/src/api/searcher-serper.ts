@@ -1,22 +1,26 @@
-import {
-    assignTransferProtocolMeta, marshalErrorLike,
-    RPCHost, RPCReflection,
-    AssertionFailureError,
-    objHashMd5B64Of,
-    assignMeta,
-} from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, CloudHTTPv2, Ctx, InsufficientBalanceError, Logger, OutputServerEventStream, Param, RPCReflect } from '../shared';
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
+import {
+    assignTransferProtocolMeta, RPCHost, RPCReflection, AssertionFailureError, assignMeta, RawString,
+} from 'civkit/civ-rpc';
+import { marshalErrorLike } from 'civkit/lang';
+import { objHashMd5B64Of } from 'civkit/hash';
 import _ from 'lodash';
-import { Request, Response } from 'express';
-import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
+
+import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
+import { SerperSearchQueryParams, SerperSearchResponse } from '../shared/3rd-party/serper-search';
+
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { SerperSearchResult } from '../db/searched';
 import { CrawlerOptions } from '../dto/crawler-options';
 import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
 import { GoogleSearchExplicitOperatorsDto, SerperSearchService } from '../services/serper-search';
-import { SerperSearchQueryParams, SerperSearchResponse } from '../shared/3rd-party/serper-search';
+
+import { GlobalLogger } from '../services/logger';
+import { AsyncLocalContext } from '../services/async-context';
+import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
+import { OutputServerEventStream } from '../lib/transform-server-event-stream';
+import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
+import { InsufficientBalanceError } from '../services/errors';
 
 
 @singleton()
@@ -32,9 +36,9 @@ export class SearcherHost extends RPCHost {
     targetResultCount = 5;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected rateLimitControl: RateLimitControl,
-        protected threadLocal: AsyncContext,
+        protected threadLocal: AsyncLocalContext,
         protected serperSearchService: SerperSearchService,
         protected crawler: CrawlerHost,
         protected snapshotFormatter: SnapshotFormatter,
@@ -48,39 +52,30 @@ export class SearcherHost extends RPCHost {
         this.emit('ready');
     }
 
-    @CloudHTTPv2({
-        name: 'search2',
-        runtime: {
-            cpu: 4,
-            memory: '4GiB',
-            timeoutSeconds: 300,
-            concurrency: 4,
+    @Method({
+        name: 'searchIndex',
+        ext: {
+            http: {
+                action: ['get', 'post'],
+                path: '/search'
+            }
         },
-        tags: ['Searcher'],
-        httpMethod: ['get', 'post'],
+        tags: ['search'],
         returnType: [String, OutputServerEventStream],
-        exposeRoot: true,
     })
-    @CloudHTTPv2({
-        runtime: {
-            cpu: 4,
-            memory: '16GiB',
-            timeoutSeconds: 300,
-            concurrency: 4,
-            maxInstances: 200,
-            minInstances: 1,
+    @Method({
+        ext: {
+            http: {
+                action: ['get', 'post'],
+                path: '::q'
+            }
         },
-        tags: ['Searcher'],
-        httpMethod: ['get', 'post'],
-        returnType: [String, OutputServerEventStream],
-        exposeRoot: true,
+        tags: ['search'],
+        returnType: [String, OutputServerEventStream, RawString],
     })
     async search(
         @RPCReflect() rpcReflect: RPCReflection,
-        @Ctx() ctx: {
-            req: Request,
-            res: Response,
-        },
+        @Ctx() ctx: Context,
         auth: JinaEmbeddingsAuthDTO,
         @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
         count: number,
@@ -90,18 +85,17 @@ export class SearcherHost extends RPCHost {
     ) {
         const uid = await auth.solveUID();
         // Return content by default
-        const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
+        const respondWith = ctx.get('X-Respond-With') ?? 'content';
         const crawlWithoutContent = !respondWith.includes('content');
 
         let chargeAmount = 0;
-        const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
+        const noSlashPath = decodeURIComponent(ctx.path).slice(1);
         if (!noSlashPath && !q) {
-            const latestUser = uid ? await auth.assertUser() : undefined;
-            const index = this.crawler.getIndex(latestUser);
+            const index = await this.crawler.getIndex(ctx, auth);
             if (!uid) {
                 index.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
             }
-            if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+            if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
 
                 return index;
             }
@@ -172,7 +166,7 @@ export class SearcherHost extends RPCHost {
                 chargeAmount = 10000;
             }
             this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
-            if ((!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) || count === 0) {
+            if ((!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) || count === 0) {
                 return lastScrapped;
             }
             return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
@@ -183,7 +177,7 @@ export class SearcherHost extends RPCHost {
             count,
         );
 
-        if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
+        if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
@@ -215,7 +209,7 @@ export class SearcherHost extends RPCHost {
         }
 
         let earlyReturn = false;
-        if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+        if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
             let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
             const setEarlyReturnTimer = () => {
                 if (earlyReturnTimer) {
@@ -346,8 +340,8 @@ export class SearcherHost extends RPCHost {
             const dataItems = [
                 { key: 'title', label: 'Title' },
                 { key: 'url', label: 'URL Source' },
-                { key: 'description', label: 'Description'},
-            ]
+                { key: 'description', label: 'Description' },
+            ];
 
             if (withContent) {
                 result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
@@ -364,7 +358,7 @@ export class SearcherHost extends RPCHost {
             result.toString = function () {
                 const self = this as any;
                 return dataItems.map((x) => `[${index + 1}] ${x.label}: ${self[x.key]}`).join('\n') + '\n';
-            }
+            };
             return result;
         }));
 

@@ -9,7 +9,7 @@ import {
     FirebaseStorageBucketControl, Logger, Param, TempFileManager
 } from '../shared';
 import _ from 'lodash';
-import { CrawlerHost } from './crawler';
+import { CrawlerHost } from '../api/crawler';
 
 import { Crawled } from '../db/crawled';
 import dayjs from 'dayjs';

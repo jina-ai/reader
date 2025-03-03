@@ -1,6 +1,6 @@
 import { Also, AutoCastable, ParamValidationError, Prop, RPC_CALL_ENVIRONMENT } from 'civkit'; // Adjust the import based on where your decorators are defined
-import type { Request, Response } from 'express';
 import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
+import { Context } from '../services/registry';
 
 export enum CONTENT_FORMAT {
     CONTENT = 'content',
@@ -349,13 +349,10 @@ export class CrawlerOptions extends AutoCastable {
 
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
-        const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
-            req: Request,
-            res: Response,
-        } | undefined;
+        const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as Context | undefined;
 
-        const customMode = ctx?.req.get('x-respond-with') || ctx?.req.get('x-return-format');
-        if (customMode !== undefined) {
+        const customMode = ctx?.get('x-respond-with') || ctx?.get('x-return-format');
+        if (customMode) {
             instance.respondWith = customMode;
         }
         if (instance.respondWith) {
@@ -370,74 +367,74 @@ export class CrawlerOptions extends AutoCastable {
             }
         }
 
-        const locale = ctx?.req.get('x-locale');
-        if (locale !== undefined) {
+        const locale = ctx?.get('x-locale');
+        if (locale) {
             instance.locale = locale;
         }
 
-        const referer = ctx?.req.get('x-referer');
-        if (referer !== undefined) {
+        const referer = ctx?.get('x-referer');
+        if (referer) {
             instance.referer = referer;
         }
 
-        const withGeneratedAlt = ctx?.req.get('x-with-generated-alt');
-        if (withGeneratedAlt !== undefined) {
+        const withGeneratedAlt = ctx?.get('x-with-generated-alt');
+        if (withGeneratedAlt) {
             instance.withGeneratedAlt = Boolean(withGeneratedAlt);
         }
-        const withLinksSummary = ctx?.req.get('x-with-links-summary');
-        if (withLinksSummary !== undefined) {
+        const withLinksSummary = ctx?.get('x-with-links-summary');
+        if (withLinksSummary) {
             if (withLinksSummary === 'all') {
                 instance.withLinksSummary = withLinksSummary;
             } else {
                 instance.withLinksSummary = Boolean(withLinksSummary);
             }
         }
-        const withImagesSummary = ctx?.req.get('x-with-images-summary');
-        if (withImagesSummary !== undefined) {
+        const withImagesSummary = ctx?.get('x-with-images-summary');
+        if (withImagesSummary) {
             instance.withImagesSummary = Boolean(withImagesSummary);
         }
-        const retainImages = ctx?.req.get('x-retain-images');
+        const retainImages = ctx?.get('x-retain-images');
         if (retainImages && IMAGE_RETENTION_MODE_VALUES.has(retainImages)) {
             instance.retainImages = retainImages as any;
         }
         if (instance.withGeneratedAlt) {
             instance.retainImages = 'all_p';
         }
-        const noCache = ctx?.req.get('x-no-cache');
-        if (noCache !== undefined) {
+        const noCache = ctx?.get('x-no-cache');
+        if (noCache) {
             instance.noCache = Boolean(noCache);
         }
         if (instance.noCache && instance.cacheTolerance === undefined) {
             instance.cacheTolerance = 0;
         }
-        let cacheTolerance = parseInt(ctx?.req.get('x-cache-tolerance') || '');
+        let cacheTolerance = parseInt(ctx?.get('x-cache-tolerance') || '');
         if (!isNaN(cacheTolerance)) {
             instance.cacheTolerance = cacheTolerance;
         }
 
-        const noGfm = ctx?.req.get('x-no-gfm');
+        const noGfm = ctx?.get('x-no-gfm');
         if (noGfm) {
             instance.noGfm = noGfm === 'table' ? noGfm : Boolean(noGfm);
         }
 
-        let timeoutSeconds = parseInt(ctx?.req.get('x-timeout') || '');
+        let timeoutSeconds = parseInt(ctx?.get('x-timeout') || '');
         if (!isNaN(timeoutSeconds) && timeoutSeconds > 0) {
             instance.timeout = timeoutSeconds <= 180 ? timeoutSeconds : 180;
-        } else if (ctx?.req.get('x-timeout')) {
+        } else if (ctx?.get('x-timeout')) {
             instance.timeout = null;
         }
 
-        const removeSelector = ctx?.req.get('x-remove-selector')?.split(', ');
-        instance.removeSelector ??= removeSelector;
-        const targetSelector = ctx?.req.get('x-target-selector')?.split(', ');
-        instance.targetSelector ??= targetSelector;
-        const waitForSelector = ctx?.req.get('x-wait-for-selector')?.split(', ');
-        instance.waitForSelector ??= waitForSelector || instance.targetSelector;
+        const removeSelector = ctx?.get('x-remove-selector')?.split(', ').filter(Boolean);
+        instance.removeSelector ??= removeSelector?.length ? removeSelector : undefined;
+        const targetSelector = ctx?.get('x-target-selector')?.split(', ').filter(Boolean);
+        instance.targetSelector ??= targetSelector?.length ? targetSelector : undefined;
+        const waitForSelector = ctx?.get('x-wait-for-selector')?.split(', ').filter(Boolean);
+        instance.waitForSelector ??= (waitForSelector?.length ? waitForSelector : undefined) || instance.targetSelector;
         instance.targetSelector = filterSelector(instance.targetSelector);
-        const overrideUserAgent = ctx?.req.get('x-user-agent');
+        const overrideUserAgent = ctx?.get('x-user-agent') || undefined;
         instance.userAgent ??= overrideUserAgent;
 
-        const engine = ctx?.req.get('x-engine');
+        const engine = ctx?.get('x-engine');
         if (engine) {
             instance.engine = engine;
         }
@@ -452,18 +449,18 @@ export class CrawlerOptions extends AutoCastable {
             instance.respondWith = CONTENT_FORMAT.READER_LM;
         }
 
-        const keepImgDataUrl = ctx?.req.get('x-keep-img-data-url');
-        if (keepImgDataUrl !== undefined) {
+        const keepImgDataUrl = ctx?.get('x-keep-img-data-url');
+        if (keepImgDataUrl) {
             instance.keepImgDataUrl = Boolean(keepImgDataUrl);
         }
-        const withIframe = ctx?.req.get('x-with-iframe');
-        if (withIframe !== undefined) {
+        const withIframe = ctx?.get('x-with-iframe');
+        if (withIframe) {
             instance.withIframe = withIframe.toLowerCase() === 'quoted' ? 'quoted' : Boolean(withIframe);
         }
         if (instance.withIframe) {
             instance.timeout ??= null;
         }
-        const withShadowDom = ctx?.req.get('x-with-shadow-dom');
+        const withShadowDom = ctx?.get('x-with-shadow-dom');
         if (withShadowDom) {
             instance.withShadowDom = Boolean(withShadowDom);
         }
@@ -472,7 +469,7 @@ export class CrawlerOptions extends AutoCastable {
         }
 
         const cookies: Cookie[] = [];
-        const setCookieHeaders = ctx?.req.get('x-set-cookie')?.split(', ') || (instance.setCookies as any as string[]);
+        const setCookieHeaders = (ctx?.get('x-set-cookie')?.split(', ') || (instance.setCookies as any as string[])).filter(Boolean);
         if (Array.isArray(setCookieHeaders)) {
             for (const setCookie of setCookieHeaders) {
                 cookies.push({
@@ -486,19 +483,15 @@ export class CrawlerOptions extends AutoCastable {
         }
         instance.setCookies = cookies;
 
-        const proxyUrl = ctx?.req.get('x-proxy-url');
-        instance.proxyUrl ??= proxyUrl;
-        const proxy = ctx?.req.get('x-proxy');
-        instance.proxy ??= proxy;
+        const proxyUrl = ctx?.get('x-proxy-url');
+        instance.proxyUrl ??= proxyUrl || undefined;
+        const proxy = ctx?.get('x-proxy');
+        instance.proxy ??= proxy || undefined;
 
-        if (instance.cacheTolerance) {
-            instance.cacheTolerance = instance.cacheTolerance * 1000;
-        }
-
-        const tokenBudget = ctx?.req.get('x-token-budget') || undefined;
+        const tokenBudget = ctx?.get('x-token-budget');
         instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;
 
-        const baseMode = ctx?.req.get('x-base') || undefined;
+        const baseMode = ctx?.get('x-base');
         if (baseMode) {
             instance.base = baseMode as any;
         }

@@ -5,7 +5,7 @@ import { ExtendedSnapshot, ImgBrief, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { Threaded } from '../shared/services/threaded';
-import type { ExtraScrappingOptions } from '../cloud-functions/crawler';
+import type { ExtraScrappingOptions } from '../api/crawler';
 import { tailwindClasses } from '../utils/tailwind-classes';
 import { countGPTToken } from '../shared';
 

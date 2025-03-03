@@ -11,16 +11,16 @@ process.env['FIREBASE_CONFIG'] ??= JSON.stringify({
 initializeApp();
 
 
-import { Logger, CloudFunctionRegistry, AsyncContext } from '../shared';
-import { AbstractRPCRegistry, OpenAPIManager } from 'civkit/civ-rpc';
-import { ExpressServer } from 'civkit/civ-rpc/express';
+import { Logger, AsyncContext } from '../shared';
+import { KoaServer } from 'civkit/civ-rpc/koa';
 import http2 from 'http2';
-import { SearcherHost } from '../cloud-functions/searcher-serper';
+import { SearcherHost } from '../api/searcher-serper';
 import { FsWalk, WalkOutEntity } from 'civkit/fswalk';
 import path from 'path';
 import fs from 'fs';
 import { mimeOfExt } from 'civkit/mime';
-import { NextFunction, Request, Response } from 'express';
+import { Context, Next } from 'koa';
+import { RPCRegistry } from '../services/registry';
 
 process.on('unhandledRejection', (err) => {
     console.error('Unhandled rejection', err);
@@ -36,7 +36,7 @@ process.on('uncaughtException', (err) => {
 });
 
 @singleton()
-export class SearchStandAloneServer extends ExpressServer {
+export class SearchStandAloneServer extends KoaServer {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     httpAlternativeServer?: typeof this['httpServer'];
@@ -44,20 +44,16 @@ export class SearchStandAloneServer extends ExpressServer {
 
     constructor(
         protected globalLogger: Logger,
-        protected registry: CloudFunctionRegistry,
+        protected registry: RPCRegistry,
         protected searcherHost: SearcherHost,
         protected threadLocal: AsyncContext,
     ) {
         super(...arguments);
-
-        registry.allHandsOnDeck().catch(() => void 0);
-        registry.title = 'reader';
-        registry.version = '0.1.0';
     }
 
     h2c() {
         this.httpAlternativeServer = this.httpServer;
-        this.httpServer = http2.createServer(this.expressApp);
+        this.httpServer = http2.createServer(this.koaApp.callback());
         // useResourceBasedDefaultTracker();
 
         return this;
@@ -79,37 +75,6 @@ export class SearchStandAloneServer extends ExpressServer {
         }
     }
 
-    makeAssetsServingController() {
-        return (req: Request, res: Response, next: NextFunction) => {
-            const requestPath = req.url;
-            const file = requestPath.slice(1);
-            if (!file) {
-                return next();
-            }
-
-            const asset = this.assets.get(file);
-            if (asset?.type !== 'file') {
-                return next();
-            }
-            res.type(mimeOfExt(path.extname(asset.path.toString())) || 'application/octet-stream');
-            res.set('Content-Length', asset.stats.size.toString());
-            fs.createReadStream(asset.path).pipe(res);
-
-            return;
-        };
-    }
-
-    makeMiscMiddleware() {
-        return (req: Request, res: Response, next: NextFunction) => {
-            if (req.method === 'OPTIONS') {
-                return res.status(200).end();
-            }
-            this.threadLocal.set('ip', req.ip);
-
-            return next();
-        };
-    }
-
     override listen(port: number) {
         const r = super.listen(port);
         if (this.httpAlternativeServer) {
@@ -122,47 +87,36 @@ export class SearchStandAloneServer extends ExpressServer {
         return r;
     }
 
-    override registerRoutes(): void {
+    makeAssetsServingController() {
+        return (ctx: Context, next: Next) => {
+            const requestPath = ctx.path;
+            const file = requestPath.slice(1);
+            if (!file) {
+                return next();
+            }
 
-        const openAPIManager = new OpenAPIManager();
-        openAPIManager.document('/{q}', ['get', 'post'], this.registry.conf.get('search')!);
-        const openapiJsonPath = '/openapi.json';
-        this.expressRootRouter.get(openapiJsonPath, (req, res) => {
-            const baseURL = new URL(req.url, `${req.protocol}://${req.headers.host}`);
-            baseURL.pathname = baseURL.pathname.replace(new RegExp(`${openapiJsonPath}$`, 'i'), '').replace(/\/+$/g, '');
-            baseURL.search = '';
-            const content = openAPIManager.createOpenAPIObject(baseURL.toString(), {
-                info: {
-                    title: this.registry.title,
-                    description: `${this.registry.title} openAPI documentations`,
-                    'x-logo': {
-                        url: this.registry.logoUrl || `https://www.openapis.org/wp-content/uploads/sites/3/2018/02/OpenAPI_Logo_Pantone-1.png`
-                    }
-                }
-            }, (this.registry.constructor as typeof AbstractRPCRegistry).envelope, req.query as any);
-            res.statusCode = 200;
-            res.end(JSON.stringify(content));
-        });
+            const asset = this.assets.get(file);
+            if (asset?.type !== 'file') {
+                return next();
+            }
 
-        this.expressRootRouter.use('/',
-            ...this.registry.expressMiddlewares,
-            this.makeMiscMiddleware(),
-            this.makeAssetsServingController(),
-            this.registry.makeShimController('search')
-        );
+            ctx.body = fs.createReadStream(asset.path);
+            ctx.type = mimeOfExt(path.extname(asset.path.toString())) || 'application/octet-stream';
+            ctx.set('Content-Length', asset.stats.size.toString());
+
+            return;
+        };
     }
 
-    protected override featureSelect(): void {
-        this.insertAsyncHookMiddleware();
-        this.insertHealthCheckMiddleware(this.healthCheckEndpoint);
-        this.insertLogRequestsMiddleware();
-        this.registerOpenAPIDocsRoutes('/docs');
-
-        this.registerRoutes();
+    registerRoutes(): void {
+        this.koaApp.use(this.makeAssetsServingController());
+        this.koaApp.use(this.registry.makeShimController());
     }
+
+
 }
 const instance = container.resolve(SearchStandAloneServer);
 
 export default instance;
 
-instance.serviceReady().then((s) => s.listen(parseInt(process.env.PORT || '') || 3000));
+instance.serviceReady().then((s) => s.h2c().listen(parseInt(process.env.PORT || '') || 3000));

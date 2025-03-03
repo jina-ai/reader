@@ -1,34 +1,43 @@
-import {
-    assignTransferProtocolMeta, marshalErrorLike,
-    RPCHost, RPCReflection,
-    AssertionFailureError, ParamValidationError, Defer,
-    retry,
-} from 'civkit';
 import { singleton } from 'tsyringe';
-import { AsyncContext, BudgetExceededError, CloudHTTPv2, Ctx, FirebaseStorageBucketControl, InsufficientBalanceError, Logger, OutputServerEventStream, RPCReflect, SecurityCompromiseError } from '../shared';
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
-import _ from 'lodash';
-import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
-import { Request, Response } from 'express';
-const pNormalizeUrl = import("@esm2cjs/normalize-url");
-import { Crawled } from '../db/crawled';
+import { pathToFileURL } from 'url';
 import { randomUUID } from 'crypto';
-import { JinaEmbeddingsAuthDTO } from '../shared/dto/jina-embeddings-auth';
+import _ from 'lodash';
 
-import { countGPTToken as estimateToken } from '../shared/utils/openai';
+import {
+    assignTransferProtocolMeta, RPCHost, RPCReflection,
+    AssertionFailureError, ParamValidationError,
+    RawString,
+} from 'civkit/civ-rpc';
+import { marshalErrorLike } from 'civkit/lang';
+import { Defer } from 'civkit/defer';
+import { retry } from 'civkit/decorators';
+
 import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/crawler-options';
-import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
+
+import { Crawled } from '../db/crawled';
 import { DomainBlockade } from '../db/domain-blockade';
 import { DomainProfile } from '../db/domain-profile';
-import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
+import { OutputServerEventStream } from '../lib/transform-server-event-stream';
+
+import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { JSDomControl } from '../services/jsdom';
 import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
 import { CurlControl } from '../services/curl';
 import { LmControl } from '../services/lm';
 import { tryDecodeURIComponent } from '../utils/misc';
-import { pathToFileURL } from 'url';
-import { ProxyProvider } from '../shared/services/proxy-provider';
 import { CFBrowserRendering } from '../services/cf-browser-rendering';
+
+import { GlobalLogger } from '../services/logger';
+import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
+import { AsyncLocalContext } from '../services/async-context';
+import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
+import { BudgetExceededError, InsufficientBalanceError, SecurityCompromiseError } from '../services/errors';
+
+import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
+import { countGPTToken as estimateToken } from '../shared/utils/openai';
+import { ProxyProvider } from '../shared/services/proxy-provider';
+import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
+import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -61,7 +70,7 @@ export class CrawlerHost extends RPCHost {
     domainProfileRetentionMs = 1000 * 3600 * 24 * 30;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
         protected cfBrowserRendering: CFBrowserRendering,
@@ -71,7 +80,7 @@ export class CrawlerHost extends RPCHost {
         protected snapshotFormatter: SnapshotFormatter,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected rateLimitControl: RateLimitControl,
-        protected threadLocal: AsyncContext,
+        protected threadLocal: AsyncLocalContext,
         protected fbHealthCheck: FirebaseRoundTripChecker,
     ) {
         super(...arguments);
@@ -120,81 +129,86 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    getIndex(user?: JinaEmbeddingsTokenAccount) {
+    @Method({
+        description: 'Index of the service',
+        proto: {
+            http: {
+                action: 'get',
+                path: '/',
+            }
+        },
+        tags: ['misc'],
+        returnType: [String, Object],
+    })
+    async getIndex(@Ctx() ctx: Context, @Param({ required: false }) auth?: JinaEmbeddingsAuthDTO) {
         const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
 
         Object.assign(indexObject, {
-            usage1: 'https://r.jina.ai/YOUR_URL',
-            usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
+            usage1: `${ctx.origin}/YOUR_URL`,
+            usage2: `${ctx.origin}/search/YOUR_SEARCH_QUERY`,
             homepage: 'https://jina.ai/reader',
             sourceCode: 'https://github.com/jina-ai/reader',
         });
 
-        if (user) {
+        await auth?.solveUID();
+        if (auth && auth.user) {
             indexObject[''] = undefined;
-            indexObject.authenticatedAs = `${user.user_id} (${user.full_name})`;
-            indexObject.balanceLeft = user.wallet.total_balance;
+            indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
+            indexObject.balanceLeft = auth.user.wallet.total_balance;
         }
 
-        return indexObject;
+        if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
+            return indexObject;
+        }
+
+        return assignTransferProtocolMeta(`${indexObject}`,
+            { contentType: 'text/plain; charset=utf-8', envelope: null }
+        );
     }
 
-    @CloudHTTPv2({
-        name: 'crawl2',
-        runtime: {
-            memory: '4GiB',
-            timeoutSeconds: 300,
-            concurrency: 22,
+
+    @Method({
+        name: 'crawlByPostingToIndex',
+        description: 'Crawl any url into markdown',
+        proto: {
+            http: {
+                action: 'POST',
+                path: '/',
+            }
         },
-        tags: ['Crawler'],
-        httpMethod: ['get', 'post'],
+        tags: ['crawl'],
         returnType: [String, OutputServerEventStream],
-        exposeRoot: true,
     })
-    @CloudHTTPv2({
-        runtime: {
-            memory: '4GiB',
-            cpu: 2,
-            timeoutSeconds: 300,
-            concurrency: 10,
-            maxInstances: 1000,
-            minInstances: 1,
+    @Method({
+        description: 'Crawl any url into markdown',
+        proto: {
+            http: {
+                action: ['GET', 'POST'],
+                path: '::url',
+            }
         },
-        tags: ['Crawler'],
-        httpMethod: ['get', 'post'],
-        returnType: [String, OutputServerEventStream],
-        exposeRoot: true,
+        tags: ['crawl'],
+        returnType: [String, OutputServerEventStream, RawString],
     })
     async crawl(
         @RPCReflect() rpcReflect: RPCReflection,
-        @Ctx() ctx: {
-            req: Request,
-            res: Response,
-        },
+        @Ctx() ctx: Context,
         auth: JinaEmbeddingsAuthDTO,
         crawlerOptionsHeaderOnly: CrawlerOptionsHeaderOnly,
         crawlerOptionsParamsAllowed: CrawlerOptions,
     ) {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
-        const crawlerOptions = ctx.req.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
+        const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
-        // Note req.url in express is actually unparsed `path`, e.g. `/some-path?abc`. Instead of a real url.
-        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.req.url), crawlerOptions);
+        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.path), crawlerOptions);
         if (!targetUrl) {
-            const latestUser = uid ? await auth.assertUser() : undefined;
-            if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
-                return this.getIndex(latestUser);
-            }
-
-            return assignTransferProtocolMeta(`${this.getIndex(latestUser)}`,
-                { contentType: 'text/plain', envelope: null }
-            );
+            return await this.getIndex(ctx, auth);
         }
 
         // Prevent circular crawling
         this.puppeteerControl.circuitBreakerHosts.add(
-            ctx.req.hostname.toLowerCase()
+            ctx.hostname.toLowerCase()
         );
 
         if (uid) {
@@ -231,8 +245,8 @@ export class CrawlerHost extends RPCHost {
                     apiRoll.chargeAmount = chargeAmount;
                 }
             });
-        } else if (ctx.req.ip) {
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.req.ip, [rpcReflect.name.toUpperCase()],
+        } else if (ctx.ip) {
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.ip, [rpcReflect.name.toUpperCase()],
                 [
                     // 20 requests per minute
                     new Date(Date.now() - 60 * 1000), 20
@@ -263,9 +277,8 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
-
         const crawlOpts = await this.configure(crawlerOptions);
-        if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
+        if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
 
@@ -302,7 +315,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         let lastScrapped;
-        if (!ctx.req.accepts('text/plain') && (ctx.req.accepts('text/json') || ctx.req.accepts('application/json'))) {
+        if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
             for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
                 if (!crawlerOptions.isEarlyReturnApplicable()) {
@@ -428,7 +441,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         let result: URL;
-        const normalizeUrl = (await pNormalizeUrl).default;
+        const normalizeUrl = require('@esm2cjs/normalize-url').default;
         try {
             result = new URL(
                 normalizeUrl(
@@ -696,7 +709,7 @@ export class CrawlerHost extends RPCHost {
             let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
             draftSnapshot.title ??= analyzed.title;
             let fallbackProxyIsUsed = false;
-            if ((!crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) && (analyzed.tokens < 200 || sideLoaded.status !== 200)) {
+            if ((!crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) && (analyzed.tokens < 42 || sideLoaded.status !== 200)) {
                 const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
 
                 const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);

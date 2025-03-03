@@ -123,8 +123,8 @@ export class CurlControl extends AsyncService {
                 curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
             }
 
-            curl.on('end', (statusCode, _data, headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToDownload}`, { statusCode });
+            curl.on('end', (statusCode, _data, _headers) => {
+                this.logger.debug(`CURL: [${statusCode}] ${urlToDownload.origin}`, { statusCode });
                 curl.close();
             });
 
@@ -433,8 +433,8 @@ export class CurlControl extends AsyncService {
                 // }
             }
 
-            curl.on('end', (statusCode, data, headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl}`, { statusCode });
+            curl.on('end', (statusCode, data, _headers) => {
+                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl.origin}`, { statusCode });
                 if (typeof data === 'string' || Buffer.isBuffer(data)) {
                     curl.close();
                 } else if (isReadable(data)) {
