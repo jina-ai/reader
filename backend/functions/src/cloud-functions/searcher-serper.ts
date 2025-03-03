@@ -91,7 +91,7 @@ export class SearcherHost extends RPCHost {
         const uid = await auth.solveUID();
         // Return content by default
         const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
-        const crawlWithoutContent = !respondWith.includes('content');
+        const crawlWithoutContent = respondWith.includes('no-content');
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
@@ -352,7 +352,7 @@ export class SearcherHost extends RPCHost {
             if (withContent) {
                 result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
             }
-            if (mode.includes('favicon')) {
+            if (mode.includes('no-content')) {
                 const url = new URL(upstreamSearchResult.link);
                 result.favicon = await this.getFavicon(url.origin);
                 dataItems.push({
