@@ -16,8 +16,9 @@ import { SerperSearchResult } from '../db/searched';
 import { CrawlerOptions } from '../dto/scrapping-options';
 import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
 import { GoogleSearchExplicitOperatorsDto, SerperSearchService } from '../services/serper-search';
-import { SerperSearchQueryParams, SerperSearchResponse } from '../shared/3rd-party/serper-search';
+import { SerperSearchQueryParams, SerperSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 
+const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES);
 
 @singleton()
 export class SearcherHost extends RPCHost {
@@ -82,10 +83,14 @@ export class SearcherHost extends RPCHost {
             res: Response,
         },
         auth: JinaEmbeddingsAuthDTO,
-        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
-        count: number,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
+        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
+        count: number,
+        @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v) }) gl?: string,
+        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
+        @Param('location') location?: string,
+        @Param('page') page?: number,
         @Param('q') q?: string,
     ) {
         const uid = await auth.solveUID();
@@ -149,7 +154,11 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count > 10 ? 20 : 10
+            num: count > 10 ? 20 : 10,
+            gl,
+            hl,
+            location,
+            page,
         }, crawlerOptions.noCache);
 
         if (!r.organic.length) {
