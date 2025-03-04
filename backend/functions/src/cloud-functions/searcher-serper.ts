@@ -92,6 +92,7 @@ export class SearcherHost extends RPCHost {
         // Return content by default
         const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
         const crawlWithoutContent = respondWith.includes('no-content');
+        const withFavicon = ctx.req.get('X-With-Favicons') === 'true';
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.req.path).slice(1);
@@ -164,7 +165,7 @@ export class SearcherHost extends RPCHost {
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const organicSearchResults = r.organic.slice(0, targetResultCount);
         if (crawlWithoutContent || count === 0) {
-            const fakeResults = await this.fakeResult(crawlerOptions, organicSearchResults, !crawlWithoutContent);
+            const fakeResults = await this.fakeResult(crawlerOptions, organicSearchResults, !crawlWithoutContent, withFavicon);
             lastScrapped = fakeResults;
             if (!crawlWithoutContent) {
                 chargeAmount = this.assignChargeAmount(lastScrapped);
@@ -181,6 +182,7 @@ export class SearcherHost extends RPCHost {
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
+            withFavicon
         );
 
         if (!ctx.req.accepts('text/plain') && ctx.req.accepts('text/event-stream')) {
@@ -330,7 +332,8 @@ export class SearcherHost extends RPCHost {
     async fakeResult(
         crawlerOptions: CrawlerOptions,
         searchResults?: SerperSearchResponse['organic'],
-        withContent: boolean = false
+        withContent: boolean = false,
+        withFavicon: boolean = false,
     ) {
         const mode: string | 'markdown' | 'html' | 'text' | 'screenshot' = crawlerOptions.respondWith;
 
@@ -355,7 +358,7 @@ export class SearcherHost extends RPCHost {
                 result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
             }
 
-            if (crawlerOptions.withFavicon) {
+            if (withFavicon) {
                 const url = new URL(upstreamSearchResult.link);
                 result.favicon = await this.getFavicon(url.origin);
                 dataItems.push({
@@ -384,6 +387,7 @@ export class SearcherHost extends RPCHost {
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
+        withFavicon?: boolean,
     ) {
         if (!searchResults) {
             return;
@@ -425,7 +429,7 @@ export class SearcherHost extends RPCHost {
                 });
             }).map(async (x) => {
                 const page = await x;
-                if (crawlerOptions?.withFavicon && page.url) {
+                if (withFavicon && page.url) {
                     const url = new URL(page.url);
                     page.favicon = await this.getFavicon(url.origin);
                 }
