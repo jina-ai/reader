@@ -7,10 +7,11 @@ import {
     assignTransferProtocolMeta, RPCHost, RPCReflection,
     AssertionFailureError, ParamValidationError,
     RawString,
+    ApplicationError,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import { Defer } from 'civkit/defer';
-import { retry } from 'civkit/decorators';
+import { retryWith } from 'civkit/decorators';
 
 import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/crawler-options';
 
@@ -38,6 +39,7 @@ import { countGPTToken as estimateToken } from '../shared/utils/openai';
 import { ProxyProvider } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
+import { ServiceBadAttemptError } from '../shared';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -704,6 +706,11 @@ export class CrawlerHost extends RPCHost {
                 await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts) :
                 await this.curlControl.sideLoad(urlToCrawl, altOpts).catch((err) => {
                     this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
+
+                    if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
+                        return Promise.reject(err);
+                    }
+
                     return this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
                 });
             let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
@@ -740,6 +747,9 @@ export class CrawlerHost extends RPCHost {
             }
         } catch (err: any) {
             this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
+            if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
+                throw err;
+            }
         }
 
         try {
@@ -1068,7 +1078,17 @@ export class CrawlerHost extends RPCHost {
         };
     }
 
-    @retry(3)
+    @retryWith((err) => {
+        if (err instanceof ServiceBadAttemptError) {
+            // Keep trying
+            return true;
+        }
+        if (err instanceof ApplicationError) {
+            // Quit with this error
+            return false;
+        }
+        return undefined;
+    }, 3)
     async sideLoadWithAllocatedProxy(url: URL, opts?: ExtraScrappingOptions) {
         const proxy = await this.proxyProvider.alloc(opts?.allocProxy);
         const r = await this.curlControl.sideLoad(url, {

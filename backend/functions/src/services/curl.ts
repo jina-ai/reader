@@ -2,11 +2,11 @@ import { marshalErrorLike } from 'civkit/lang';
 import { AsyncService } from 'civkit/async-service';
 import { singleton } from 'tsyringe';
 
-import { Curl, CurlFeature, HeaderInfo } from 'node-libcurl';
+import { Curl, CurlCode, CurlFeature, HeaderInfo } from 'node-libcurl';
 import { PageSnapshot, ScrappingOptions } from './puppeteer';
 import { Logger } from '../shared/services/logger';
 import { AssertionFailureError, FancyFile } from 'civkit';
-import { TempFileManager } from '../shared';
+import { ServiceBadAttemptError, TempFileManager } from '../shared';
 import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
 import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
@@ -129,11 +129,16 @@ export class CurlControl extends AsyncService {
             });
 
             let curlStream: Readable | undefined;
-            curl.on('error', (err) => {
+            curl.on('error', (err, errCode) => {
                 curl.close();
                 this.logger.warn(`Curl ${urlToDownload}: ${err}`, { err: marshalErrorLike(err) });
                 if (curlStream) {
                     curlStream.destroy(err);
+                }
+                const err2 = this.digestCurlCode(errCode, err.message);
+                if (err2) {
+                    reject(err2);
+                    return;
                 }
                 reject(new AssertionFailureError(`Failed to download ${urlToDownload}: ${err.message}`));
             });
@@ -266,11 +271,16 @@ export class CurlControl extends AsyncService {
             });
 
             let curlStream: Readable | undefined;
-            curl.on('error', (err) => {
+            curl.on('error', (err, errCode) => {
                 curl.close();
                 this.logger.warn(`Curl ${urlToCrawl.origin}: ${err}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
                 if (curlStream) {
                     curlStream.destroy(err);
+                }
+                const err2 = this.digestCurlCode(errCode, err.message);
+                if (err2) {
+                    reject(err2);
+                    return;
                 }
                 reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: ${err.message}`));
             });
@@ -443,11 +453,16 @@ export class CurlControl extends AsyncService {
             });
 
             let curlStream: Readable | undefined;
-            curl.on('error', (err) => {
+            curl.on('error', (err, errCode) => {
                 curl.close();
                 this.logger.warn(`Curl ${urlToCrawl}: ${err}`, { err: marshalErrorLike(err) });
                 if (curlStream) {
                     curlStream.destroy(err);
+                }
+                const err2 = this.digestCurlCode(errCode, err.message);
+                if (err2) {
+                    reject(err2);
+                    return;
                 }
                 reject(new AssertionFailureError(`Failed to curl ${urlToCrawl.origin}: ${err.message}`));
             });
@@ -560,5 +575,27 @@ export class CurlControl extends AsyncService {
             fileName,
             file: curlResult.data
         };
+    }
+
+    digestCurlCode(code: CurlCode, msg: string) {
+        switch (code) {
+            // 400 User errors
+            case CurlCode.CURLE_COULDNT_RESOLVE_HOST:
+            case CurlCode.CURLE_REMOTE_ACCESS_DENIED: {
+                return new AssertionFailureError(msg);
+            }
+
+            // Retryable errors
+            case CurlCode.CURLE_COULDNT_RESOLVE_PROXY:
+            case CurlCode.CURLE_COULDNT_CONNECT:
+            case CurlCode.CURLE_PARTIAL_FILE:
+            case CurlCode.CURLE_OPERATION_TIMEDOUT: {
+                return new ServiceBadAttemptError(msg);
+            }
+
+            default: {
+                return undefined;
+            }
+        }
     }
 }
