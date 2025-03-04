@@ -35,9 +35,8 @@ export class RobotsTxtService extends AsyncService {
         const digest = md5Hasher.hash(origin.toLowerCase());
         const cacheLoc = `/robot-txt/${digest}`;
         let buff;
-        if (await this.firebaseStorageBucketControl.fileExists(cacheLoc).catch(() => false)) {
-            buff = await this.firebaseStorageBucketControl.downloadFile(cacheLoc);
-
+        buff = await this.firebaseStorageBucketControl.downloadFile(cacheLoc).catch(()=> undefined);
+        if (buff) {
             return buff.toString();
         }
 
@@ -85,13 +84,20 @@ export class RobotsTxtService extends AsyncService {
             }
 
             if (key === 'disallow') {
-                if (url.pathname.startsWith(value)) {
+                if (!value) {
+                    return true;
+                }
+                const normalized = value.endsWith('*') ? value.slice(0, -1) : value;
+                if (url.pathname.startsWith(normalized)) {
                     throw new AssertionFailureError(`Access to ${url.href} is disallowed by robots.txt: (${line})`);
                 }
                 continue;
             }
 
             if (key === 'allow') {
+                if (!value) {
+                    return true;
+                }
                 if (url.pathname.startsWith(value)) {
                     return true;
                 }
