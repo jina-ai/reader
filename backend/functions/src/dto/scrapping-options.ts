@@ -338,9 +338,6 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     jsonSchema?: object;
 
-    @Prop()
-    withFavicon?: boolean;
-
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
