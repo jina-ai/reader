@@ -347,6 +347,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     jsonSchema?: object;
 
+    @Prop()
+    robotsTxt?: string;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as Context | undefined;
@@ -487,6 +490,8 @@ export class CrawlerOptions extends AutoCastable {
         instance.proxyUrl ??= proxyUrl || undefined;
         const proxy = ctx?.get('x-proxy');
         instance.proxy ??= proxy || undefined;
+        const robotsTxt = ctx?.get('x-robots-txt');
+        instance.robotsTxt ??= robotsTxt || undefined;
 
         const tokenBudget = ctx?.get('x-token-budget');
         instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;

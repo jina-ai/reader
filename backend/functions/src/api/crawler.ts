@@ -40,6 +40,7 @@ import { ProxyProvider } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { ServiceBadAttemptError } from '../shared';
+import { RobotsTxtService } from '../services/robots-text';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -84,6 +85,7 @@ export class CrawlerHost extends RPCHost {
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncLocalContext,
         protected fbHealthCheck: FirebaseRoundTripChecker,
+        protected robotsTxtService: RobotsTxtService,
     ) {
         super(...arguments);
 
@@ -285,6 +287,10 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
+        if (crawlerOptions.robotsTxt) {
+            await this.robotsTxtService.assertAccessAllowed(targetUrl, crawlerOptions.robotsTxt);
+        }
+
         const crawlOpts = await this.configure(crawlerOptions);
         if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
@@ -294,6 +300,9 @@ export class CrawlerHost extends RPCHost {
                 for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
                     if (!scrapped) {
                         continue;
+                    }
+                    if (rpcReflect.signal.aborted) {
+                        break;
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
@@ -326,6 +335,9 @@ export class CrawlerHost extends RPCHost {
         if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
             for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
                 lastScrapped = scrapped;
+                if (rpcReflect.signal.aborted) {
+                    break;
+                }
                 if (!crawlerOptions.isEarlyReturnApplicable()) {
                     continue;
                 }
@@ -372,7 +384,9 @@ export class CrawlerHost extends RPCHost {
 
         for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
             lastScrapped = scrapped;
-
+            if (rpcReflect.signal.aborted) {
+                break;
+            }
             if (!crawlerOptions.isEarlyReturnApplicable()) {
                 continue;
             }
