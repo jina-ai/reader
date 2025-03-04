@@ -496,9 +496,6 @@ export class CrawlerOptions extends AutoCastable {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
         }
 
-        const withFavicon = ctx?.req.get('x-with-favicon');
-        instance.withFavicon = instance.withFavicon ?? Boolean(withFavicon);
-
         return instance;
     }
 
