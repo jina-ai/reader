@@ -143,9 +143,15 @@ export class CrawlerHost extends RPCHost {
     async getIndex(@Ctx() ctx: Context, @Param({ required: false }) auth?: JinaEmbeddingsAuthDTO) {
         const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
 
+        // Object.assign(indexObject, {
+        //     usage1: `${ctx.origin}/YOUR_URL`,
+        //     usage2: `${ctx.origin}/search/YOUR_SEARCH_QUERY`,
+        //     homepage: 'https://jina.ai/reader',
+        //     sourceCode: 'https://github.com/jina-ai/reader',
+        // });
         Object.assign(indexObject, {
-            usage1: `${ctx.origin}/YOUR_URL`,
-            usage2: `${ctx.origin}/search/YOUR_SEARCH_QUERY`,
+            usage1: 'https://r.jina.ai/YOUR_URL',
+            usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
             homepage: 'https://jina.ai/reader',
             sourceCode: 'https://github.com/jina-ai/reader',
         });
