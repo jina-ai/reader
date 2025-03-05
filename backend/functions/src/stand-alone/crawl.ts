@@ -1,15 +1,5 @@
 import 'reflect-metadata';
 import { container, singleton } from 'tsyringe';
-import { initializeApp, applicationDefault } from 'firebase-admin/app';
-
-process.env['FIREBASE_CONFIG'] ??= JSON.stringify({
-    projectId: process.env['GCLOUD_PROJECT'] || 'reader-6b7dc',
-    storageBucket: `${process.env['GCLOUD_PROJECT'] || 'reader-6b7dc'}.appspot.com`,
-    credential: applicationDefault(),
-});
-
-initializeApp();
-
 
 import { Logger, AsyncContext } from '../shared';
 import { KoaServer } from 'civkit/civ-rpc/koa';
@@ -24,6 +14,7 @@ import { RPCRegistry } from '../services/registry';
 import { AsyncResource } from 'async_hooks';
 import { runOnce } from 'civkit/decorators';
 import { randomUUID } from 'crypto';
+import { ThreadedServiceRegistry } from '../services/threaded';
 
 process.on('unhandledRejection', (err) => {
     console.error('Unhandled rejection', err);
@@ -50,6 +41,7 @@ export class CrawlStandAloneServer extends KoaServer {
         protected registry: RPCRegistry,
         protected crawlerHost: CrawlerHost,
         protected threadLocal: AsyncContext,
+        protected threads: ThreadedServiceRegistry,
     ) {
         super(...arguments);
     }

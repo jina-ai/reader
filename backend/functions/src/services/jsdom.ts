@@ -4,7 +4,7 @@ import { Logger } from '../shared/services/logger';
 import { ExtendedSnapshot, ImgBrief, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
-import { Threaded } from '../shared/services/threaded';
+import { Threaded } from '../services/threaded';
 import type { ExtraScrappingOptions } from '../api/crawler';
 import { tailwindClasses } from '../utils/tailwind-classes';
 import { countGPTToken } from '../shared';

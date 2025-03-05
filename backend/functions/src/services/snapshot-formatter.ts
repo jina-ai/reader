@@ -6,7 +6,7 @@ import { Logger } from '../shared/services/logger';
 import { PageSnapshot } from './puppeteer';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { AsyncContext } from '../shared/services/async-context';
-import { Threaded } from '../shared/services/threaded';
+import { Threaded } from '../services/threaded';
 import { JSDomControl } from './jsdom';
 import { AltTextService } from './alt-text';
 import { PDFExtractor } from './pdf-extract';

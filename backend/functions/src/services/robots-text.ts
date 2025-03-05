@@ -8,6 +8,7 @@ import { Logger } from '../shared/services/logger';
 import { BraveSearchHTTP } from '../shared/3rd-party/brave-search';
 import { FirebaseStorageBucketControl } from '../shared';
 import { URL } from 'url';
+import { Threaded } from '../services/threaded';
 
 
 export const md5Hasher = new HashManager('md5', 'hex');
@@ -55,6 +56,7 @@ export class RobotsTxtService extends AsyncService {
         return buff.toString();
     }
 
+    @Threaded()
     async assertAccessAllowed(url: URL, myUa = '*') {
         const robotTxt = await this.getCachedRobotTxt(url.origin);
 
