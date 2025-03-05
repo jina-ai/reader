@@ -21,6 +21,9 @@ import fs from 'fs';
 import { mimeOfExt } from 'civkit/mime';
 import { Context, Next } from 'koa';
 import { RPCRegistry } from '../services/registry';
+import { AsyncResource } from 'async_hooks';
+import { runOnce } from 'civkit/decorators';
+import { randomUUID } from 'crypto';
 
 process.on('unhandledRejection', (err) => {
     console.error('Unhandled rejection', err);
@@ -53,7 +56,11 @@ export class CrawlStandAloneServer extends KoaServer {
 
     h2c() {
         this.httpAlternativeServer = this.httpServer;
-        this.httpServer = http2.createServer(this.koaApp.callback());
+        const fn = this.koaApp.callback();
+        this.httpServer = http2.createServer((req, res) => {
+            const ar = new AsyncResource('HTTP2ServerRequest');
+            ar.runInAsyncScope(fn, this.koaApp, req, res);
+        });
         // useResourceBasedDefaultTracker();
 
         return this;
@@ -113,6 +120,23 @@ export class CrawlStandAloneServer extends KoaServer {
         this.koaApp.use(this.registry.makeShimController());
     }
 
+    // Using h2c server has an implication that multiple requests may share the same connection and x-cloud-trace-context
+    // TraceId is expected to be request-bound and unique. So these two has to be distinguished.
+    @runOnce()
+    override insertAsyncHookMiddleware() {
+        const asyncHookMiddleware = async (ctx: Context, next: () => Promise<void>) => {
+            const googleTraceId = ctx.get('x-cloud-trace-context').split('/')?.[0];
+            this.threadLocal.setup({
+                traceId: randomUUID(),
+                traceT0: new Date(),
+                googleTraceId,
+            });
+
+            return next();
+        };
+
+        this.koaApp.use(asyncHookMiddleware);
+    }
 
 }
 const instance = container.resolve(CrawlStandAloneServer);

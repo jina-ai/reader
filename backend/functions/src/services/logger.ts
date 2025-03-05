@@ -45,8 +45,8 @@ export class GlobalLogger extends AbstractPinoLogger {
         const severity = levelToSeverityMap[levelObj?.level];
         const traceCtx = getTraceCtx();
         const patched: any= { ...levelObj, severity };
-        if (traceCtx?.traceId && process.env['GCLOUD_PROJECT']) {
-            patched['logging.googleapis.com/trace'] = `projects/${process.env['GCLOUD_PROJECT']}/traces/${traceCtx.traceId}`;
+        if (traceCtx?.googleTraceId && process.env['GCLOUD_PROJECT']) {
+            patched['logging.googleapis.com/trace'] = `projects/${process.env['GCLOUD_PROJECT']}/traces/${traceCtx.googleTraceId}`;
         }
         return super.log(patched, ...rest);
     }

@@ -39,8 +39,8 @@ import { countGPTToken as estimateToken } from '../shared/utils/openai';
 import { ProxyProvider } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { ServiceBadAttemptError } from '../shared';
 import { RobotsTxtService } from '../services/robots-text';
+import { ServiceBadAttemptError } from '../shared/lib/errors';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';

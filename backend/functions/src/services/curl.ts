@@ -133,6 +133,8 @@ export class CurlControl extends AsyncService {
                 curl.close();
                 this.logger.warn(`Curl ${urlToDownload}: ${err}`, { err: marshalErrorLike(err) });
                 if (curlStream) {
+                    // For some reason, manually emitting error event is required for curlStream.
+                    curlStream.emit('error', err);
                     curlStream.destroy(err);
                 }
                 const err2 = this.digestCurlCode(errCode, err.message);
@@ -172,24 +174,28 @@ export class CurlControl extends AsyncService {
                     case 'gzip': {
                         const decompressed = createGunzip();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
                     case 'deflate': {
                         const decompressed = createInflate();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
                     case 'br': {
                         const decompressed = createBrotliDecompress();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
                     case 'zstd': {
                         const decompressed = ZSTDDecompress();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
@@ -275,6 +281,8 @@ export class CurlControl extends AsyncService {
                 curl.close();
                 this.logger.warn(`Curl ${urlToCrawl.origin}: ${err}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
                 if (curlStream) {
+                    // For some reason, manually emitting error event is required for curlStream.
+                    curlStream.emit('error', err);
                     curlStream.destroy(err);
                 }
                 const err2 = this.digestCurlCode(errCode, err.message);
@@ -323,24 +331,28 @@ export class CurlControl extends AsyncService {
                     case 'gzip': {
                         const decompressed = createGunzip();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
                     case 'deflate': {
                         const decompressed = createInflate();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
                     case 'br': {
                         const decompressed = createBrotliDecompress();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
                     case 'zstd': {
                         const decompressed = ZSTDDecompress();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => decompressed.destroy(err));
                         stream = decompressed;
                         break;
                     }
@@ -454,9 +466,10 @@ export class CurlControl extends AsyncService {
 
             let curlStream: Readable | undefined;
             curl.on('error', (err, errCode) => {
-                curl.close();
                 this.logger.warn(`Curl ${urlToCrawl}: ${err}`, { err: marshalErrorLike(err) });
                 if (curlStream) {
+                    // For some reason, manually emitting error event is required for curlStream.
+                    curlStream.emit('error', err);
                     curlStream.destroy(err);
                 }
                 const err2 = this.digestCurlCode(errCode, err.message);
@@ -465,11 +478,28 @@ export class CurlControl extends AsyncService {
                     return;
                 }
                 reject(new AssertionFailureError(`Failed to curl ${urlToCrawl.origin}: ${err.message}`));
+                curl.close();
             });
             curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
             let status = -1;
             let contentEncoding = '';
             curl.on('stream', (stream, statusCode, headers) => {
+                for (const headerSet of (headers as HeaderInfo[])) {
+                    for (const [k, v] of Object.entries(headerSet)) {
+                        if (k.trim().endsWith(':')) {
+                            Reflect.set(headerSet, k.slice(0, k.indexOf(':')), v || '');
+                            Reflect.deleteProperty(headerSet, k);
+                            continue;
+                        }
+                        if (v === undefined) {
+                            Reflect.set(headerSet, k, '');
+                            continue;
+                        }
+                        if (k.toLowerCase() === 'content-type' && typeof v === 'string') {
+                            contentType = v.toLowerCase();
+                        }
+                    }
+                }
                 status = statusCode;
                 curlStream = stream;
                 const lastResHeaders = headers[headers.length - 1];
@@ -490,24 +520,36 @@ export class CurlControl extends AsyncService {
                     case 'gzip': {
                         const decompressed = createGunzip();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => {
+                            decompressed.destroy(err);
+                        });
                         stream = decompressed;
                         break;
                     }
                     case 'deflate': {
                         const decompressed = createInflate();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => {
+                            decompressed.destroy(err);
+                        });
                         stream = decompressed;
                         break;
                     }
                     case 'br': {
                         const decompressed = createBrotliDecompress();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => {
+                            decompressed.destroy(err);
+                        });
                         stream = decompressed;
                         break;
                     }
                     case 'zstd': {
                         const decompressed = ZSTDDecompress();
                         stream.pipe(decompressed);
+                        stream.once('error', (err) => {
+                            decompressed.destroy(err);
+                        });
                         stream = decompressed;
                         break;
                     }
@@ -534,6 +576,7 @@ export class CurlControl extends AsyncService {
 
     async sideLoad(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
         const curlResult = await this.urlToFile(targetUrl, crawlOpts);
+
         let finalURL = targetUrl;
         const sideLoadOpts: CURLScrappingOptions['sideLoad'] = {
             impersonate: {},
