@@ -85,9 +85,9 @@ export class SearcherHost extends RPCHost {
         auth: JinaEmbeddingsAuthDTO,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
-        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
+        @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
         count: number,
-        @Param('num', { default: 5, validate: (v) => v >= 0 && v <= 20 })
+        @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v) }) gl?: string,
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
@@ -98,7 +98,8 @@ export class SearcherHost extends RPCHost {
         // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
         // Since we used 'count' as 'num' previously, we need to keep 'count' for old users.
         // Here we combine 'count' and 'num' to 'count' for the rest of the function.
-        count = num !== undefined ? num : count;
+        count = (num !== undefined ? num : count) ?? 5;
+
         const uid = await auth.solveUID();
         // Return content by default
         const respondWith = ctx.req.get('X-Respond-With') ?? 'content';
