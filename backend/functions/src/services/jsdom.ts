@@ -38,7 +38,8 @@ export class JSDomControl extends AsyncService {
             return snapshot;
         }
 
-        return this.actualNarrowSnapshot(snapshot, options);
+        // SideLoad contains native objects that cannot go through thread boundaries.
+        return this.actualNarrowSnapshot(snapshot, { ...options, sideLoad: undefined });
     }
 
     @Threaded()
