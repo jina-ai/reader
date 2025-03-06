@@ -102,15 +102,6 @@ export interface ScrappingOptions {
 
 }
 
-
-// const puppeteerStealth = require('puppeteer-extra-plugin-stealth');
-// puppeteer.use(puppeteerStealth());
-// const puppeteerUAOverride = require('puppeteer-extra-plugin-stealth/evasions/user-agent-override');
-// puppeteer.use(puppeteerUAOverride({
-//     userAgent: `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`,
-//     platform: `Linux`,
-// }))
-
 puppeteer.use(puppeteerBlockResources({
     blockedTypes: new Set(['media']),
     interceptResolutionPriority: 1,
