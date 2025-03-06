@@ -430,7 +430,7 @@ export class SnapshotFormatter extends AsyncService {
             if (this.threadLocal.get('withLinksSummary') === 'all') {
                 formatted.links = links;
             } else {
-                formatted.links = _.fromPairs(links.filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')));
+                formatted.links = _(links).filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')).uniqBy(1).fromPairs().value();
             }
         }
 
@@ -528,7 +528,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             if (this.threadLocal.get('withLinksSummary') === 'all') {
                 mixin.links = inferred.links;
             } else {
-                mixin.links = _.fromPairs(inferred.links.filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')));
+                mixin.links = _(inferred.links).filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')).uniqBy(1).fromPairs().value();
             }
         }
         if (snapshot.status) {
