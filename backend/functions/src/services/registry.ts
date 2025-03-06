@@ -7,6 +7,7 @@ import bodyParser from '@koa/bodyparser';
 import { GlobalLogger } from './logger';
 import { TempFileManager } from './temp-file';
 import { AsyncLocalContext } from './async-context';
+import { BlackHoleDetector } from './blackhole-detector';
 export { Context } from 'koa';
 
 export const InjectProperty = propertyInjectorFactory(container);
@@ -38,8 +39,13 @@ export class RPCRegistry extends KoaRPCRegistry {
         protected globalLogger: GlobalLogger,
         protected ctxMgr: AsyncLocalContext,
         protected tempFileManager: TempFileManager,
+        protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);
+
+        this.on('run', () => this.blackHoleDetector.incomingRequest());
+        this.on('ran', () => this.blackHoleDetector.doneWithRequest());
+        this.on('fail', () => this.blackHoleDetector.doneWithRequest());
     }
 
     override async init() {

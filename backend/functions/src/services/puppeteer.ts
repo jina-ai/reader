@@ -16,6 +16,7 @@ import _ from 'lodash';
 import { isIP } from 'net';
 import { CurlControl } from './curl';
 import { readFile } from 'fs/promises';
+import { BlackHoleDetector } from './blackhole-detector';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -470,6 +471,7 @@ export class PuppeteerControl extends AsyncService {
     constructor(
         protected globalLogger: Logger,
         protected curlControl: CurlControl,
+        protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);
         this.setMaxListeners(2 * Math.floor(os.totalmem() / (256 * 1024 * 1024)) + 1); 148 - 95;
@@ -772,6 +774,7 @@ export class PuppeteerControl extends AsyncService {
         const page = await this.getNextPage();
         this.pagePhase.set(page, 'active');
         page.on('response', (resp) => {
+            this.blackHoleDetector.itWorked();
             const req = resp.request();
             if (req.frame() === page.mainFrame() && req.isNavigationRequest()) {
                 navigationResponse = resp;

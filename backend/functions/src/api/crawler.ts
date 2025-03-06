@@ -34,7 +34,6 @@ import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { BudgetExceededError, InsufficientBalanceError, SecurityCompromiseError } from '../services/errors';
 
-import { FirebaseRoundTripChecker } from '../shared/services/firebase-roundtrip-checker';
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
 import { ProxyProvider } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
@@ -85,7 +84,6 @@ export class CrawlerHost extends RPCHost {
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncLocalContext,
-        protected fbHealthCheck: FirebaseRoundTripChecker,
         protected robotsTxtService: RobotsTxtService,
     ) {
         super(...arguments);
