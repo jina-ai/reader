@@ -1,5 +1,5 @@
 import { singleton } from 'tsyringe';
-import { AssertionFailureError, DownstreamServiceFailureError } from 'civkit/civ-rpc';
+import { DownstreamServiceFailureError, ResourcePolicyDenyError } from 'civkit/civ-rpc';
 import { AsyncService } from 'civkit/async-service';
 import { HashManager } from 'civkit/hash';
 import { marshalErrorLike } from 'civkit/lang';
@@ -58,7 +58,15 @@ export class RobotsTxtService extends AsyncService {
 
     @Threaded()
     async assertAccessAllowed(url: URL, inputMyUa = '*') {
-        const robotTxt = await this.getCachedRobotTxt(url.origin);
+        let robotTxt: string = '';
+        try {
+            robotTxt = await this.getCachedRobotTxt(url.origin);
+        } catch (err) {
+            if (err instanceof DownstreamServiceFailureError) {
+                return true;
+            }
+            throw err;
+        }
         const myUa = inputMyUa.toLowerCase();
         const lines = robotTxt.split(/\r?\n/g);
 
@@ -95,10 +103,10 @@ export class RobotsTxtService extends AsyncService {
                 if (value.includes('*')) {
                     const [head, tail] = value.split('*');
                     if (url.pathname.startsWith(head) && url.pathname.endsWith(tail)) {
-                        throw new AssertionFailureError(`Access to ${url.href} is disallowed by site robots.txt: For ${uaLine}, ${line}`);
+                        throw new ResourcePolicyDenyError(`Access to ${url.href} is disallowed by site robots.txt: For ${uaLine}, ${line}`);
                     }
                 } else if (pathNormalized.startsWith(value)) {
-                    throw new AssertionFailureError(`Access to ${url.href} is disallowed by site robots.txt: For ${uaLine}, ${line}`);
+                    throw new ResourcePolicyDenyError(`Access to ${url.href} is disallowed by site robots.txt: For ${uaLine}, ${line}`);
                 }
 
                 continue;
