@@ -50,6 +50,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     keepImgDataUrl?: boolean;
     engine?: string;
     allocProxy?: string;
+    private?: boolean;
 }
 
 const indexProto = {
@@ -93,7 +94,7 @@ export class CrawlerHost extends RPCHost {
             if (!snapshot.title?.trim() && !snapshot.pdfs?.length) {
                 return;
             }
-            if (options.cookies?.length) {
+            if (options.cookies?.length || options.private) {
                 // Potential privacy issue, dont cache if cookies are used
                 return;
             }
@@ -104,9 +105,14 @@ export class CrawlerHost extends RPCHost {
             if (options.locale) {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
-            await this.setToCache(options.url, snapshot);
 
-            await this.exploreDirectEngine(snapshot).catch(() => undefined);
+            const analyzed = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
+            if (analyzed.tokens < 200) {
+                // Does not contain enough content
+                return;
+            }
+
+            await this.setToCache(options.url, snapshot);
         });
 
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
@@ -128,7 +134,7 @@ export class CrawlerHost extends RPCHost {
     override async init() {
         await this.dependencyReady();
 
-        this.curlControl.impersonateChrome(this.puppeteerControl.ua);
+        this.curlControl.impersonateChrome(this.puppeteerControl.ua.replace(/Headless/i, ''));
 
         this.emit('ready');
     }
@@ -709,6 +715,9 @@ export class CrawlerHost extends RPCHost {
             (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && (cache.screenshotAvailable && cache.pageshotAvailable))) &&
             (_.get(cache.snapshot, 'locale') === crawlOpts?.locale)
         ) {
+            if (cache.snapshot) {
+                cache.snapshot.isFromCache = true;
+            }
             yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
 
             return;
@@ -872,6 +881,8 @@ export class CrawlerHost extends RPCHost {
         this.threadLocal.set('withImagesSummary', opts.withImagesSummary);
         this.threadLocal.set('keepImgDataUrl', opts.keepImgDataUrl);
         this.threadLocal.set('cacheTolerance', opts.cacheTolerance);
+        this.threadLocal.set('withIframe', opts.withIframe);
+        this.threadLocal.set('withShadowDom', opts.withShadowDom);
         this.threadLocal.set('userAgent', opts.userAgent);
         if (opts.timeout) {
             this.threadLocal.set('timeout', opts.timeout * 1000);
@@ -894,7 +905,9 @@ export class CrawlerHost extends RPCHost {
             referer: opts.referer,
             viewport: opts.viewport,
             engine: opts.engine,
-            allocProxy: opts.proxy,
+            allocProxy: opts.proxy?.endsWith('+') ? opts.proxy.slice(0, -1) : opts.proxy,
+            proxyResources: (opts.proxyUrl || opts.proxy?.endsWith('+')) ? true : false,
+            private: Boolean(opts.doNotTrack),
         };
 
         if (opts.locale) {

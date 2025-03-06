@@ -1,5 +1,5 @@
 import { singleton } from 'tsyringe';
-import { AssertionFailureError,  DownstreamServiceFailureError } from 'civkit/civ-rpc';
+import { AssertionFailureError, DownstreamServiceFailureError } from 'civkit/civ-rpc';
 import { AsyncService } from 'civkit/async-service';
 import { HashManager } from 'civkit/hash';
 import { marshalErrorLike } from 'civkit/lang';
@@ -36,7 +36,7 @@ export class RobotsTxtService extends AsyncService {
         const digest = md5Hasher.hash(origin.toLowerCase());
         const cacheLoc = `/robot-txt/${digest}`;
         let buff;
-        buff = await this.firebaseStorageBucketControl.downloadFile(cacheLoc).catch(()=> undefined);
+        buff = await this.firebaseStorageBucketControl.downloadFile(cacheLoc).catch(() => undefined);
         if (buff) {
             return buff.toString();
         }
@@ -57,16 +57,18 @@ export class RobotsTxtService extends AsyncService {
     }
 
     @Threaded()
-    async assertAccessAllowed(url: URL, myUa = '*') {
+    async assertAccessAllowed(url: URL, inputMyUa = '*') {
         const robotTxt = await this.getCachedRobotTxt(url.origin);
-
-        const lines = robotTxt.split('\n');
+        const myUa = inputMyUa.toLowerCase();
+        const lines = robotTxt.split(/\r?\n/g);
 
         let currentUa = myUa || '*';
+        let uaLine = 'User-Agent: *';
+        const pathNormalized = `${url.pathname}?`;
 
         for (const line of lines) {
             const trimmed = line.trim();
-            if (trimmed.startsWith('#') || !trimmed){
+            if (trimmed.startsWith('#') || !trimmed) {
                 continue;
             }
             const [k, ...rest] = trimmed.split(':');
@@ -74,10 +76,11 @@ export class RobotsTxtService extends AsyncService {
             const value = rest.join(':').trim();
 
             if (key === 'user-agent') {
-                currentUa = value;
+                currentUa = value.toLowerCase();
                 if (value === '*') {
                     currentUa = myUa;
                 }
+                uaLine = line;
                 continue;
             }
 
@@ -89,10 +92,15 @@ export class RobotsTxtService extends AsyncService {
                 if (!value) {
                     return true;
                 }
-                const normalized = value.endsWith('*') ? value.slice(0, -1) : value;
-                if (url.pathname.startsWith(normalized)) {
-                    throw new AssertionFailureError(`Access to ${url.href} is disallowed by robots.txt: (${line})`);
+                if (value.includes('*')) {
+                    const [head, tail] = value.split('*');
+                    if (url.pathname.startsWith(head) && url.pathname.endsWith(tail)) {
+                        throw new AssertionFailureError(`Access to ${url.href} is disallowed by site robots.txt: For ${uaLine}, ${line}`);
+                    }
+                } else if (pathNormalized.startsWith(value)) {
+                    throw new AssertionFailureError(`Access to ${url.href} is disallowed by site robots.txt: For ${uaLine}, ${line}`);
                 }
+
                 continue;
             }
 
@@ -100,7 +108,7 @@ export class RobotsTxtService extends AsyncService {
                 if (!value) {
                     return true;
                 }
-                if (url.pathname.startsWith(value)) {
+                if (pathNormalized.startsWith(value)) {
                     return true;
                 }
                 continue;

@@ -16,6 +16,7 @@ import { STATUS_CODES } from 'http';
 import type { CrawlerOptions } from '../dto/crawler-options';
 import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
+import { countGPTToken } from '../shared';
 
 
 export interface FormattedPage {
@@ -32,7 +33,7 @@ export interface FormattedPage {
     pageshot?: Buffer;
     links?: { [k: string]: string; } | [string, string][];
     images?: { [k: string]: string; } | [string, string][];
-    warning?: string;
+    warning?: string[];
     favicon?: string;
     usage?: {
         total_tokens?: number;
@@ -403,7 +404,8 @@ export class SnapshotFormatter extends AsyncService {
             const n = code - 200;
             if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
-                formatted.warning = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
+                formatted.warning ??= [];
+                formatted.warning.push(`Target URL returned error ${code}${text ? `: ${text}` : ''}`);
             }
         }
 
@@ -431,6 +433,25 @@ export class SnapshotFormatter extends AsyncService {
                 formatted.links = links;
             } else {
                 formatted.links = _(links).filter(([_label, href]) => !href.startsWith('file:') && !href.startsWith('javascript:')).uniqBy(1).fromPairs().value();
+            }
+        }
+
+        if (countGPTToken(formatted.content) < 200) {
+            formatted.warning ??= [];
+            if (snapshot.isIntermediate) {
+                formatted.warning.push('This page maybe not yet fully loaded, consider explicitly specify a timeout.');
+            }
+            if (snapshot.childFrames?.length && !this.threadLocal.get('withIframe')) {
+                formatted.warning.push('This page contains iframe that are currently hidden, consider enabling iframe processing.');
+            }
+            if (snapshot.shadowExpanded && !this.threadLocal.get('withShadowDom')) {
+                formatted.warning.push('This page contains shadow DOM that are currently hidden, consider enabling shadow DOM processing.');
+            }
+            if (snapshot.html.includes('captcha')) {
+                formatted.warning.push('This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.');
+            }
+            if (snapshot.isFromCache) {
+                formatted.warning.push('This is a cached snapshot of the original page, consider retry with caching opt-out.');
             }
         }
 
@@ -469,8 +490,8 @@ export class SnapshotFormatter extends AsyncService {
                 suffixMixins.push(linkSummaryChunks.join('\n'));
             }
 
-            if (this.warning) {
-                mixins.push(`Warning: ${this.warning}`);
+            if (this.warning?.length) {
+                mixins.push(this.warning.map((v) => `Warning: ${v}`).join('\n'));
             }
 
             if (mode.includes('markdown')) {
@@ -536,7 +557,8 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             const n = code - 200;
             if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
-                mixin.warning = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
+                mixin.warning ??= [];
+                mixin.warning.push(`Target URL returned error ${code}${text ? `: ${text}` : ''}`);
             }
         }
 

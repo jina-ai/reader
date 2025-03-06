@@ -477,7 +477,7 @@ export class CurlControl extends AsyncService {
                     reject(err2);
                     return;
                 }
-                reject(new AssertionFailureError(`Failed to curl ${urlToCrawl.origin}: ${err.message}`));
+                reject(new AssertionFailureError(`Failed to access ${urlToCrawl.origin}: ${err.message}`));
                 curl.close();
             });
             curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB

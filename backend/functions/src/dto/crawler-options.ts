@@ -350,6 +350,9 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     robotsTxt?: string;
 
+    @Prop()
+    doNotTrack?: number | null;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as Context | undefined;
@@ -501,6 +504,9 @@ export class CrawlerOptions extends AutoCastable {
             instance.base = baseMode as any;
         }
 
+        const dnt = ctx?.get('dnt');
+        instance.doNotTrack ??= (parseInt(dnt || '') || null);
+
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
         }
@@ -527,9 +533,6 @@ export class CrawlerOptions extends AutoCastable {
 
     isCacheQueryApplicable() {
         if (this.noCache) {
-            return false;
-        }
-        if (this.proxy || this.proxyUrl) {
             return false;
         }
         if (this.cacheTolerance === 0) {

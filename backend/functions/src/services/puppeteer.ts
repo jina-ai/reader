@@ -55,6 +55,8 @@ export interface PageSnapshot {
     text: string;
     status?: number;
     statusText?: string;
+    isIntermediate?: boolean;
+    isFromCache?: boolean;
     parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
     pageshot?: Buffer;
@@ -84,6 +86,7 @@ export interface ScrappingOptions {
     injectFrameScripts?: string[];
     injectPageScripts?: string[];
     viewport?: Viewport;
+    proxyResources?: boolean;
 
     sideLoad?: {
         impersonate: {
@@ -530,7 +533,7 @@ export class PuppeteerControl extends AsyncService {
         });
         this.ua = await this.browser.userAgent();
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
-        this.curlControl.impersonateChrome(this.ua);
+        this.curlControl.impersonateChrome(this.ua.replace(/Headless/i, ''));
 
         this.emit('ready');
 
@@ -801,6 +804,15 @@ export class PuppeteerControl extends AsyncService {
                 const overrides = req.continueRequestOverrides();
 
                 return req.continue(overrides, 0);
+            }
+            const typ = req.resourceType();
+            if (!options.proxyResources) {
+                const isDocRequest = ['document', 'xhr', 'fetch', 'websocket', 'prefetch', 'eventsource', 'ping'].includes(typ);
+                if (!isDocRequest) {
+                    const overrides = req.continueRequestOverrides();
+
+                    return req.continue(overrides, 0);
+                }
             }
             const sideload = options.sideLoad;
 
@@ -1184,7 +1196,8 @@ export class PuppeteerControl extends AsyncService {
                         ...snapshot,
                         status: navigationResponse?.status(),
                         statusText: navigationResponse?.statusText(),
-                        pdfs: _.uniq(pdfUrls), screenshot, pageshot
+                        pdfs: _.uniq(pdfUrls), screenshot, pageshot,
+                        isIntermediate: true,
                     } as PageSnapshot;
                 }
                 if (error) {
