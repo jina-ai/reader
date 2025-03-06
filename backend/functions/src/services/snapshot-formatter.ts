@@ -447,7 +447,7 @@ export class SnapshotFormatter extends AsyncService {
             if (snapshot.shadowExpanded && !this.threadLocal.get('withShadowDom')) {
                 formatted.warning.push('This page contains shadow DOM that are currently hidden, consider enabling shadow DOM processing.');
             }
-            if (snapshot.html.includes('captcha')) {
+            if (snapshot.html.includes('captcha') || snapshot.html.includes('cf-turnstile-response')) {
                 formatted.warning.push('This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.');
             }
             if (snapshot.isFromCache) {
