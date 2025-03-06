@@ -33,7 +33,7 @@ export interface FormattedPage {
     pageshot?: Buffer;
     links?: { [k: string]: string; } | [string, string][];
     images?: { [k: string]: string; } | [string, string][];
-    warning?: string[];
+    warning?: string;
     favicon?: string;
     usage?: {
         total_tokens?: number;
@@ -404,8 +404,9 @@ export class SnapshotFormatter extends AsyncService {
             const n = code - 200;
             if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
-                formatted.warning ??= [];
-                formatted.warning.push(`Target URL returned error ${code}${text ? `: ${text}` : ''}`);
+                formatted.warning ??= '';
+                const msg = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
             }
         }
 
@@ -437,21 +438,26 @@ export class SnapshotFormatter extends AsyncService {
         }
 
         if (countGPTToken(formatted.content) < 200) {
-            formatted.warning ??= [];
+            formatted.warning ??= '';
             if (snapshot.isIntermediate) {
-                formatted.warning.push('This page maybe not yet fully loaded, consider explicitly specify a timeout.');
+                const msg = 'This page maybe not yet fully loaded, consider explicitly specify a timeout.';
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
             }
             if (snapshot.childFrames?.length && !this.threadLocal.get('withIframe')) {
-                formatted.warning.push('This page contains iframe that are currently hidden, consider enabling iframe processing.');
+                const msg = 'This page contains iframe that are currently hidden, consider enabling iframe processing.';
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
             }
             if (snapshot.shadowExpanded && !this.threadLocal.get('withShadowDom')) {
-                formatted.warning.push('This page contains shadow DOM that are currently hidden, consider enabling shadow DOM processing.');
+                const msg = 'This page contains shadow DOM that are currently hidden, consider enabling shadow DOM processing.';
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
             }
             if (snapshot.html.includes('captcha') || snapshot.html.includes('cf-turnstile-response')) {
-                formatted.warning.push('This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.');
+                const msg = 'This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.';
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
             }
             if (snapshot.isFromCache) {
-                formatted.warning.push('This is a cached snapshot of the original page, consider retry with caching opt-out.');
+                const msg = 'This is a cached snapshot of the original page, consider retry with caching opt-out.';
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
             }
         }
 
@@ -490,8 +496,8 @@ export class SnapshotFormatter extends AsyncService {
                 suffixMixins.push(linkSummaryChunks.join('\n'));
             }
 
-            if (this.warning?.length) {
-                mixins.push(this.warning.map((v) => `Warning: ${v}`).join('\n'));
+            if (this.warning) {
+                mixins.push(this.warning.split('\n').map((v) => `Warning: ${v}`).join('\n'));
             }
 
             if (mode.includes('markdown')) {
@@ -557,8 +563,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             const n = code - 200;
             if (n < 0 || n >= 200) {
                 const text = snapshot.statusText || STATUS_CODES[code];
-                mixin.warning ??= [];
-                mixin.warning.push(`Target URL returned error ${code}${text ? `: ${text}` : ''}`);
+                mixin.warning ??= '';
+                const msg = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
+                mixin.warning = `${mixin.warning}${mixin.warning ? '\n': ''}${msg}`;
             }
         }
 
