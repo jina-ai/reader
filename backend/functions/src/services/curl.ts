@@ -629,6 +629,8 @@ export class CurlControl extends AsyncService {
             }
 
             // Retryable errors
+            case CurlCode.CURLE_SSL_CONNECT_ERROR:
+            case CurlCode.CURLE_QUIC_CONNECT_ERROR:
             case CurlCode.CURLE_COULDNT_RESOLVE_PROXY:
             case CurlCode.CURLE_COULDNT_CONNECT:
             case CurlCode.CURLE_PARTIAL_FILE:
