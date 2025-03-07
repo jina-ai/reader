@@ -7,7 +7,6 @@ import { objHashMd5B64Of } from 'civkit/hash';
 import _ from 'lodash';
 
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
-import { SerperSearchQueryParams, SerperSearchResponse } from '../shared/3rd-party/serper-search';
 
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { SerperSearchResult } from '../db/searched';
@@ -21,7 +20,9 @@ import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { InsufficientBalanceError } from '../services/errors';
+import { SerperSearchQueryParams, SerperSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 
+const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES);
 
 @singleton()
 export class SearcherHost extends RPCHost {
@@ -77,12 +78,23 @@ export class SearcherHost extends RPCHost {
         @RPCReflect() rpcReflect: RPCReflection,
         @Ctx() ctx: Context,
         auth: JinaEmbeddingsAuthDTO,
-        @Param('count', { default: 5, validate: (v) => v >= 0 && v <= 20 })
-        count: number,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
+        @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
+        count: number,
+        @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
+        num?: number,
+        @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v) }) gl?: string,
+        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
+        @Param('location') location?: string,
+        @Param('page') page?: number,
         @Param('q') q?: string,
     ) {
+        // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
+        // Since we used 'count' as 'num' previously, we need to keep 'count' for old users.
+        // Here we combine 'count' and 'num' to 'count' for the rest of the function.
+        count = (num !== undefined ? num : count) ?? 5;
+
         const uid = await auth.solveUID();
         // Return content by default
         const crawlWithoutContent = crawlerOptions.respondWith.includes('no-content');
@@ -142,7 +154,11 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count > 10 ? 20 : 10
+            num: count > 10 ? 20 : 10,
+            gl,
+            hl,
+            location,
+            page,
         }, crawlerOptions.noCache);
 
         if (!r.organic.length) {
