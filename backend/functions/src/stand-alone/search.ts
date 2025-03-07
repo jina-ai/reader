@@ -60,6 +60,14 @@ export class SearchStandAloneServer extends KoaServer {
 
     override async init() {
         await this.walkForAssets();
+        await this.dependencyReady();
+
+        for (const [k,v] of this.registry.conf.entries()) {
+            if (v.tags?.includes('crawl')) {
+                this.registry.conf.delete(k);
+            }
+        }
+
         await super.init();
     }
 

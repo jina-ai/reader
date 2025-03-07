@@ -1,5 +1,4 @@
 import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, delay, marshalErrorLike } from 'civkit';
-import type { Request, Response } from 'express';
 import { singleton } from 'tsyringe';
 import { Logger } from '../shared/services/logger';
 import { SecretExposer } from '../shared/services/secrets';
@@ -7,6 +6,7 @@ import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncContext } from '../shared';
 import { SerperGoogleHTTP, SerperSearchQueryParams, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
 import { BlackHoleDetector } from './blackhole-detector';
+import { Context } from './registry';
 
 @singleton()
 export class SerperSearchService extends AsyncService {
@@ -135,15 +135,12 @@ export class GoogleSearchExplicitOperatorsDto extends AutoCastable {
 
     static override from(input: any) {
         const instance = super.from(input) as GoogleSearchExplicitOperatorsDto;
-        const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as {
-            req: Request,
-            res: Response,
-        } | undefined;
+        const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as Context | undefined;
 
         const params = ['ext', 'filetype', 'intitle', 'loc', 'site'];
 
         for (const p of params) {
-            const customValue = ctx?.req.get(`x-${p}`) || ctx?.req.get(`${p}`);
+            const customValue = ctx?.get(`x-${p}`) || ctx?.get(`${p}`);
             if (!customValue) {
                 continue;
             }

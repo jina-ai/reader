@@ -145,7 +145,7 @@ export class CrawlerHost extends RPCHost {
                 path: '/',
             }
         },
-        tags: ['misc'],
+        tags: ['misc', 'crawl'],
         returnType: [String, Object],
     })
     async getIndex(@Ctx() ctx: Context, @Param({ required: false }) auth?: JinaEmbeddingsAuthDTO) {
