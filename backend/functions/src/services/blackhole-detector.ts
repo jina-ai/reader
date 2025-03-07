@@ -35,16 +35,17 @@ export class BlackHoleDetector extends AsyncService {
         if (!lastWorked) {
             return;
         }
+        const dt = (now - lastWorked);
         if (this.concurrentRequests > 0 &&
-            lastWorked && ((now - lastWorked) > (this.maxDelay * this.strikes + 1))
+            lastWorked && (dt > (this.maxDelay * this.strikes + 1))
         ) {
-            this.logger.warn(`BlackHole detected, last worked: ${lastWorked}`);
+            this.logger.warn(`BlackHole detected, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`);
             this.strikes += 1;
         }
 
         if (this.strikes >= 3) {
-            this.logger.error(`BlackHole detected for ${this.strikes} strikes, last worked: ${lastWorked}`);
-            this.emit('error', new Error(`BlackHole detected, last worked: ${lastWorked}`));
+            this.logger.error(`BlackHole detected for ${this.strikes} strikes, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`);
+            this.emit('error', new Error(`BlackHole detected for ${this.strikes} strikes, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`));
         }
     }
 
@@ -62,4 +63,4 @@ export class BlackHoleDetector extends AsyncService {
         this.strikes = 0;
     }
 
-}
+};
