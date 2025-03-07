@@ -40,7 +40,7 @@ export class BlackHoleDetector extends AsyncService {
         if (this.concurrentRequests > 0 &&
             this.lastIncomingRequestTs && lastWorked &&
             this.lastIncomingRequestTs >= lastWorked &&
-            (dt > (this.maxDelay * this.strikes + 1))
+            (dt > (this.maxDelay * (this.strikes + 1)))
         ) {
             this.logger.warn(`BlackHole detected, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`);
             this.strikes += 1;
