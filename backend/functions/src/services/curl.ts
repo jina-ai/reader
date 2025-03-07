@@ -286,11 +286,12 @@ export class CurlControl extends AsyncService {
                 }
 
                 const setCookieHeader = headers['Set-Cookie'] || headers['set-cookie'];
-                const cookieAssignments = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
-
-                const parsed = cookieAssignments.map((x) => parseSetCookieString(x, { decodeValues: true }));
-                if (parsed.length) {
-                    opts.cookies = [...(opts.cookies || []), ...parsed];
+                if (setCookieHeader) {
+                    const cookieAssignments = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+                    const parsed = cookieAssignments.filter(Boolean).map((x) => parseSetCookieString(x, { decodeValues: true }));
+                    if (parsed.length) {
+                        opts.cookies = [...(opts.cookies || []), ...parsed];
+                    }
                 }
 
                 nextHopUrl = new URL(location, nextHopUrl);
@@ -347,6 +348,7 @@ export class CurlControl extends AsyncService {
         this.lifeCycleTrack.set(this.asyncLocalContext.ctx, curlResult.data);
 
         return {
+            finalURL,
             sideLoadOpts,
             chain: curlResult.headers,
             status: curlResult.statusCode,

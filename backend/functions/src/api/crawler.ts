@@ -955,7 +955,7 @@ export class CrawlerHost extends RPCHost {
         return crawlOpts;
     }
 
-    async formatSnapshot(
+    protected async formatSnapshot(
         crawlerOptions: CrawlerOptions,
         snapshot: PageSnapshot & {
             screenshotUrl?: string;
@@ -984,31 +984,29 @@ export class CrawlerHost extends RPCHost {
             return output;
         }
 
+        return this.formatSnapshotWithPDFSideLoad(respondWith, snapshot, presumedURL, urlValidMs, scrappingOptions);
+    }
+
+    async formatSnapshotWithPDFSideLoad(mode: string, snapshot: PageSnapshot, nominalUrl?: URL, urlValidMs?: number, scrappingOptions?: ScrappingOptions) {
         const snapshotCopy = _.cloneDeep(snapshot);
 
-        let refFile: any;
         if (snapshotCopy.pdfs?.length) {
             const pdfUrl = snapshotCopy.pdfs[0];
             if (pdfUrl.startsWith('http')) {
                 const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
                 if (sideLoaded?.body) {
                     snapshotCopy.pdfs[0] = pathToFileURL(await sideLoaded?.body.filePath).href;
-                    return this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
+                    return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
                 }
 
-                const r = await this.curlControl.urlToFile(new URL(pdfUrl), scrappingOptions);
-                if (r.data) {
-                    refFile = r.data;
-                    snapshotCopy.pdfs[0] = pathToFileURL(await r.data.filePath).href;
+                const r = await this.curlControl.sideLoad(new URL(pdfUrl), scrappingOptions);
+                if (r.file) {
+                    snapshotCopy.pdfs[0] = pathToFileURL(await r.file.filePath).href;
                 }
             }
         }
 
-        // Keep refFile in scope until the end of the function
-        const r = await this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
-        void refFile;
-
-        return r;
+        return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
     }
 
     async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {

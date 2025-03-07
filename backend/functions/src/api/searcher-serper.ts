@@ -203,6 +203,9 @@ export class SearcherHost extends RPCHost {
                     if (!scrapped) {
                         continue;
                     }
+                    if (rpcReflect.signal.aborted) {
+                        break;
+                    }
 
                     chargeAmount = this.assignChargeAmount(scrapped);
                     sseStream.write({
@@ -244,6 +247,9 @@ export class SearcherHost extends RPCHost {
 
             for await (const scrapped of it) {
                 lastScrapped = scrapped;
+                if (rpcReflect.signal.aborted) {
+                    break;
+                }
                 if (_.some(scrapped, (x) => this.pageQualified(x))) {
                     setEarlyReturnTimer();
                 }
@@ -292,7 +298,9 @@ export class SearcherHost extends RPCHost {
 
         for await (const scrapped of it) {
             lastScrapped = scrapped;
-
+            if (rpcReflect.signal.aborted) {
+                break;
+            }
             if (_.some(scrapped, (x) => this.pageQualified(x))) {
                 setEarlyReturnTimer();
             }
@@ -419,7 +427,7 @@ export class SearcherHost extends RPCHost {
                 if (snapshotMap.has(x)) {
                     return snapshotMap.get(x);
                 }
-                return this.snapshotFormatter.formatSnapshot(mode, x, urls[i]).then((r) => {
+                return this.crawler.formatSnapshotWithPDFSideLoad(mode, x, urls[i], undefined, options).then((r) => {
                     r.title ??= upstreamSearchResult.title;
                     r.description = upstreamSearchResult.snippet;
                     snapshotMap.set(x, r);
