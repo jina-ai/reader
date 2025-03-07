@@ -168,6 +168,15 @@ export class CurlControl extends AsyncService {
                     }
                 }
 
+                if (!stream) {
+                    resolve({
+                        statusCode: status,
+                        data: undefined,
+                        headers,
+                    });
+                    return;
+                }
+
                 if (!contentType) {
                     reject(new AssertionFailureError(`Failed to download ${urlToDownload}: no content-type`));
                     stream.destroy();
@@ -316,6 +325,15 @@ export class CurlControl extends AsyncService {
                     }
                 }
 
+                if (!stream) {
+                    resolve({
+                        statusCode: status,
+                        data: undefined,
+                        headers,
+                    });
+                    return;
+                }
+
                 if (!contentType) {
                     reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: no content-type`));
                     stream.destroy();
@@ -414,7 +432,7 @@ export class CurlControl extends AsyncService {
         let contentType = '';
         const result = await new Promise<{
             statusCode: number,
-            data: FancyFile,
+            data?: FancyFile,
             headers: HeaderInfo[],
         }>((resolve, reject) => {
             const curl = new Curl();
@@ -520,6 +538,15 @@ export class CurlControl extends AsyncService {
                     }
                 }
 
+                if (!stream) {
+                    resolve({
+                        statusCode: status,
+                        data: undefined,
+                        headers: headers as HeaderInfo[],
+                    });
+                    return;
+                }
+
                 switch (contentEncoding) {
                     case 'gzip': {
                         const decompressed = createGunzip();
@@ -604,11 +631,11 @@ export class CurlControl extends AsyncService {
             }
         }
         const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
-        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type']).toLowerCase() || await curlResult.data.mimeType;
+        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type']).toLowerCase() || (await curlResult.data?.mimeType) || 'application/octet-stream';
         const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
         const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
 
-        if (sideLoadOpts.impersonate[finalURL.href] && await curlResult.data.size) {
+        if (sideLoadOpts.impersonate[finalURL.href] && (await curlResult.data?.size)) {
             sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
         }
 

@@ -846,6 +846,13 @@ export class PuppeteerControl extends AsyncService {
                     };
 
                     if (curled.chain.length === 1) {
+                        if (!curled.file) {
+                            return req.respond({
+                                status: curled.status,
+                                headers: _.omit(curled.headers, 'result'),
+                                contentType: curled.contentType,
+                            }, 999);
+                        }
                         const body = await readFile(await curled.file.filePath);
                         if (req.isInterceptResolutionHandled()) {
                             return;

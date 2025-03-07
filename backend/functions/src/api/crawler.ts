@@ -734,6 +734,9 @@ export class CrawlerHost extends RPCHost {
 
                     return this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
                 });
+            if (!sideLoaded.file) {
+                throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
+            }
             let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
             if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
                 yield draftSnapshot;
@@ -745,7 +748,9 @@ export class CrawlerHost extends RPCHost {
             let fallbackProxyIsUsed = false;
             if ((!crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) && (analyzed.tokens < 42 || sideLoaded.status !== 200)) {
                 const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
-
+                if (!proxyLoaded.file) {
+                    throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
+                }
                 const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
                 analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
                 if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
