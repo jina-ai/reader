@@ -722,7 +722,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         try {
-            const altOpts = { ...crawlOpts, timeoutMs: 6_000 };
+            const altOpts = { ...crawlOpts };
             let sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
                 await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts) :
                 await this.curlControl.sideLoad(urlToCrawl, altOpts).catch((err) => {
