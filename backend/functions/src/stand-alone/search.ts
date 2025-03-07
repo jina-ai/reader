@@ -1,7 +1,6 @@
 import 'reflect-metadata';
 import { container, singleton } from 'tsyringe';
 
-import { Logger, AsyncContext } from '../shared';
 import { KoaServer } from 'civkit/civ-rpc/koa';
 import http2 from 'http2';
 import { SearcherHost } from '../api/searcher-serper';
@@ -15,17 +14,19 @@ import { AsyncResource } from 'async_hooks';
 import { runOnce } from 'civkit/decorators';
 import { randomUUID } from 'crypto';
 import { ThreadedServiceRegistry } from '../services/threaded';
+import globalLogger, { GlobalLogger } from '../services/logger';
+import { AsyncLocalContext } from '../services/async-context';
 
 process.on('unhandledRejection', (err) => {
-    console.error('Unhandled rejection', err);
+    globalLogger.warn('Unhandled rejection', err);
 });
 
 process.on('uncaughtException', (err) => {
-    console.log('Uncaught exception', err);
+    globalLogger.error('Uncaught exception', err);
 
     // Looks like Firebase runtime does not handle error properly.
     // Make sure to quit the process.
-    console.error('Uncaught exception, process quit.');
+    globalLogger.error('Uncaught exception, process quit.');
     process.nextTick(() => process.exit(1));
 });
 
@@ -37,10 +38,10 @@ export class SearchStandAloneServer extends KoaServer {
     assets = new Map<string, WalkOutEntity>();
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected registry: RPCRegistry,
         protected searcherHost: SearcherHost,
-        protected threadLocal: AsyncContext,
+        protected threadLocal: AsyncLocalContext,
         protected threads: ThreadedServiceRegistry,
     ) {
         super(...arguments);
