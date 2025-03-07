@@ -30,7 +30,7 @@
     "@google-cloud/translate": "^8.2.0",
     "@koa/bodyparser": "^5.1.1",
     "@mozilla/readability": "^0.5.0",
-    "@napi-rs/canvas": "^0.1.67",
+    "@napi-rs/canvas": "^0.1.68",
     "@types/turndown": "^5.0.4",
     "@xmldom/xmldom": "^0.9.3",
     "archiver": "^6.0.1",
