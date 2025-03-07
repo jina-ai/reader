@@ -137,20 +137,8 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    @Method({
-        description: 'Index of the service',
-        proto: {
-            http: {
-                action: 'get',
-                path: '/',
-            }
-        },
-        tags: ['misc', 'crawl'],
-        returnType: [String, Object],
-    })
-    async getIndex(@Ctx() ctx: Context, @Param({ required: false }) auth?: JinaEmbeddingsAuthDTO) {
+    async getIndex(auth?: JinaEmbeddingsAuthDTO) {
         const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
-
         // Object.assign(indexObject, {
         //     usage1: `${ctx.origin}/YOUR_URL`,
         //     usage2: `${ctx.origin}/search/YOUR_SEARCH_QUERY`,
@@ -170,6 +158,24 @@ export class CrawlerHost extends RPCHost {
             indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
             indexObject.balanceLeft = auth.user.wallet.total_balance;
         }
+
+        return indexObject;
+    }
+
+    @Method({
+        name: 'getIndex',
+        description: 'Index of the service',
+        proto: {
+            http: {
+                action: 'get',
+                path: '/',
+            }
+        },
+        tags: ['misc', 'crawl'],
+        returnType: [String, Object],
+    })
+    async getIndexCtrl(@Ctx() ctx: Context, @Param({ required: false }) auth?: JinaEmbeddingsAuthDTO) {
+        const indexObject = await this.getIndex(auth);
 
         if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
             return indexObject;
@@ -217,7 +223,7 @@ export class CrawlerHost extends RPCHost {
 
         const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.path), crawlerOptions);
         if (!targetUrl) {
-            return await this.getIndex(ctx, auth);
+            return await this.getIndex(auth);
         }
 
         // Prevent circular crawling

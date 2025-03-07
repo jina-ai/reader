@@ -103,7 +103,7 @@ export class SearcherHost extends RPCHost {
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.path).slice(1);
         if (!noSlashPath && !q) {
-            const index = await this.crawler.getIndex(ctx, auth);
+            const index = await this.crawler.getIndex(auth);
             if (!uid) {
                 index.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
             }
