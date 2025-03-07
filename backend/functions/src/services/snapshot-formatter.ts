@@ -192,7 +192,7 @@ export class SnapshotFormatter extends AsyncService {
             (!mode.includes('markdown') && !mode.includes('content')))
         ) {
             const dt = Date.now() - t0;
-            this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
+            this.logger.debug(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 
             const formatted: FormattedPage = {
                 title: (snapshot.parsed?.title || snapshot.title || '').trim(),
@@ -517,7 +517,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         Object.defineProperty(f, 'textRepresentation', { value: textRepresentation, enumerable: false });
 
         const dt = Date.now() - t0;
-        this.logger.info(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
+        this.logger.debug(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 
         return f as FormattedPage;
     }

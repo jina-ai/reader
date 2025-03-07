@@ -700,7 +700,7 @@ export class PuppeteerControl extends AsyncService {
 `);
 
         this.snMap.set(page, sn);
-        this.logger.info(`Page ${sn} created.`);
+        this.logger.debug(`Page ${sn} created.`);
         this.lastPageCratedAt = Date.now();
         this.livePages.add(page);
         this.pagePhase.set(page, 'idle');
@@ -744,7 +744,7 @@ export class PuppeteerControl extends AsyncService {
             return;
         }
         const sn = this.snMap.get(page);
-        this.logger.info(`Closing page ${sn}`);
+        this.logger.debug(`Closing page ${sn}`);
         await Promise.race([
             (async () => {
                 const ctx = page.browserContext();
