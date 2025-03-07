@@ -345,7 +345,7 @@ export class CrawlerHost extends RPCHost {
                 if (!crawlerOptions.isEarlyReturnApplicable()) {
                     continue;
                 }
-                if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped?.title?.trim()) && !scrapped?.pdfs?.length)) {
+                if (crawlerOptions.waitForSelector || !scrapped || await this.isSnapshotQualified(scrapped)) {
                     continue;
                 }
 
@@ -395,7 +395,7 @@ export class CrawlerHost extends RPCHost {
                 continue;
             }
 
-            if (crawlerOptions.waitForSelector || ((!scrapped?.parsed?.content || !scrapped?.title?.trim()) && !scrapped?.pdfs?.length)) {
+            if (crawlerOptions.waitForSelector || !scrapped || await this.isSnapshotQualified(scrapped)) {
                 continue;
             }
 
@@ -1103,6 +1103,19 @@ export class CrawlerHost extends RPCHost {
         await DomainProfile.save(profile);
 
         return;
+    }
+
+    async isSnapshotQualified(snapshot: PageSnapshot) {
+        let tokens = 0;
+        if (snapshot.html) {
+            const r = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
+            tokens = r.tokens;
+        }
+        if (tokens < 200 && !snapshot.pdfs?.length) {
+            return false;
+        }
+
+        return true;
     }
 
     getDomainProfileUrlDigest(url: URL) {
