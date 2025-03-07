@@ -552,7 +552,9 @@ export class PuppeteerControl extends AsyncService {
     }
 
     async newPage() {
-        await this.serviceReady();
+        if (this.__status === 'crippled') {
+            await this.serviceReady();
+        }
         const sn = this._sn++;
         let page;
         try {
