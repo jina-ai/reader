@@ -7,12 +7,13 @@ import { GlobalLogger } from './logger';
 export class BlackHoleDetector extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
-
-    workedTs: number[] = [];
+    lastWorkedTs?: number;
     lastDoneRequestTs?: number;
 
     maxDelay = 1000 * 30;
     concurrentRequests = 0;
+
+    strikes = 0;
 
     constructor(protected globalLogger: GlobalLogger) {
         super(...arguments);
@@ -29,19 +30,26 @@ export class BlackHoleDetector extends AsyncService {
     }
 
     routine() {
-        this.workedTs.splice(0, this.workedTs.length - 20);
         const now = Date.now();
-        const lastWorked = this.workedTs[this.workedTs.length - 1];
+        const lastWorked = this.lastWorkedTs;
+        if (!lastWorked) {
+            return;
+        }
         if (this.concurrentRequests > 0 &&
-            lastWorked && ((now- lastWorked) > this.maxDelay) &&
-            this.lastDoneRequestTs && ((now - this.lastDoneRequestTs) > this.maxDelay)
+            lastWorked && ((now - lastWorked) > (this.maxDelay * this.strikes + 1))
         ) {
-            this.logger.error(`BlackHole detected, last worked: ${lastWorked}`);
+            this.logger.warn(`BlackHole detected, last worked: ${lastWorked}`);
+            this.strikes += 1;
+        }
+
+        if (this.strikes >= 3) {
+            this.logger.error(`BlackHole detected for ${this.strikes} strikes, last worked: ${lastWorked}`);
             this.emit('error', new Error(`BlackHole detected, last worked: ${lastWorked}`));
         }
     }
 
     incomingRequest() {
+        this.lastWorkedTs ??= Date.now();
         this.concurrentRequests++;
     }
     doneWithRequest() {
@@ -50,7 +58,8 @@ export class BlackHoleDetector extends AsyncService {
     }
 
     itWorked() {
-        this.workedTs.push(Date.now());
+        this.lastWorkedTs = Date.now();
+        this.strikes = 0;
     }
 
 }
