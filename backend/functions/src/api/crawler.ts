@@ -345,7 +345,7 @@ export class CrawlerHost extends RPCHost {
                 if (!crawlerOptions.isEarlyReturnApplicable()) {
                     continue;
                 }
-                if (crawlerOptions.waitForSelector || !scrapped || await this.isSnapshotQualified(scrapped)) {
+                if (crawlerOptions.waitForSelector || !scrapped || await this.snapshotNotGoodEnough(scrapped)) {
                     continue;
                 }
 
@@ -395,7 +395,7 @@ export class CrawlerHost extends RPCHost {
                 continue;
             }
 
-            if (crawlerOptions.waitForSelector || !scrapped || await this.isSnapshotQualified(scrapped)) {
+            if (crawlerOptions.waitForSelector || !scrapped || await this.snapshotNotGoodEnough(scrapped)) {
                 continue;
             }
 
@@ -1105,17 +1105,24 @@ export class CrawlerHost extends RPCHost {
         return;
     }
 
-    async isSnapshotQualified(snapshot: PageSnapshot) {
-        let tokens = 0;
-        if (snapshot.html) {
-            const r = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
-            tokens = r.tokens;
-        }
-        if (tokens < 200 && !snapshot.pdfs?.length) {
+    async snapshotNotGoodEnough(snapshot: PageSnapshot) {
+        if (snapshot.pdfs?.length) {
             return false;
         }
-
-        return true;
+        if (!snapshot.title) {
+            return true;
+        }
+        if (snapshot.parsed?.content) {
+            return false;
+        }
+        if (snapshot.html) {
+            const r = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
+            const tokens = r.tokens;
+            if (tokens < 200) {
+                return true;
+            }
+        }
+        return false;
     }
 
     getDomainProfileUrlDigest(url: URL) {
