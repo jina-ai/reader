@@ -31,7 +31,7 @@ jobs:
       - name: 'Set up Cloud SDK'
         uses: 'google-github-actions/setup-gcloud@v2'
         with:
-          gcloud_component: beta
+          install_components: beta
       - name: "Docker auth"
         run: |-
           gcloud auth configure-docker us-docker.pkg.dev --quiet
