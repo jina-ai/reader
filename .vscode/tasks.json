@@ -6,29 +6,18 @@
             "script": "build",
             "group": "build",
             "options": {
-                "cwd": "${workspaceFolder}/backend/functions"
+                "cwd": "${workspaceFolder}"
             },
             "problemMatcher": [],
             "label": "Backend:rebuild",
             "detail": "Backend:rebuild"
         },
         {
-            "type": "npm",
-            "script": "emu:reset",
-            "group": "build",
-            "options": {
-                "cwd": "${workspaceFolder}/backend/functions"
-            },
-            "problemMatcher": [],
-            "label": "Backend:reset-emulator",
-            "detail": "Backend:reset-emulator"
-        },
-        {
             "type": "typescript",
             "options": {
-                "cwd": "${workspaceFolder}/backend/functions"
+                "cwd": "${workspaceFolder}"
             },
-            "tsconfig": "backend/functions/tsconfig.json",
+            "tsconfig": "tsconfig.json",
             "option": "watch",
             "isBackground": true,
             "problemMatcher": [
@@ -36,121 +25,6 @@
             ],
             "group": "build",
             "label": "Backend:build:watch"
-        },
-        {
-            "type": "npm",
-            "script": "emu:debug",
-            "group": "none",
-            "options": {
-                "cwd": "${workspaceFolder}/backend/functions"
-            },
-            "problemMatcher": [
-                {
-                    "base": "$tsc",
-                    "background": {
-                        "activeOnStart": false,
-                        "beginsPattern": "shutdown requested|Starting emulators",
-                        "endsPattern": "Debugger listening"
-                    }
-                }
-            ],
-            "label": "Backend:start-emulator-debug",
-            "detail": "Backend:start-emulator-debug",
-            "dependsOn": [
-                "Backend:build:watch"
-            ],
-            "isBackground": true,
-        },
-        {
-            "type": "npm",
-            "script": "dev",
-            "options": {
-                "cwd": "${workspaceFolder}/webapp",
-            },
-            "group": "build",
-            "label": "Frontend:start:dev",
-            "detail": "Frontend:start:dev",
-            "isBackground": true,
-            "problemMatcher": {
-                "base": "$vite",
-                "background": {
-                    "activeOnStart": true,
-                    "endsPattern": "OK",
-                    "beginsPattern": "vite"
-                }
-            },
-        },
-        {
-            "type": "npm",
-            "script": "dev",
-            "options": {
-                "cwd": "${workspaceFolder}/webapp",
-                "env": {
-                    "FIREBASE_EMULATE": "true",
-                }
-            },
-            "group": "build",
-            "label": "Frontend:start:emu",
-            "detail": "Frontend:start:emu",
-            "isBackground": true,
-            "problemMatcher": {
-                "base": "$vite",
-                "background": {
-                    "activeOnStart": true,
-                    "endsPattern": "OK",
-                    "beginsPattern": "vite"
-                }
-            },
-        },
-        {
-            "type": "npm",
-            "script": "emu:debug2",
-            "group": "none",
-            "options": {
-                "cwd": "${workspaceFolder}/backend/functions",
-                "env": {
-                    "https_proxy": "http://127.0.0.1:7890",
-                    "http_proxy": "http://127.0.0.1:7890",
-                    "all_proxy": "socks5://127.0.0.1:7890"
-                }
-            },
-            "problemMatcher": [
-                {
-                    "base": "$tsc",
-                    "background": {
-                        "activeOnStart": false,
-                        "beginsPattern": "shutdown requested|Starting emulators",
-                        "endsPattern": "Debugger listening"
-                    }
-                }
-            ],
-            "label": "Backend:start-emulator-debug:with-proxy",
-            "detail": "Backend:start-emulator-debug:with-proxy",
-            "dependsOn": [
-                "Backend:build:watch"
-            ],
-            "isBackground": true,
-        },
-        {
-            "label": "Fullstack:prepare",
-            "dependsOn": [
-                "Frontend:start:emu",
-                "Backend:build:watch",
-            ],
-        },
-        {
-            "label": "Fullstack:debug",
-            "dependsOn": [
-                // "Frontend:start:emu",
-                "Backend:start-emulator-debug",
-            ],
-        },
-        {
-            "label": "Fullstack:debug:with-proxy",
-            "dependsOn": [
-                "Frontend:start:emu",
-                "Backend:start-emulator-debug:with-proxy",
-            ],
         }
     ]
 }

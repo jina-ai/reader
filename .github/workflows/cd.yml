@@ -14,9 +14,6 @@ jobs:
     concurrency:
       group: ${{ github.ref_type == 'branch' && github.ref }}
       cancel-in-progress: true
-    defaults:
-      run:
-        working-directory: backend/functions
     permissions:
       contents: read
     steps:
@@ -30,6 +27,8 @@ jobs:
            credentials_json: '${{ secrets.GCLOUD_SERVICE_ACCOUNT_SECRET_JSON }}'
       - name: 'Set up Cloud SDK'
         uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          install_components: beta
       - name: "Docker auth"
         run: |-
           gcloud auth configure-docker us-docker.pkg.dev --quiet
@@ -40,7 +39,6 @@ jobs:
         with:
           node-version: 22.12.0
           cache: npm
-          cache-dependency-path: backend/functions/package-lock.json
 
       - name: npm install
         run: npm ci
@@ -65,13 +63,13 @@ jobs:
         id: container
         uses: docker/build-push-action@v6
         with:
-          context: backend/functions
+          context: .
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       - name: Deploy CRAWL with Tag
         run: |
-          gcloud run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/crawl.js --region us-central1 --async --min-instances 0
+          gcloud beta run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/crawl.js --region us-central1 --async --min-instances 0 --deploy-health-check --use-http2
       - name: Deploy SEARCH with Tag
         run: |
-          gcloud run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region us-central1 --async --min-instances 0
+          gcloud beta run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region us-central1 --async --min-instances 0 --deploy-health-check --use-http2
