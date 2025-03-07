@@ -13,6 +13,7 @@ import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
 import { ZSTDDecompress } from 'simple-zstd';
 import _ from 'lodash';
 import { isReadable, Readable } from 'stream';
+import { AsyncLocalContext } from './async-context';
 
 export interface CURLScrappingOptions extends ScrappingOptions {
     method?: string;
@@ -29,9 +30,12 @@ export class CurlControl extends AsyncService {
     platform: string = `Linux`;
     ua: string = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/${this.safariVersion} (KHTML, like Gecko) Chrome/${this.chromeVersion}.0.0.0 Safari/${this.safariVersion}`;
 
+    lifeCycleTrack = new WeakMap();
+
     constructor(
         protected globalLogger: Logger,
         protected tempFileManager: TempFileManager,
+        protected asyncLocalContext: AsyncLocalContext,
     ) {
         super(...arguments);
     }
@@ -607,6 +611,9 @@ export class CurlControl extends AsyncService {
         if (sideLoadOpts.impersonate[finalURL.href] && await curlResult.data.size) {
             sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
         }
+
+        // This should keep the file from being garbage collected and deleted until this asyncContext/request is done.
+        this.lifeCycleTrack.set(this.asyncLocalContext.ctx, curlResult.data);
 
         return {
             sideLoadOpts,
