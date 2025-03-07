@@ -528,7 +528,7 @@ export class PuppeteerControl extends AsyncService {
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
         this.curlControl.impersonateChrome(this.ua.replace(/Headless/i, ''));
 
-        await this.newPage().then((r) => this.__loadedPage.push(r));
+        await this.newPage('beware_deadlock').then((r) => this.__loadedPage.push(r));
 
         this.emit('ready');
     }
@@ -551,8 +551,8 @@ export class PuppeteerControl extends AsyncService {
         }
     }
 
-    async newPage() {
-        if (this.__status === 'crippled') {
+    async newPage(bewareDeadLock: any = false) {
+        if (!bewareDeadLock) {
             await this.serviceReady();
         }
         const sn = this._sn++;
