@@ -9,6 +9,7 @@ export class BlackHoleDetector extends AsyncService {
     logger = this.globalLogger.child({ service: this.constructor.name });
     lastWorkedTs?: number;
     lastDoneRequestTs?: number;
+    lastIncomingRequestTs?: number;
 
     maxDelay = 1000 * 30;
     concurrentRequests = 0;
@@ -37,7 +38,9 @@ export class BlackHoleDetector extends AsyncService {
         }
         const dt = (now - lastWorked);
         if (this.concurrentRequests > 0 &&
-            lastWorked && (dt > (this.maxDelay * this.strikes + 1))
+            this.lastIncomingRequestTs && lastWorked &&
+            this.lastIncomingRequestTs >= lastWorked &&
+            (dt > (this.maxDelay * this.strikes + 1))
         ) {
             this.logger.warn(`BlackHole detected, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`);
             this.strikes += 1;
@@ -50,6 +53,7 @@ export class BlackHoleDetector extends AsyncService {
     }
 
     incomingRequest() {
+        this.lastIncomingRequestTs = Date.now();
         this.lastWorkedTs ??= Date.now();
         this.concurrentRequests++;
     }
