@@ -158,13 +158,9 @@ curl -H "X-With-Generated-Alt: true" https://r.jina.ai/https://en.m.wikipedia.or
 
 You will need the following tools to run the project:
 - Node v18 (The build fails for Node version >18)
-- Firebase CLI (`npm install -g firebase-tools`)
-
-For backend, go to the `backend/functions` directory and install the npm dependencies.
 
 ```bash
 git clone git@github.com:jina-ai/reader.git
-cd backend/functions
 npm install
 ```
 
