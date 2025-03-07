@@ -6,6 +6,7 @@ import { SecretExposer } from '../shared/services/secrets';
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncContext } from '../shared';
 import { SerperGoogleHTTP, SerperSearchQueryParams, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
+import { BlackHoleDetector } from './blackhole-detector';
 
 @singleton()
 export class SerperSearchService extends AsyncService {
@@ -19,6 +20,7 @@ export class SerperSearchService extends AsyncService {
         protected secretExposer: SecretExposer,
         protected geoipControl: GeoIPService,
         protected threadLocal: AsyncContext,
+        protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);
     }
@@ -61,6 +63,7 @@ export class SerperSearchService extends AsyncService {
             try {
                 this.logger.debug(`Doing external search`, query);
                 const r = await this.serperSearchHTTP.webSearch(query);
+                this.blackHoleDetector.itWorked();
 
                 return r.parsed;
             } catch (err: any) {

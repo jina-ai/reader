@@ -7,6 +7,7 @@ import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncContext } from '../shared';
 import { WebSearchOptionalHeaderOptions } from '../shared/3rd-party/brave-types';
 import type { Request, Response } from 'express';
+import { BlackHoleDetector } from './blackhole-detector';
 
 @singleton()
 export class BraveSearchService extends AsyncService {
@@ -20,6 +21,7 @@ export class BraveSearchService extends AsyncService {
         protected secretExposer: SecretExposer,
         protected geoipControl: GeoIPService,
         protected threadLocal: AsyncContext,
+        protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);
     }
@@ -69,6 +71,7 @@ export class BraveSearchService extends AsyncService {
         while (maxTries--) {
             try {
                 const r = await this.braveSearchHTTP.webSearch(encoded, { headers: extraHeaders as Record<string, string> });
+                this.blackHoleDetector.itWorked();
 
                 return r.parsed;
             } catch (err: any) {
