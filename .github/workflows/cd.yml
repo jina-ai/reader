@@ -30,6 +30,8 @@ jobs:
            credentials_json: '${{ secrets.GCLOUD_SERVICE_ACCOUNT_SECRET_JSON }}'
       - name: 'Set up Cloud SDK'
         uses: 'google-github-actions/setup-gcloud@v2'
+        with:
+          gcloud_component: beta
       - name: "Docker auth"
         run: |-
           gcloud auth configure-docker us-docker.pkg.dev --quiet
@@ -71,7 +73,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
       - name: Deploy CRAWL with Tag
         run: |
-          gcloud run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/crawl.js --region us-central1 --async --min-instances 0
+          gcloud beta run deploy crawl --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/crawl.js --region us-central1 --async --min-instances 0 --no-deploy-health-check
       - name: Deploy SEARCH with Tag
         run: |
-          gcloud run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region us-central1 --async --min-instances 0
+          gcloud beta run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region us-central1 --async --min-instances 0 --no-deploy-health-check
