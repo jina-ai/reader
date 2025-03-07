@@ -52,7 +52,7 @@
     "minio": "^7.1.3",
     "node-libcurl": "^4.1.0",
     "openai": "^4.20.0",
-    "pdfjs-dist": "^4.2.67",
+    "pdfjs-dist": "^4.10.38",
     "puppeteer": "^23.3.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-block-resources": "^2.4.3",

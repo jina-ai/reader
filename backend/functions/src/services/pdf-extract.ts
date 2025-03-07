@@ -8,14 +8,15 @@ import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
 import { FirebaseStorageBucketControl } from '../shared';
 import { randomUUID } from 'crypto';
-import { PDFDocumentLoadingTask } from 'pdfjs-dist';
+import type { PDFDocumentLoadingTask } from 'pdfjs-dist';
+import path from 'path';
 const utc = require('dayjs/plugin/utc');  // Import the UTC plugin
 dayjs.extend(utc);  // Extend dayjs with the UTC plugin
 const timezone = require('dayjs/plugin/timezone');
 dayjs.extend(timezone);
 
-const pPdfjs = import('pdfjs-dist');
-
+const pPdfjs = import('pdfjs-dist/legacy/build/pdf.mjs');
+const nodeCmapUrl = path.resolve(require.resolve('pdfjs-dist'), '../../cmaps') + '/';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -26,7 +27,10 @@ function stdDev(numbers: number[]) {
     return Math.sqrt(avgSquareDiff);
 }
 
-function isRotatedByAtLeast35Degrees(transform: [number, number, number, number, number, number]): boolean {
+function isRotatedByAtLeast35Degrees(transform?: [number, number, number, number, number, number]): boolean {
+    if (!transform) {
+        return false;
+    }
     const [a, b, c, d, _e, _f] = transform;
 
     // Calculate the rotation angles using arctan(b/a) and arctan(-c/d)
@@ -94,13 +98,15 @@ export class PDFExtractor extends AsyncService {
             loadingTask = this.pdfjs.getDocument({
                 data: binary,
                 disableFontFace: true,
-                verbosity: 0
+                verbosity: 0,
+                cMapUrl: nodeCmapUrl,
             });
         } else {
             loadingTask = this.pdfjs.getDocument({
                 url,
                 disableFontFace: true,
-                verbosity: 0
+                verbosity: 0,
+                cMapUrl: nodeCmapUrl,
             });
         }
 
@@ -112,7 +118,7 @@ export class PDFExtractor extends AsyncService {
 
         for (const pg of _.range(0, doc.numPages)) {
             const page = await doc.getPage(pg + 1);
-            const textContent = await page.getTextContent();
+            const textContent = await page.getTextContent({ includeMarkedContent: true });
             textItems.push((textContent.items as TextItem[]));
         }
 

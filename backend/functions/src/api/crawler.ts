@@ -686,8 +686,14 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlOpts?.engine === ENGINE_TYPE.DIRECT) {
-            const snapshot = await this.curlControl.urlToSnapshot(urlToCrawl, crawlOpts);
-            yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
+            const sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
+                await this.sideLoadWithAllocatedProxy(urlToCrawl, crawlOpts) :
+                await this.curlControl.sideLoad(urlToCrawl, crawlOpts);
+            if (!sideLoaded.file) {
+                throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
+            }
+            const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
+            yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
             return;
         }
         if (crawlOpts?.engine === ENGINE_TYPE.CF_BROWSER_RENDERING) {
@@ -980,6 +986,7 @@ export class CrawlerHost extends RPCHost {
 
         const snapshotCopy = _.cloneDeep(snapshot);
 
+        let refFile: any;
         if (snapshotCopy.pdfs?.length) {
             const pdfUrl = snapshotCopy.pdfs[0];
             if (pdfUrl.startsWith('http')) {
@@ -989,14 +996,19 @@ export class CrawlerHost extends RPCHost {
                     return this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
                 }
 
-                const r = await this.curlControl.download(new URL(pdfUrl), scrappingOptions);
+                const r = await this.curlControl.urlToFile(new URL(pdfUrl), scrappingOptions);
                 if (r.data) {
+                    refFile = r.data;
                     snapshotCopy.pdfs[0] = pathToFileURL(await r.data.filePath).href;
                 }
             }
         }
 
-        return this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
+        // Keep refFile in scope until the end of the function
+        const r = await this.snapshotFormatter.formatSnapshot(respondWith, snapshotCopy, presumedURL, urlValidMs);
+        void refFile;
+
+        return r;
     }
 
     async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {

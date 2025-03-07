@@ -19,9 +19,11 @@ export class BlackHoleDetector extends AsyncService {
     constructor(protected globalLogger: GlobalLogger) {
         super(...arguments);
 
-        setInterval(() => {
-            this.routine();
-        }, 1000 * 15).unref();
+        if (process.env.NODE_ENV?.startsWith('prod')) {
+            setInterval(() => {
+                this.routine();
+            }, 1000 * 15).unref();
+        }
     }
 
     override async init() {

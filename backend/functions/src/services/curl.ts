@@ -3,16 +3,16 @@ import { AsyncService } from 'civkit/async-service';
 import { singleton } from 'tsyringe';
 
 import { Curl, CurlCode, CurlFeature, HeaderInfo } from 'node-libcurl';
-import { PageSnapshot, ScrappingOptions } from './puppeteer';
+import { parseString as parseSetCookieString } from 'set-cookie-parser';
+
+import { ScrappingOptions } from './puppeteer';
 import { Logger } from '../shared/services/logger';
 import { AssertionFailureError, FancyFile } from 'civkit';
 import { ServiceBadAttemptError, TempFileManager } from '../shared';
-import { readFile } from 'fs/promises';
-import { pathToFileURL } from 'url';
 import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
 import { ZSTDDecompress } from 'simple-zstd';
 import _ from 'lodash';
-import { isReadable, Readable } from 'stream';
+import { Readable } from 'stream';
 import { AsyncLocalContext } from './async-context';
 
 export interface CURLScrappingOptions extends ScrappingOptions {
@@ -83,362 +83,27 @@ export class CurlControl extends AsyncService {
         }
         Object.assign(mixinHeaders, headersCopy);
 
-        curl.setOpt(Curl.option.HTTPHEADER, Object.entries(mixinHeaders).map(([k, v]) => `${k}: ${v}`));
+        curl.setOpt(Curl.option.HTTPHEADER, Object.entries(mixinHeaders).flatMap(([k, v]) => {
+            if (Array.isArray(v) && v.length) {
+                return v.map((v2) => `${k}: ${v2}`);
+            }
+            return [`${k}: ${v}`];
+        }));
 
         return curl;
     }
 
-    async download(urlToDownload: URL, crawlOpts?: CURLScrappingOptions) {
-        let contentType = '';
-        const result = await new Promise<{
-            statusCode: number,
-            data?: FancyFile,
-            headers: Buffer | HeaderInfo[],
-        }>((resolve, reject) => {
-            const curl = new Curl();
-            curl.enable(CurlFeature.StreamResponse);
-            curl.setOpt('URL', urlToDownload.toString());
-            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
-            curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
-            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
-            if (crawlOpts?.method) {
-                curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
-            }
-            if (crawlOpts?.body) {
-                curl.setOpt(Curl.option.POSTFIELDS, crawlOpts.body.toString());
-            }
-
-            const headersToSet = { ...crawlOpts?.extraHeaders };
-            if (crawlOpts?.cookies?.length) {
-                const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-                headersToSet.cookie ??= cookieChunks.join('; ');
-            }
-            if (crawlOpts?.referer) {
-                headersToSet.referer ??= crawlOpts.referer;
-            }
-            if (crawlOpts?.overrideUserAgent) {
-                headersToSet['user-agent'] ??= crawlOpts.overrideUserAgent;
-            }
-
-            this.curlImpersonateHeader(curl, headersToSet);
-            if (crawlOpts?.proxyUrl) {
-                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
-                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
-                curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
-            }
-
-            curl.on('end', (statusCode, _data, _headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToDownload.origin}`, { statusCode });
-                curl.close();
-            });
-
-            let curlStream: Readable | undefined;
-            curl.on('error', (err, errCode) => {
-                curl.close();
-                this.logger.warn(`Curl ${urlToDownload}: ${err}`, { err: marshalErrorLike(err) });
-                if (curlStream) {
-                    // For some reason, manually emitting error event is required for curlStream.
-                    curlStream.emit('error', err);
-                    curlStream.destroy(err);
-                }
-                const err2 = this.digestCurlCode(errCode, err.message);
-                if (err2) {
-                    reject(err2);
-                    return;
-                }
-                reject(new AssertionFailureError(`Failed to download ${urlToDownload}: ${err.message}`));
-            });
-            curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
-            let status = -1;
-            let contentEncoding = '';
-            curl.on('stream', (stream, statusCode, headers) => {
-                status = statusCode;
-                curlStream = stream;
-                const lastResHeaders = headers[headers.length - 1];
-                for (const [k, v] of Object.entries(lastResHeaders)) {
-                    const kl = k.toLowerCase();
-                    if (kl === 'content-type') {
-                        contentType = v.toLowerCase();
-                    }
-                    if (kl === 'content-encoding') {
-                        contentEncoding = v.toLowerCase();
-                    }
-                    if (contentType && contentEncoding) {
-                        break;
-                    }
-                }
-
-                if (!stream) {
-                    resolve({
-                        statusCode: status,
-                        data: undefined,
-                        headers,
-                    });
-                    return;
-                }
-
-                if (!contentType) {
-                    reject(new AssertionFailureError(`Failed to download ${urlToDownload}: no content-type`));
-                    stream.destroy();
-                    return;
-                }
-
-                switch (contentEncoding) {
-                    case 'gzip': {
-                        const decompressed = createGunzip();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'deflate': {
-                        const decompressed = createInflate();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'br': {
-                        const decompressed = createBrotliDecompress();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'zstd': {
-                        const decompressed = ZSTDDecompress();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    default: {
-                        break;
-                    }
-                }
-
-                const fpath = this.tempFileManager.alloc();
-                const fancyFile = FancyFile.auto(stream, fpath);
-                this.tempFileManager.bindPathTo(fancyFile, fpath);
-                resolve({
-                    statusCode: status,
-                    data: fancyFile,
-                    headers,
-                });
-            });
-
-            curl.perform();
-        });
-
-        if (result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
-            throw new AssertionFailureError(`Failed to download ${urlToDownload}: HTTP ${result.statusCode}`);
-        }
-
-        return result!;
-    }
-
-    async urlToSnapshot(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions, throwOnNon200 = false): Promise<PageSnapshot> {
-        const snapshot = {
-            href: urlToCrawl.toString(),
-            html: '',
-            title: '',
-            text: '',
-        } as PageSnapshot;
-
-        let contentType = '';
-        const result = await new Promise<{
-            statusCode: number,
-            data?: FancyFile,
-            headers: Buffer | HeaderInfo[],
-        }>((resolve, reject) => {
-            const curl = new Curl();
-            curl.enable(CurlFeature.StreamResponse);
-            curl.setOpt('URL', urlToCrawl.toString());
-            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
-            curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
-            curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
-            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
-            if (crawlOpts?.method) {
-                curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
-            }
-            if (crawlOpts?.body) {
-                curl.setOpt(Curl.option.POSTFIELDS, crawlOpts.body.toString());
-            }
-
-            const headersToSet = { ...crawlOpts?.extraHeaders };
-            if (crawlOpts?.cookies?.length) {
-                const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
-                headersToSet.cookie ??= cookieChunks.join('; ');
-            }
-            if (crawlOpts?.referer) {
-                headersToSet.referer ??= crawlOpts.referer;
-            }
-            if (crawlOpts?.overrideUserAgent) {
-                headersToSet['user-agent'] ??= crawlOpts.overrideUserAgent;
-            }
-
-            this.curlImpersonateHeader(curl, headersToSet);
-            if (crawlOpts?.proxyUrl) {
-                const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
-                curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
-                curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
-            }
-
-            curl.on('end', (statusCode, _data, _headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl.origin}`, { statusCode });
-                curl.close();
-            });
-
-            let curlStream: Readable | undefined;
-            curl.on('error', (err, errCode) => {
-                curl.close();
-                this.logger.warn(`Curl ${urlToCrawl.origin}: ${err}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
-                if (curlStream) {
-                    // For some reason, manually emitting error event is required for curlStream.
-                    curlStream.emit('error', err);
-                    curlStream.destroy(err);
-                }
-                const err2 = this.digestCurlCode(errCode, err.message);
-                if (err2) {
-                    reject(err2);
-                    return;
-                }
-                reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: ${err.message}`));
-            });
-            curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
-            let status = -1;
-            let contentEncoding = '';
-            curl.on('stream', (stream, statusCode, headers) => {
-                status = statusCode;
-                curlStream = stream;
-                const lastResHeaders = headers[headers.length - 1];
-                for (const [k, v] of Object.entries(lastResHeaders)) {
-                    const kl = k.toLowerCase();
-                    if (kl === 'content-type') {
-                        contentType = v.toLowerCase();
-                    }
-                    if (kl === 'content-encoding') {
-                        contentEncoding = v.toLowerCase();
-                    }
-                    if (contentType && contentEncoding) {
-                        break;
-                    }
-                }
-
-                if (!stream) {
-                    resolve({
-                        statusCode: status,
-                        data: undefined,
-                        headers,
-                    });
-                    return;
-                }
-
-                if (!contentType) {
-                    reject(new AssertionFailureError(`Failed to directly access ${urlToCrawl}: no content-type`));
-                    stream.destroy();
-                    return;
-                }
-                if (contentType.startsWith('image/')) {
-                    snapshot.html = `<html style="height: 100%;"><head><meta name="viewport" content="width=device-width, minimum-scale=0.1"><title>${urlToCrawl.origin}${urlToCrawl.pathname}</title></head><body style="margin: 0px; height: 100%; background-color: rgb(14, 14, 14);"><img style="display: block;-webkit-user-select: none;margin: auto;background-color: hsl(0, 0%, 90%);transition: background-color 300ms;" src="${urlToCrawl.href}"></body></html>`;
-                    stream.destroy();
-                    resolve({
-                        statusCode: status,
-                        headers,
-                    });
-                    return;
-                }
-
-                switch (contentEncoding) {
-                    case 'gzip': {
-                        const decompressed = createGunzip();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'deflate': {
-                        const decompressed = createInflate();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'br': {
-                        const decompressed = createBrotliDecompress();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'zstd': {
-                        const decompressed = ZSTDDecompress();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => decompressed.destroy(err));
-                        stream = decompressed;
-                        break;
-                    }
-                    default: {
-                        break;
-                    }
-                }
-
-                const fpath = this.tempFileManager.alloc();
-                const fancyFile = FancyFile.auto(stream, fpath);
-                this.tempFileManager.bindPathTo(fancyFile, fpath);
-                resolve({
-                    statusCode: status,
-                    data: fancyFile,
-                    headers,
-                });
-            });
-
-            curl.perform();
-        });
-
-        if (throwOnNon200 && result.statusCode && (result.statusCode < 200 || result.statusCode >= 300)) {
-            throw new AssertionFailureError(`Failed to access ${urlToCrawl}: HTTP ${result.statusCode}`);
-        }
-
-        if (contentType === 'application/octet-stream') {
-            // Content declared as binary is same as unknown.
-            contentType = '';
-        }
-
-        if (result.data) {
-            const mimeType: string = contentType || await result.data.mimeType;
-            if (mimeType.startsWith('text/html')) {
-                if ((await result.data.size) > 1024 * 1024 * 32) {
-                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
-                }
-                snapshot.html = await readFile(await result.data.filePath, { encoding: 'utf-8' });
-            } else if (mimeType.startsWith('text/') || mimeType.startsWith('application/json')) {
-                if ((await result.data.size) > 1024 * 1024 * 32) {
-                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: file too large`);
-                }
-                snapshot.text = await readFile(await result.data.filePath, { encoding: 'utf-8' });
-                snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
-            } else if (mimeType.startsWith('application/pdf')) {
-                snapshot.pdfs = [pathToFileURL(await result.data.filePath).href];
-            } else {
-                throw new AssertionFailureError(`Failed to access ${urlToCrawl}: unexpected type ${mimeType}`);
-            }
-        }
-
-        return snapshot;
-    }
-
-    async urlToFile(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
-        let contentType = '';
-        const result = await new Promise<{
+    urlToFile1Shot(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
+        return new Promise<{
             statusCode: number,
             data?: FancyFile,
             headers: HeaderInfo[],
         }>((resolve, reject) => {
+            let contentType = '';
             const curl = new Curl();
             curl.enable(CurlFeature.StreamResponse);
             curl.setOpt('URL', urlToCrawl.toString());
-            curl.setOpt(Curl.option.FOLLOWLOCATION, true);
+            curl.setOpt(Curl.option.FOLLOWLOCATION, false);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, Math.min(30_000, crawlOpts?.timeoutMs || 30_000));
             curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
@@ -451,7 +116,7 @@ export class CurlControl extends AsyncService {
 
             const headersToSet = { ...crawlOpts?.extraHeaders };
             if (crawlOpts?.cookies?.length) {
-                const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${cookie.value}`);
+                const cookieChunks = crawlOpts.cookies.map((cookie) => `${cookie.name}=${encodeURIComponent(cookie.value)}`);
                 headersToSet.cookie ??= cookieChunks.join('; ');
             }
             if (crawlOpts?.referer) {
@@ -466,29 +131,12 @@ export class CurlControl extends AsyncService {
             if (crawlOpts?.proxyUrl) {
                 const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
                 curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
-                // const username = proxyUrlCopy.username;
-                // const password = proxyUrlCopy.password;
-                // proxyUrlCopy.username = '';
-                // proxyUrlCopy.password = '';
-                // curl.setOpt(Curl.option.PROXY_SSL_VERIFYPEER, false);
-                // if (username && password) {
-                //     curl.setOpt(Curl.option.PROXYUSERNAME, username);
-                //     curl.setOpt(Curl.option.PROXYPASSWORD, password);
-                // }
             }
-
-            curl.on('end', (statusCode, data, _headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl.origin}`, { statusCode });
-                if (typeof data === 'string' || Buffer.isBuffer(data)) {
-                    curl.close();
-                } else if (isReadable(data)) {
-                    (data as any).once('end', () => curl.close());
-                }
-            });
 
             let curlStream: Readable | undefined;
             curl.on('error', (err, errCode) => {
-                this.logger.warn(`Curl ${urlToCrawl}: ${err}`, { err: marshalErrorLike(err) });
+                curl.close();
+                this.logger.warn(`Curl ${urlToCrawl.origin}: ${err}`, { err: marshalErrorLike(err), urlToCrawl });
                 if (curlStream) {
                     // For some reason, manually emitting error event is required for curlStream.
                     curlStream.emit('error', err);
@@ -500,12 +148,21 @@ export class CurlControl extends AsyncService {
                     return;
                 }
                 reject(new AssertionFailureError(`Failed to access ${urlToCrawl.origin}: ${err.message}`));
-                curl.close();
             });
-            curl.setOpt(Curl.option.MAXFILESIZE, 1024 * 1024 * 1024); // 1GB
+            curl.setOpt(Curl.option.MAXFILESIZE, 4 * 1024 * 1024 * 1024); // 4GB
             let status = -1;
             let contentEncoding = '';
+            curl.once('end', () => {
+                if (curlStream) {
+                    curlStream.once('end', () => curl.close());
+                    return;
+                }
+                curl.close();
+            });
             curl.on('stream', (stream, statusCode, headers) => {
+                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl.origin}`, { statusCode });
+                status = statusCode;
+                curlStream = stream;
                 for (const headerSet of (headers as HeaderInfo[])) {
                     for (const [k, v] of Object.entries(headerSet)) {
                         if (k.trim().endsWith(':')) {
@@ -522,8 +179,6 @@ export class CurlControl extends AsyncService {
                         }
                     }
                 }
-                status = statusCode;
-                curlStream = stream;
                 const lastResHeaders = headers[headers.length - 1];
                 for (const [k, v] of Object.entries(lastResHeaders)) {
                     const kl = k.toLowerCase();
@@ -536,6 +191,18 @@ export class CurlControl extends AsyncService {
                     if (contentType && contentEncoding) {
                         break;
                     }
+                }
+
+                if ([301, 302, 307, 308].includes(statusCode)) {
+                    if (stream) {
+                        stream.resume();
+                    }
+                    resolve({
+                        statusCode: status,
+                        data: undefined,
+                        headers: headers as HeaderInfo[],
+                    });
+                    return;
                 }
 
                 if (!stream) {
@@ -601,8 +268,45 @@ export class CurlControl extends AsyncService {
 
             curl.perform();
         });
+    }
 
-        return result;
+    async urlToFile(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
+        let leftRedirection = 10;
+        let opts = { ...crawlOpts };
+        let nextHopUrl = urlToCrawl;
+        const fakeHeaderInfos: HeaderInfo[] = [];
+        do {
+            const r = await this.urlToFile1Shot(nextHopUrl, opts);
+
+            if ([301, 302, 307, 308].includes(r.statusCode)) {
+                const headers = r.headers[r.headers.length - 1];
+                const location = headers.Location || headers.location;
+                if (!location) {
+                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: Bad redirection from ${nextHopUrl}`);
+                }
+
+                const setCookieHeader = headers['Set-Cookie'] || headers['set-cookie'];
+                const cookieAssignments = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+
+                const parsed = cookieAssignments.map((x) => parseSetCookieString(x, { decodeValues: true }));
+                if (parsed.length) {
+                    opts.cookies = [...(opts.cookies || []), ...parsed];
+                }
+
+                nextHopUrl = new URL(location, nextHopUrl);
+                fakeHeaderInfos.push(...r.headers);
+                leftRedirection -= 1;
+                continue;
+            }
+
+            return {
+                statusCode: r.statusCode,
+                data: r.data,
+                headers: fakeHeaderInfos.concat(r.headers),
+            };
+        } while (leftRedirection > 0);
+
+        throw new AssertionFailureError(`Failed to access ${urlToCrawl}: Too many redirections.`);
     }
 
     async sideLoad(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
@@ -657,6 +361,7 @@ export class CurlControl extends AsyncService {
     digestCurlCode(code: CurlCode, msg: string) {
         switch (code) {
             // 400 User errors
+            case CurlCode.CURLE_GOT_NOTHING:
             case CurlCode.CURLE_COULDNT_RESOLVE_HOST:
             case CurlCode.CURLE_REMOTE_ACCESS_DENIED: {
                 return new AssertionFailureError(msg);
