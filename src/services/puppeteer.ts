@@ -271,7 +271,7 @@ function getMaxDepthAndCountUsingTreeWalker(root) {
     root,
     NodeFilter.SHOW_ELEMENT,
     (node) => {
-      const nodeName = node.nodeName.toLowerCase();
+      const nodeName = node.nodeName?.toLowerCase();
       return (nodeName === 'svg') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
     },
     false
@@ -1102,7 +1102,7 @@ export class PuppeteerControl extends AsyncService {
                         snapshot.childFrames = await pSubFrameSnapshots;
                     }
                 } catch (err: any) {
-                    this.logger.warn(`Page ${sn}: Failed to finalize ${url}`, { err: marshalErrorLike(err) });
+                    this.logger.warn(`Page ${sn}: Failed to finalize ${url}`, { err });
                     if (stuff instanceof Error) {
                         finalized = true;
                         throw stuff;
