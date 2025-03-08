@@ -316,12 +316,14 @@ export class JSDomControl extends AsyncService {
             }
         });
 
+        const final = this.cleanRedundantEmptyLines(jsdom.window.document.documentElement.outerHTML);
+
         const dt = Date.now() - t0;
         if (dt > 1000) {
             this.logger.warn(`Performance issue: Cleaning HTML for LMs took ${dt}ms`, { dt });
         }
 
-        return this.cleanRedundantEmptyLines(jsdom.window.document.documentElement.outerHTML);
+        return final;
     }
 
     snippetToElement(snippet?: string, url?: string) {
