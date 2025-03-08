@@ -303,6 +303,7 @@ export class CurlControl extends AsyncService {
             const r = await this.urlToFile1Shot(nextHopUrl, opts);
 
             if ([301, 302, 307, 308].includes(r.statusCode)) {
+                fakeHeaderInfos.push(...r.headers);
                 const headers = r.headers[r.headers.length - 1];
                 const location: string | undefined = headers.Location || headers.location;
 
@@ -319,14 +320,18 @@ export class CurlControl extends AsyncService {
                 }
 
                 if (!location && !setCookieHeader) {
-                    throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Bad redirection from ${nextHopUrl}`);
+                    // Follow curl behavior
+                    return {
+                        statusCode: r.statusCode,
+                        data: r.data,
+                        headers: fakeHeaderInfos.concat(r.headers),
+                    };
                 }
                 if (!location && cookieRedirects > 1) {
                     throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Browser required to solve complex cookie preconditions.`);
                 }
 
                 nextHopUrl = new URL(location || '', nextHopUrl);
-                fakeHeaderInfos.push(...r.headers);
                 leftRedirection -= 1;
                 continue;
             }
@@ -360,10 +365,9 @@ export class CurlControl extends AsyncService {
             }
             if (headers.result?.code && [301, 302, 307, 308].includes(headers.result.code)) {
                 const location = headers.Location || headers.location;
-                if (!location) {
-                    throw new Error(`Bad redirection: ${curlResult.headers.length} times`);
+                if (location) {
+                    finalURL = new URL(location, finalURL);
                 }
-                finalURL = new URL(location, finalURL);
             }
         }
         const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
