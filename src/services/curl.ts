@@ -180,10 +180,10 @@ export class CurlControl extends AsyncService {
                 for (const [k, v] of Object.entries(lastResHeaders)) {
                     const kl = k.toLowerCase();
                     if (kl === 'content-type') {
-                        contentType = v.toLowerCase();
+                        contentType = (v || '').toLowerCase();
                     }
                     if (kl === 'content-encoding') {
-                        contentEncoding = v.toLowerCase();
+                        contentEncoding = (v || '').toLowerCase();
                     }
                     if (contentType && contentEncoding) {
                         break;
@@ -334,7 +334,7 @@ export class CurlControl extends AsyncService {
             }
         }
         const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
-        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type']).toLowerCase() || (await curlResult.data?.mimeType) || 'application/octet-stream';
+        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type'])?.toLowerCase() || (await curlResult.data?.mimeType) || 'application/octet-stream';
         const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
         const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
 
