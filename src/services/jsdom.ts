@@ -287,7 +287,7 @@ export class JSDomControl extends AsyncService {
 
         jsdom.window.document.querySelectorAll('[class]').forEach((x) => {
             const classes = x.getAttribute('class')?.split(/\s+/g) || [];
-            const newClasses = classes.filter((c) => tailwindClasses.has(c));
+            const newClasses = classes.filter((c) => !tailwindClasses.has(c));
             x.setAttribute('class', newClasses.join(' '));
         });
         jsdom.window.document.querySelectorAll('[style]').forEach((x) => {
