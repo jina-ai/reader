@@ -605,15 +605,15 @@ export class PuppeteerControl extends AsyncService {
             }
 
             const parsedUrl = new URL(requestUrl);
-            try {
-                if (isIP(parsedUrl.hostname)) {
-                    domainSet.add(parsedUrl.hostname);
-                } else {
+            if (isIP(parsedUrl.hostname)) {
+                domainSet.add(parsedUrl.hostname);
+            } else {
+                try {
                     const tldParsed = tldExtract(requestUrl);
                     domainSet.add(tldParsed.domain);
+                } catch (_err) {
+                    domainSet.add(parsedUrl.hostname);
                 }
-            } catch (err) {
-                return req.abort('blockedbyclient', 1000);
             }
 
             if (this.circuitBreakerHosts.has(parsedUrl.hostname.toLowerCase())) {

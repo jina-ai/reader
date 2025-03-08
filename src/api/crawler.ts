@@ -42,6 +42,8 @@ import { ProxyProvider } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { RobotsTxtService } from '../services/robots-text';
+import { lookup } from 'dns/promises';
+import { isIP } from 'net';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -465,7 +467,7 @@ export class CrawlerHost extends RPCHost {
         const targetUrlFromGet = originPath.slice(1);
         if (crawlerOptions.pdf) {
             const pdfBuf = crawlerOptions.pdf instanceof Blob ? await crawlerOptions.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOptions.pdf, 'base64');
-            url = `file://pdf.${md5Hasher.hash(pdfBuf)}`;
+            url = `blob://pdf/${md5Hasher.hash(pdfBuf)}`;
         } else if (targetUrlFromGet) {
             url = targetUrlFromGet.trim();
         } else if (crawlerOptions.url) {
@@ -495,10 +497,23 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        if (!['http:', 'https:', 'file:'].includes(result.protocol)) {
+        if (!['http:', 'https:', 'blob:'].includes(result.protocol)) {
             throw new ParamValidationError({
                 message: `Invalid protocol ${result.protocol}`,
                 path: 'url'
+            });
+        }
+
+        if (!isIP(result.hostname)) {
+            await lookup(result.hostname).catch((err) => {
+                if (err.code === 'ENOTFOUND') {
+                    return Promise.reject(new ParamValidationError({
+                        message: `Domain '${result.hostname}' could not be resolved`,
+                        path: 'url'
+                    }));
+                }
+
+                return;
             });
         }
 
