@@ -115,15 +115,33 @@ export class CurlControl extends AsyncService {
 
             const headersToSet = { ...crawlOpts?.extraHeaders };
             if (crawlOpts?.cookies?.length) {
-                const cookieChunks = crawlOpts.cookies.filter((x)=> {
-                    if (x.maxAge && x.maxAge < 0) {
-                        return false;
+                const cookieKv: Record<string, string> = {};
+                for (const cookie of crawlOpts.cookies) {
+                    cookieKv[cookie.name] = cookie.value;
+                }
+                for (const cookie of crawlOpts.cookies) {
+                    if (cookie.maxAge && cookie.maxAge < 0) {
+                        delete cookieKv[cookie.name];
+                        continue;
                     }
-                    if (x.expires && x.expires < new Date()) {
-                        return false;
+                    if (cookie.expires && cookie.expires < new Date()) {
+                        delete cookieKv[cookie.name];
+                        continue;
                     }
-                    return true;
-                }).map((cookie) => `${cookie.name}=${encodeURIComponent(cookie.value)}`);
+                    if (cookie.secure && urlToCrawl.protocol !== 'https:') {
+                        delete cookieKv[cookie.name];
+                        continue;
+                    }
+                    if (cookie.domain && !urlToCrawl.hostname.endsWith(cookie.domain)) {
+                        delete cookieKv[cookie.name];
+                        continue;
+                    }
+                    if (cookie.path && !urlToCrawl.pathname.startsWith(cookie.path)) {
+                        delete cookieKv[cookie.name];
+                        continue;
+                    }
+                }
+                const cookieChunks = Object.entries(cookieKv).map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
                 headersToSet.cookie ??= cookieChunks.join('; ');
             }
             if (crawlOpts?.referer) {
