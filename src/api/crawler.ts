@@ -519,7 +519,19 @@ export class CrawlerHost extends RPCHost {
     async queryCache(urlToCrawl: URL, cacheTolerance: number) {
         const digest = this.getUrlDigest(urlToCrawl);
 
-        const cache = (await Crawled.fromFirestoreQuery(Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
+        const cache = (
+            await
+                (Crawled.fromFirestoreQuery(
+                    Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)
+                ).catch((err) => {
+                    this.logger.warn(`Failed to query cache, unknown issue`, { err });
+                    // https://github.com/grpc/grpc-node/issues/2647
+                    // https://github.com/googleapis/nodejs-firestore/issues/1023
+                    // https://github.com/googleapis/nodejs-firestore/issues/1023
+
+                    return undefined;
+                }))
+        )?.[0];
 
         if (!cache) {
             return undefined;
