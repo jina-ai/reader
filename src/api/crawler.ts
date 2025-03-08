@@ -735,62 +735,64 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        try {
-            const altOpts = { ...crawlOpts };
-            let sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
-                await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts) :
-                await this.curlControl.sideLoad(urlToCrawl, altOpts).catch((err) => {
-                    this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
+        if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && !this.knownUrlThatSideLoadingWouldCrashTheBrowser(urlToCrawl)) {
+            try {
+                const altOpts = { ...crawlOpts };
+                let sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
+                    await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts) :
+                    await this.curlControl.sideLoad(urlToCrawl, altOpts).catch((err) => {
+                        this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
 
-                    if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
-                        return Promise.reject(err);
-                    }
+                        if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
+                            return Promise.reject(err);
+                        }
 
-                    return this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
-                });
-            if (!sideLoaded.file) {
-                throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
-            }
-            let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
-            if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
-                yield draftSnapshot;
-                return;
-            }
-
-            let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
-            draftSnapshot.title ??= analyzed.title;
-            let fallbackProxyIsUsed = false;
-            if (((!crawlOpts?.allocProxy || crawlOpts.allocProxy === 'none') && !crawlOpts?.proxyUrl) &&
-                (analyzed.tokens < 42 || sideLoaded.status !== 200)
-            ) {
-                const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
-                if (!proxyLoaded.file) {
+                        return this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
+                    });
+                if (!sideLoaded.file) {
                     throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
                 }
-                const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
-                analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
-                if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
-                    draftSnapshot = proxySnapshot;
-                    sideLoaded = proxyLoaded;
-                    fallbackProxyIsUsed = true;
+                let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
+                if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
+                    yield draftSnapshot;
+                    return;
                 }
-            }
 
-            if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
-                yield draftSnapshot;
-            }
-
-            if (crawlOpts && (sideLoaded.status === 200 || analyzed.tokens >= 200 || crawlOpts.allocProxy)) {
-                this.logger.info(`Side load seems to work, applying to crawler.`, { url: urlToCrawl.href });
-                crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
-                if (fallbackProxyIsUsed) {
-                    this.logger.info(`Proxy seems to salvage the page`, { url: urlToCrawl.href });
+                let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
+                draftSnapshot.title ??= analyzed.title;
+                let fallbackProxyIsUsed = false;
+                if (((!crawlOpts?.allocProxy || crawlOpts.allocProxy === 'none') && !crawlOpts?.proxyUrl) &&
+                    (analyzed.tokens < 42 || sideLoaded.status !== 200)
+                ) {
+                    const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
+                    if (!proxyLoaded.file) {
+                        throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
+                    }
+                    const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
+                    analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
+                    if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
+                        draftSnapshot = proxySnapshot;
+                        sideLoaded = proxyLoaded;
+                        fallbackProxyIsUsed = true;
+                    }
                 }
-            }
-        } catch (err: any) {
-            this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
-            if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
-                throw err;
+
+                if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
+                    yield draftSnapshot;
+                }
+
+                if (crawlOpts && (sideLoaded.status === 200 || analyzed.tokens >= 200 || crawlOpts.allocProxy)) {
+                    this.logger.info(`Side load seems to work, applying to crawler.`, { url: urlToCrawl.href });
+                    crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
+                    if (fallbackProxyIsUsed) {
+                        this.logger.info(`Proxy seems to salvage the page`, { url: urlToCrawl.href });
+                    }
+                }
+            } catch (err: any) {
+                this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
+                if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
+                    throw err;
+                }
             }
         }
 
@@ -1191,5 +1193,13 @@ export class CrawlerHost extends RPCHost {
         }
 
         return { ...r, proxy };
+    }
+
+    knownUrlThatSideLoadingWouldCrashTheBrowser(url: URL) {
+        if (url.hostname === 'chromewebstore.google.com') {
+            return true;
+        }
+
+        return false;
     }
 }
