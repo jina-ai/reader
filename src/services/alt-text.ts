@@ -5,6 +5,7 @@ import { CanvasService } from '../shared/services/canvas';
 import { ImageInterrogationManager } from '../shared/services/common-iminterrogate';
 import { ImgBrief } from './puppeteer';
 import { ImgAlt } from '../db/img-alt';
+import { AsyncLocalContext } from './async-context';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
@@ -17,7 +18,8 @@ export class AltTextService extends AsyncService {
     constructor(
         protected globalLogger: Logger,
         protected imageInterrogator: ImageInterrogationManager,
-        protected canvasService: CanvasService
+        protected canvasService: CanvasService,
+        protected asyncLocalContext: AsyncLocalContext
     ) {
         super(...arguments);
     }
@@ -67,6 +69,11 @@ export class AltTextService extends AsyncService {
             generatedCaption = await this.caption(imgBrief.src);
         } catch (err) {
             this.logger.warn(`Unable to generate alt text for ${imgBrief.src}`, { err });
+        }
+
+        if (this.asyncLocalContext.ctx.DNT) {
+            // Don't cache alt text if DNT is set
+            return;
         }
 
         // Don't try again until the next day

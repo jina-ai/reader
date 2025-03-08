@@ -10,6 +10,7 @@ import { FirebaseStorageBucketControl } from '../shared';
 import { randomUUID } from 'crypto';
 import type { PDFDocumentLoadingTask } from 'pdfjs-dist';
 import path from 'path';
+import { AsyncLocalContext } from './async-context';
 const utc = require('dayjs/plugin/utc');  // Import the UTC plugin
 dayjs.extend(utc);  // Extend dayjs with the UTC plugin
 const timezone = require('dayjs/plugin/timezone');
@@ -56,6 +57,7 @@ export class PDFExtractor extends AsyncService {
     constructor(
         protected globalLogger: Logger,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
+        protected asyncLocalContext: AsyncLocalContext,
     ) {
         super(...arguments);
     }
@@ -324,21 +326,23 @@ export class PDFExtractor extends AsyncService {
         try {
             extracted = await this.extract(data);
 
-            const theID = randomUUID();
-            await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
-                Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
-            PDFContent.save(
-                PDFContent.from({
-                    _id: theID,
-                    src: nameUrl,
-                    meta: extracted?.meta || {},
-                    urlDigest: digest,
-                    createdAt: new Date(),
-                    expireAt: new Date(Date.now() + this.cacheRetentionMs)
-                }).degradeForFireStore()
-            ).catch((r) => {
-                this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
-            });
+            if (!this.asyncLocalContext.ctx.DNT) {
+                const theID = randomUUID();
+                await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
+                    Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
+                PDFContent.save(
+                    PDFContent.from({
+                        _id: theID,
+                        src: nameUrl,
+                        meta: extracted?.meta || {},
+                        urlDigest: digest,
+                        createdAt: new Date(),
+                        expireAt: new Date(Date.now() + this.cacheRetentionMs)
+                    }).degradeForFireStore()
+                ).catch((r) => {
+                    this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
+                });
+            }
         } catch (err) {
             this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err });
             throw err;
