@@ -436,7 +436,6 @@ export class CrawlerOptions extends AutoCastable {
         instance.targetSelector ??= targetSelector?.length ? targetSelector : undefined;
         const waitForSelector = ctx?.get('x-wait-for-selector')?.split(', ').filter(Boolean);
         instance.waitForSelector ??= (waitForSelector?.length ? waitForSelector : undefined) || instance.targetSelector;
-        instance.targetSelector = filterSelector(instance.targetSelector);
         const overrideUserAgent = ctx?.get('x-user-agent') || undefined;
         instance.userAgent ??= overrideUserAgent;
 
@@ -591,20 +590,3 @@ export class CrawlerOptionsHeaderOnly extends CrawlerOptions {
         return instance;
     }
 }
-
-function filterSelector(s?: string | string[]) {
-    if (!s) {
-        return s;
-    }
-    const sr = Array.isArray(s) ? s : [s];
-    const selectors = sr.filter((i) => {
-        const innerSelectors = i.split(',').map((s) => s.trim());
-        const someViolation = innerSelectors.find((x) => x.startsWith('*') || x.startsWith(':') || x.includes('*:'));
-        if (someViolation) {
-            return false;
-        }
-        return true;
-    });
-
-    return selectors;
-};

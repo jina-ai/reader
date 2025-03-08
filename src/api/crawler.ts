@@ -960,6 +960,21 @@ export class CrawlerHost extends RPCHost {
             proxyResources: (opts.proxyUrl || opts.proxy?.endsWith('+')) ? true : false,
             private: Boolean(opts.doNotTrack),
         };
+        if (crawlOpts.targetSelector?.length) {
+            if (typeof crawlOpts.targetSelector === 'string') {
+                crawlOpts.targetSelector = [crawlOpts.targetSelector];
+            }
+            for (const s of crawlOpts.targetSelector) {
+                for (const e of s.split(',').map((x)=> x.trim())) {
+                    if (e.startsWith('*') || e.startsWith(':') || e.includes('*:')) {
+                        throw new ParamValidationError({
+                            message: `Unacceptable selector: '${e}'. We cannot accept match-all selector for performance reasons. Sorry.`,
+                            path: 'targetSelector'
+                        });
+                    }
+                }
+            }
+        }
 
         if (opts.locale) {
             crawlOpts.extraHeaders ??= {};

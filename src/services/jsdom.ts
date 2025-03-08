@@ -1,5 +1,4 @@
 import { container, singleton } from 'tsyringe';
-import { AsyncService, marshalErrorLike } from 'civkit';
 import { GlobalLogger } from './logger';
 import { ExtendedSnapshot, ImgBrief, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
@@ -8,6 +7,8 @@ import { Threaded } from '../services/threaded';
 import type { ExtraScrappingOptions } from '../api/crawler';
 import { tailwindClasses } from '../utils/tailwind-classes';
 import { countGPTToken } from '../shared/utils/openai';
+import { AsyncService } from 'civkit/async-service';
+import { ApplicationError, AssertionFailureError } from 'civkit/civ-rpc';
 
 const pLinkedom = import('linkedom');
 
@@ -38,8 +39,17 @@ export class JSDomControl extends AsyncService {
             return snapshot;
         }
 
-        // SideLoad contains native objects that cannot go through thread boundaries.
-        return this.actualNarrowSnapshot(snapshot, { ...options, sideLoad: undefined });
+        try {
+            // SideLoad contains native objects that cannot go through thread boundaries.
+            return await this.actualNarrowSnapshot(snapshot, { ...options, sideLoad: undefined });
+        } catch (err: any) {
+            this.logger.warn(`Error narrowing snapshot`, { err });
+            if (err instanceof ApplicationError) {
+                throw err;
+            }
+
+            throw new AssertionFailureError(`Failed to process the page: ${err?.message}`);
+        }
     }
 
     @Threaded()
@@ -151,7 +161,7 @@ export class JSDomControl extends AsyncService {
         try {
             parsed = new Readability(rootDoc.cloneNode(true) as any).parse();
         } catch (err: any) {
-            this.logger.warn(`Failed to parse selected element`, { err: marshalErrorLike(err) });
+            this.logger.warn(`Failed to parse selected element`, { err });
         }
 
         const imgSet = new Set<string>();
