@@ -10,7 +10,7 @@ import { AssertionFailureError, FancyFile } from 'civkit';
 import { ServiceBadAttemptError, TempFileManager } from '../shared';
 import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
 import { ZSTDDecompress } from 'simple-zstd';
-import _ from 'lodash';
+import _, { set } from 'lodash';
 import { Readable } from 'stream';
 import { AsyncLocalContext } from './async-context';
 
@@ -278,9 +278,6 @@ export class CurlControl extends AsyncService {
             if ([301, 302, 307, 308].includes(r.statusCode)) {
                 const headers = r.headers[r.headers.length - 1];
                 const location = headers.Location || headers.location;
-                if (!location) {
-                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: Bad redirection from ${nextHopUrl}`);
-                }
 
                 const setCookieHeader = headers['Set-Cookie'] || headers['set-cookie'];
                 if (setCookieHeader) {
@@ -289,6 +286,10 @@ export class CurlControl extends AsyncService {
                     if (parsed.length) {
                         opts.cookies = [...(opts.cookies || []), ...parsed];
                     }
+                }
+
+                if (!location && !setCookieHeader) {
+                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: Bad redirection from ${nextHopUrl}`);
                 }
 
                 nextHopUrl = new URL(location, nextHopUrl);
