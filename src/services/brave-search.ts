@@ -1,10 +1,10 @@
 import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, delay, marshalErrorLike } from 'civkit';
 import { singleton } from 'tsyringe';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { SecretExposer } from '../shared/services/secrets';
 import { BraveSearchHTTP, WebSearchQueryParams } from '../shared/3rd-party/brave-search';
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
-import { AsyncContext } from '../shared';
+import { AsyncLocalContext } from './async-context';
 import { WebSearchOptionalHeaderOptions } from '../shared/3rd-party/brave-types';
 import type { Request, Response } from 'express';
 import { BlackHoleDetector } from './blackhole-detector';
@@ -17,10 +17,10 @@ export class BraveSearchService extends AsyncService {
     braveSearchHTTP!: BraveSearchHTTP;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected secretExposer: SecretExposer,
         protected geoipControl: GeoIPService,
-        protected threadLocal: AsyncContext,
+        protected threadLocal: AsyncLocalContext,
         protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);

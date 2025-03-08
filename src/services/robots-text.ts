@@ -1,13 +1,12 @@
 import { singleton } from 'tsyringe';
+import { URL } from 'url';
 import { DownstreamServiceFailureError, ResourcePolicyDenyError } from 'civkit/civ-rpc';
 import { AsyncService } from 'civkit/async-service';
 import { HashManager } from 'civkit/hash';
 import { marshalErrorLike } from 'civkit/lang';
 
-import { Logger } from '../shared/services/logger';
-import { BraveSearchHTTP } from '../shared/3rd-party/brave-search';
-import { FirebaseStorageBucketControl } from '../shared';
-import { URL } from 'url';
+import { GlobalLogger } from './logger';
+import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { Threaded } from '../services/threaded';
 
 
@@ -18,10 +17,8 @@ export class RobotsTxtService extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    braveSearchHTTP!: BraveSearchHTTP;
-
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected firebaseStorageBucketControl: FirebaseStorageBucketControl,
     ) {
         super(...arguments);

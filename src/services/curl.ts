@@ -5,9 +5,10 @@ import { Curl, CurlCode, CurlFeature, HeaderInfo } from 'node-libcurl';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 
 import { ScrappingOptions } from './puppeteer';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { AssertionFailureError, FancyFile } from 'civkit';
-import { ServiceBadAttemptError, TempFileManager } from '../shared';
+import { ServiceBadAttemptError, ServiceBadApproachError } from './errors';
+import { TempFileManager } from '../services/temp-file';
 import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
 import { ZSTDDecompress } from 'simple-zstd';
 import _ from 'lodash';
@@ -32,7 +33,7 @@ export class CurlControl extends AsyncService {
     lifeCycleTrack = new WeakMap();
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected tempFileManager: TempFileManager,
         protected asyncLocalContext: AsyncLocalContext,
     ) {
@@ -328,7 +329,7 @@ export class CurlControl extends AsyncService {
                     };
                 }
                 if (!location && cookieRedirects > 1) {
-                    throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Browser required to solve complex cookie preconditions.`);
+                    throw new ServiceBadApproachError(`Failed to access ${urlToCrawl}: Browser required to solve complex cookie preconditions.`);
                 }
 
                 nextHopUrl = new URL(location || '', nextHopUrl);

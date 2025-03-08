@@ -1,6 +1,6 @@
 import { AssertionFailureError, AsyncService, HashManager } from 'civkit';
 import { singleton } from 'tsyringe';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { CanvasService } from '../shared/services/canvas';
 import { ImageInterrogationManager } from '../shared/services/common-iminterrogate';
 import { ImgBrief } from './puppeteer';
@@ -16,7 +16,7 @@ export class AltTextService extends AsyncService {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected imageInterrogator: ImageInterrogationManager,
         protected canvasService: CanvasService,
         protected asyncLocalContext: AsyncLocalContext

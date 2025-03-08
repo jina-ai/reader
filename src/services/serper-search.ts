@@ -1,9 +1,9 @@
 import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, delay, marshalErrorLike } from 'civkit';
 import { singleton } from 'tsyringe';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { SecretExposer } from '../shared/services/secrets';
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
-import { AsyncContext } from '../shared';
+import { AsyncLocalContext } from './async-context';
 import { SerperGoogleHTTP, SerperSearchQueryParams, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
 import { BlackHoleDetector } from './blackhole-detector';
 import { Context } from './registry';
@@ -16,10 +16,10 @@ export class SerperSearchService extends AsyncService {
     serperSearchHTTP!: SerperGoogleHTTP;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected secretExposer: SecretExposer,
         protected geoipControl: GeoIPService,
-        protected threadLocal: AsyncContext,
+        protected threadLocal: AsyncLocalContext,
         protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);

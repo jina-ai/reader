@@ -2,7 +2,7 @@ import { AsyncService } from 'civkit/async-service';
 import { singleton } from 'tsyringe';
 
 import { PageSnapshot } from './puppeteer';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import _ from 'lodash';
 import { AssertionFailureError } from 'civkit';
 import { LLMManager } from '../shared/services/common-llm';
@@ -16,7 +16,7 @@ export class LmControl extends AsyncService {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected commonLLM: LLMManager,
         protected jsdomControl: JSDomControl,
     ) {

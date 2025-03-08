@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { container, singleton } from 'tsyringe';
 import { AssertionFailureError, AsyncService, FancyFile, HashManager, marshalErrorLike } from 'civkit';
 import TurndownService, { Filter, Rule } from 'turndown';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { PageSnapshot } from './puppeteer';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { AsyncContext } from '../shared/services/async-context';
@@ -16,7 +16,7 @@ import { STATUS_CODES } from 'http';
 import type { CrawlerOptions } from '../dto/crawler-options';
 import { readFile } from 'fs/promises';
 import { pathToFileURL } from 'url';
-import { countGPTToken } from '../shared';
+import { countGPTToken } from '../shared/utils/openai';
 
 
 export interface FormattedPage {
@@ -82,7 +82,7 @@ export class SnapshotFormatter extends AsyncService {
     gfmNoTable = [highlightedCodeBlock, gfmPlugin.strikethrough, gfmPlugin.taskListItems];
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected jsdomControl: JSDomControl,
         protected altTextService: AltTextService,
         protected pdfExtractor: PDFExtractor,

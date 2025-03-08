@@ -3,10 +3,10 @@ import { singleton } from 'tsyringe';
 import _ from 'lodash';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
 import { AsyncService, HashManager } from 'civkit';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
-import { FirebaseStorageBucketControl } from '../shared';
+import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { randomUUID } from 'crypto';
 import type { PDFDocumentLoadingTask } from 'pdfjs-dist';
 import path from 'path';
@@ -55,7 +55,7 @@ export class PDFExtractor extends AsyncService {
     cacheRetentionMs = 1000 * 3600 * 24 * 7;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected asyncLocalContext: AsyncLocalContext,
     ) {

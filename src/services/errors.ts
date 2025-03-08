@@ -14,6 +14,12 @@ export class ServiceCrashedError extends ApplicationError { }
 @StatusCode(50303)
 export class ServiceNodeResourceDrainError extends ApplicationError { }
 
+@StatusCode(50304)
+export class ServiceBadAttemptError extends ApplicationError { }
+
+@StatusCode(50305)
+export class ServiceBadApproachError extends ServiceBadAttemptError { }
+
 @StatusCode(40104)
 export class EmailUnverifiedError extends ApplicationError { }
 

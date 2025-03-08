@@ -1,6 +1,7 @@
 import { container, singleton } from 'tsyringe';
 import { AsyncService } from 'civkit/async-service';
-import { Logger, SecretExposer } from '../shared';
+import { SecretExposer } from '../shared/services/secrets';
+import { GlobalLogger } from './logger';
 import { CloudFlareHTTP } from '../shared/3rd-party/cloud-flare';
 
 @singleton()
@@ -10,7 +11,7 @@ export class CFBrowserRendering extends AsyncService {
     client!: CloudFlareHTTP;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
         protected secretExposer: SecretExposer,
     ) {
         super(...arguments);

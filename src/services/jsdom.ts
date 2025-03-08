@@ -1,13 +1,13 @@
 import { container, singleton } from 'tsyringe';
 import { AsyncService, marshalErrorLike } from 'civkit';
-import { Logger } from '../shared/services/logger';
+import { GlobalLogger } from './logger';
 import { ExtendedSnapshot, ImgBrief, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { Threaded } from '../services/threaded';
 import type { ExtraScrappingOptions } from '../api/crawler';
 import { tailwindClasses } from '../utils/tailwind-classes';
-import { countGPTToken } from '../shared';
+import { countGPTToken } from '../shared/utils/openai';
 
 const pLinkedom = import('linkedom');
 
@@ -19,7 +19,7 @@ export class JSDomControl extends AsyncService {
     linkedom!: Awaited<typeof pLinkedom>;
 
     constructor(
-        protected globalLogger: Logger,
+        protected globalLogger: GlobalLogger,
     ) {
         super(...arguments);
     }

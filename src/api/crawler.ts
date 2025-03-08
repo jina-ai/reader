@@ -32,14 +32,16 @@ import { GlobalLogger } from '../services/logger';
 import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
-import { BudgetExceededError, InsufficientBalanceError, SecurityCompromiseError } from '../services/errors';
+import {
+    BudgetExceededError, InsufficientBalanceError,
+    SecurityCompromiseError, ServiceBadApproachError, ServiceBadAttemptError
+} from '../services/errors';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
 import { ProxyProvider } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { RobotsTxtService } from '../services/robots-text';
-import { ServiceBadAttemptError } from '../shared/lib/errors';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -758,7 +760,9 @@ export class CrawlerHost extends RPCHost {
             let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
             draftSnapshot.title ??= analyzed.title;
             let fallbackProxyIsUsed = false;
-            if ((!crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) && (analyzed.tokens < 42 || sideLoaded.status !== 200)) {
+            if (((!crawlOpts?.allocProxy || crawlOpts.allocProxy === 'none') && !crawlOpts?.proxyUrl) &&
+                (analyzed.tokens < 42 || sideLoaded.status !== 200)
+            ) {
                 const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
                 if (!proxyLoaded.file) {
                     throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
@@ -904,7 +908,7 @@ export class CrawlerHost extends RPCHost {
         }
         this.threadLocal.set('retainImages', opts.retainImages);
         this.threadLocal.set('noGfm', opts.noGfm);
-        this.threadLocal.set('DNT', Boolean(opts.doNotTrack))
+        this.threadLocal.set('DNT', Boolean(opts.doNotTrack));
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,
@@ -1146,6 +1150,9 @@ export class CrawlerHost extends RPCHost {
     }
 
     @retryWith((err) => {
+        if (err instanceof ServiceBadApproachError) {
+            return false;
+        }
         if (err instanceof ServiceBadAttemptError) {
             // Keep trying
             return true;
@@ -1157,6 +1164,9 @@ export class CrawlerHost extends RPCHost {
         return undefined;
     }, 3)
     async sideLoadWithAllocatedProxy(url: URL, opts?: ExtraScrappingOptions) {
+        if (opts?.allocProxy === 'none') {
+            return this.curlControl.sideLoad(url, opts);
+        }
         const proxy = await this.proxyProvider.alloc(opts?.allocProxy);
         const r = await this.curlControl.sideLoad(url, {
             ...opts,
