@@ -1010,10 +1010,23 @@ export class CrawlerHost extends RPCHost {
                     return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
                 }
 
-                const r = await this.curlControl.sideLoad(new URL(pdfUrl), scrappingOptions);
-                if (r.file) {
-                    snapshotCopy.pdfs[0] = pathToFileURL(await r.file.filePath).href;
+                const r = await this.curlControl.sideLoad(new URL(pdfUrl), scrappingOptions).catch((err) => {
+                    if (err instanceof ServiceBadAttemptError) {
+                        return Promise.reject(new AssertionFailureError(`Failed to load PDF(${pdfUrl}): ${err.message}`));
+                    }
+
+                    return Promise.reject(err);
+                });
+                if (r.status !== 200) {
+                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded status ${r.status}`);
                 }
+                if (!r.contentType.includes('application/pdf')) {
+                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded with wrong content type ${r.contentType}`);
+                }
+                if (!r.file) {
+                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server did not return a body`);
+                }
+                snapshotCopy.pdfs[0] = pathToFileURL(await r.file.filePath).href;
             }
         }
 
