@@ -17,6 +17,7 @@ import { isIP } from 'net';
 import { CurlControl } from './curl';
 import { readFile } from 'fs/promises';
 import { BlackHoleDetector } from './blackhole-detector';
+import { AsyncLocalContext } from './async-context';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -468,8 +469,11 @@ export class PuppeteerControl extends AsyncService {
 
     circuitBreakerHosts: Set<string> = new Set();
 
+    lifeCycleTrack = new WeakMap();
+
     constructor(
         protected globalLogger: Logger,
+        protected asyncLocalContext: AsyncLocalContext,
         protected curlControl: CurlControl,
         protected blackHoleDetector: BlackHoleDetector,
     ) {
@@ -774,6 +778,7 @@ export class PuppeteerControl extends AsyncService {
         const pdfUrls: string[] = [];
         let navigationResponse: HTTPResponse | undefined;
         const page = await this.getNextPage();
+        this.lifeCycleTrack.set(page, this.asyncLocalContext.ctx);
         this.pagePhase.set(page, 'active');
         page.on('response', (resp) => {
             this.blackHoleDetector.itWorked();
@@ -805,6 +810,19 @@ export class PuppeteerControl extends AsyncService {
             if (!options.proxyResources) {
                 const isDocRequest = ['document', 'xhr', 'fetch', 'websocket', 'prefetch', 'eventsource', 'ping'].includes(typ);
                 if (!isDocRequest) {
+                    if (options.extraHeaders) {
+                        const overrides = req.continueRequestOverrides();
+                        const continueArgs = [{
+                            ...overrides,
+                            headers: {
+                                ...req.headers(),
+                                ...overrides?.headers,
+                                ...options.extraHeaders,
+                            }
+                        }, 1] as const;
+
+                        return req.continue(continueArgs[0], continueArgs[1]);
+                    }
                     const overrides = req.continueRequestOverrides();
 
                     return req.continue(overrides, 0);
@@ -830,54 +848,69 @@ export class PuppeteerControl extends AsyncService {
             }
 
             const proxy = options.proxyUrl || sideload?.proxyOrigin?.[reqUrlParsed.origin];
+            const ctx = this.lifeCycleTrack.get(page);
+            if (proxy && ctx) {
+                return this.asyncLocalContext.bridge(ctx, async () => {
+                    try {
+                        const curled = await this.curlControl.sideLoad(reqUrlParsed, {
+                            ...options,
+                            method: req.method(),
+                            body: req.postData(),
+                            extraHeaders: {
+                                ...req.headers(),
+                                ...options.extraHeaders,
+                            },
+                            proxyUrl: proxy
+                        });
+                        if (req.isInterceptResolutionHandled()) {
+                            return;
+                        };
 
-            if (proxy) {
-                try {
-                    const curled = await this.curlControl.sideLoad(reqUrlParsed, {
-                        ...options,
-                        method: req.method(),
-                        body: req.postData(),
-                        extraHeaders: {
-                            ...req.headers(),
-                            ...options.extraHeaders,
-                        },
-                        proxyUrl: proxy
-                    });
-                    if (req.isInterceptResolutionHandled()) {
-                        return;
-                    };
-
-                    if (curled.chain.length === 1) {
-                        if (!curled.file) {
+                        if (curled.chain.length === 1) {
+                            if (!curled.file) {
+                                return req.respond({
+                                    status: curled.status,
+                                    headers: _.omit(curled.headers, 'result'),
+                                    contentType: curled.contentType,
+                                }, 999);
+                            }
+                            const body = await readFile(await curled.file.filePath);
+                            if (req.isInterceptResolutionHandled()) {
+                                return;
+                            };
                             return req.respond({
                                 status: curled.status,
                                 headers: _.omit(curled.headers, 'result'),
                                 contentType: curled.contentType,
+                                body: Uint8Array.from(body),
                             }, 999);
                         }
-                        const body = await readFile(await curled.file.filePath);
-                        if (req.isInterceptResolutionHandled()) {
-                            return;
-                        };
+                        options.sideLoad ??= curled.sideLoadOpts;
+                        _.merge(options.sideLoad, curled.sideLoadOpts);
+                        const firstReq = curled.chain[0];
+
                         return req.respond({
-                            status: curled.status,
-                            headers: _.omit(curled.headers, 'result'),
-                            contentType: curled.contentType,
-                            body: Uint8Array.from(body),
+                            status: firstReq.result!.code,
+                            headers: _.omit(firstReq, 'result'),
                         }, 999);
+                    } catch (err: any) {
+                        this.logger.warn(`Failed to sideload ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err: marshalErrorLike(err) });
                     }
-                    options.sideLoad ??= curled.sideLoadOpts;
-                    _.merge(options.sideLoad, curled.sideLoadOpts);
-                    const firstReq = curled.chain[0];
+                    if (req.isInterceptResolutionHandled()) {
+                        return;
+                    };
+                    const overrides = req.continueRequestOverrides();
+                    const continueArgs = [{
+                        ...overrides,
+                        headers: {
+                            ...req.headers(),
+                            ...overrides?.headers,
+                            ...options.extraHeaders,
+                        }
+                    }, 1] as const;
 
-                    return req.respond({
-                        status: firstReq.result!.code,
-                        headers: _.omit(firstReq, 'result'),
-                    }, 999);
-                } catch (err: any) {
-                    this.logger.warn(`Failed to sideload ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err: marshalErrorLike(err) });
-
-                }
+                    return req.continue(continueArgs[0], continueArgs[1]);
+                });
             }
 
             if (req.isInterceptResolutionHandled()) {
@@ -895,25 +928,6 @@ export class PuppeteerControl extends AsyncService {
 
             return req.continue(continueArgs[0], continueArgs[1]);
         });
-        if (options.extraHeaders) {
-            page.on('request', async (req) => {
-                if (req.isInterceptResolutionHandled()) {
-                    return;
-                };
-
-                const overrides = req.continueRequestOverrides();
-                const continueArgs = [{
-                    ...overrides,
-                    headers: {
-                        ...req.headers(),
-                        ...overrides?.headers,
-                        ...options.extraHeaders,
-                    }
-                }, 1] as const;
-
-                return req.continue(continueArgs[0], continueArgs[1]);
-            });
-        }
         let pageScriptEvaluations: Promise<unknown>[] = [];
         let frameScriptEvaluations: Promise<unknown>[] = [];
         if (options.injectPageScripts?.length) {
