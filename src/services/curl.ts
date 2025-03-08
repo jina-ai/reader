@@ -294,7 +294,8 @@ export class CurlControl extends AsyncService {
     }
 
     async urlToFile(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
-        let leftRedirection = 10;
+        let leftRedirection = 6;
+        let cookieRedirects = 0;
         let opts = { ...crawlOpts };
         let nextHopUrl = urlToCrawl;
         const fakeHeaderInfos: HeaderInfo[] = [];
@@ -312,10 +313,16 @@ export class CurlControl extends AsyncService {
                     if (parsed.length) {
                         opts.cookies = [...(opts.cookies || []), ...parsed];
                     }
+                    if (!location) {
+                        cookieRedirects += 1;
+                    }
                 }
 
                 if (!location && !setCookieHeader) {
-                    throw new AssertionFailureError(`Failed to access ${urlToCrawl}: Bad redirection from ${nextHopUrl}`);
+                    throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Bad redirection from ${nextHopUrl}`);
+                }
+                if (!location && cookieRedirects > 1) {
+                    throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Browser required to solve complex cookie preconditions.`);
                 }
 
                 nextHopUrl = new URL(location || '', nextHopUrl);
@@ -331,7 +338,7 @@ export class CurlControl extends AsyncService {
             };
         } while (leftRedirection > 0);
 
-        throw new AssertionFailureError(`Failed to access ${urlToCrawl}: Too many redirections.`);
+        throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Too many redirections.`);
     }
 
     async sideLoad(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
