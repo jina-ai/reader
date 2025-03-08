@@ -1005,7 +1005,7 @@ export class CrawlerHost extends RPCHost {
             const pdfUrl = snapshotCopy.pdfs[0];
             if (pdfUrl.startsWith('http')) {
                 const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
-                if (sideLoaded?.body) {
+                if (sideLoaded?.status === 200 && sideLoaded.body) {
                     snapshotCopy.pdfs[0] = pathToFileURL(await sideLoaded?.body.filePath).href;
                     return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
                 }
