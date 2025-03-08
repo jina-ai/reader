@@ -794,6 +794,8 @@ export class CrawlerHost extends RPCHost {
                     throw err;
                 }
             }
+        } else if (crawlOpts?.allocProxy && crawlOpts.allocProxy !== 'none' && !crawlOpts.proxyUrl) {
+            crawlOpts.proxyUrl = (await this.proxyProvider.alloc(crawlOpts.allocProxy)).href;
         }
 
         try {
