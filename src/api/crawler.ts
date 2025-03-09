@@ -940,6 +940,9 @@ export class CrawlerHost extends RPCHost {
         this.threadLocal.set('retainImages', opts.retainImages);
         this.threadLocal.set('noGfm', opts.noGfm);
         this.threadLocal.set('DNT', Boolean(opts.doNotTrack));
+        if (opts.markdown) {
+            this.threadLocal.set('turndownOpts', opts.markdown);
+        }
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,

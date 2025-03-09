@@ -1,6 +1,7 @@
 import { Also, AutoCastable, ParamValidationError, Prop, RPC_CALL_ENVIRONMENT } from 'civkit'; // Adjust the import based on where your decorators are defined
 import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
 import { Context } from '../services/registry';
+import { TurnDownTweakableOptions } from './turndown-tweakable-options';
 
 export enum CONTENT_FORMAT {
     CONTENT = 'content',
@@ -209,6 +210,41 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Md-Heading-Style': {
+                    description: 'Heading style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: setext, atx',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Md-Hr': {
+                    description: 'Hr text of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Md-Bullet-List-Marker': {
+                    description: 'Bullet list marker of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: -, +, *',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Md-Em-Delimiter': {
+                    description: 'Em delimiter of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: _, *',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Md-Strong-Delimiter': {
+                    description: 'Strong delimiter of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: **, __',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Md-Link-Style': {
+                    description: 'Link style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: inlined, referenced',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Md-Link-Reference-Style': {
+                    description: 'Link reference style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: full, collapsed, shortcut',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
             }
         }
     }
@@ -352,6 +388,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop()
     doNotTrack?: number | null;
+
+    @Prop()
+    markdown?: TurnDownTweakableOptions;
 
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
@@ -508,6 +547,10 @@ export class CrawlerOptions extends AutoCastable {
 
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
+        }
+
+        if (ctx) {
+            instance.markdown ??= TurnDownTweakableOptions.fromCtx(ctx);
         }
 
         return instance;

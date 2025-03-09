@@ -580,7 +580,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         customRules?: { [k: string]: Rule; };
         customKeep?: Filter;
     }) {
+        const turndownOpts = this.threadLocal.get('turndownOpts');
         const turnDownService = new TurndownService({
+            ...turndownOpts,
             codeBlockStyle: 'fenced',
             preformattedCode: true,
         } as any);
