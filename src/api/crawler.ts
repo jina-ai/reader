@@ -137,7 +137,9 @@ export class CrawlerHost extends RPCHost {
     override async init() {
         await this.dependencyReady();
 
-        this.curlControl.impersonateChrome(this.puppeteerControl.ua.replace(/Headless/i, ''));
+        if (this.puppeteerControl.ua) {
+            this.curlControl.impersonateChrome(this.puppeteerControl.ua.replace(/Headless/i, ''));
+        }
 
         this.emit('ready');
     }
