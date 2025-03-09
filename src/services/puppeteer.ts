@@ -495,6 +495,10 @@ export class PuppeteerControl extends AsyncService {
             this.__reqCapInterval = undefined;
         }
         await this.dependencyReady();
+        if (process.env.NODE_ENV?.includes('dry-run')) {
+            this.emit('ready');
+            return;
+        }
 
         if (this.browser) {
             if (this.browser.connected) {
