@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { container, singleton } from 'tsyringe';
-import { AssertionFailureError, AsyncService, FancyFile, HashManager, marshalErrorLike } from 'civkit';
+import { AssertionFailureError, AsyncService, DataStreamBrokenError, FancyFile, HashManager, marshalErrorLike } from 'civkit';
 import TurndownService, { Filter, Rule } from 'turndown';
 import { GlobalLogger } from './logger';
 import { PageSnapshot } from './puppeteer';
@@ -406,7 +406,7 @@ export class SnapshotFormatter extends AsyncService {
                 const text = snapshot.statusText || STATUS_CODES[code];
                 formatted.warning ??= '';
                 const msg = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
-                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n' : ''}${msg}`;
             }
         }
 
@@ -441,23 +441,23 @@ export class SnapshotFormatter extends AsyncService {
             formatted.warning ??= '';
             if (snapshot.isIntermediate) {
                 const msg = 'This page maybe not yet fully loaded, consider explicitly specify a timeout.';
-                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n' : ''}${msg}`;
             }
             if (snapshot.childFrames?.length && !this.threadLocal.get('withIframe')) {
                 const msg = 'This page contains iframe that are currently hidden, consider enabling iframe processing.';
-                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n' : ''}${msg}`;
             }
             if (snapshot.shadowExpanded && !this.threadLocal.get('withShadowDom')) {
                 const msg = 'This page contains shadow DOM that are currently hidden, consider enabling shadow DOM processing.';
-                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n' : ''}${msg}`;
             }
             if (snapshot.html.includes('captcha') || snapshot.html.includes('cf-turnstile-response')) {
                 const msg = 'This page maybe requiring CAPTCHA, please make sure you are authorized to access this page.';
-                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n' : ''}${msg}`;
             }
             if (snapshot.isFromCache) {
                 const msg = 'This is a cached snapshot of the original page, consider retry with caching opt-out.';
-                formatted.warning = `${formatted.warning}${formatted.warning ? '\n': ''}${msg}`;
+                formatted.warning = `${formatted.warning}${formatted.warning ? '\n' : ''}${msg}`;
             }
         }
 
@@ -565,7 +565,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 const text = snapshot.statusText || STATUS_CODES[code];
                 mixin.warning ??= '';
                 const msg = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
-                mixin.warning = `${mixin.warning}${mixin.warning ? '\n': ''}${msg}`;
+                mixin.warning = `${mixin.warning}${mixin.warning ? '\n' : ''}${msg}`;
             }
         }
 
@@ -628,6 +628,21 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 turnDownService.addRule(k, v);
             }
         }
+
+        turnDownService.addRule('improved-heading', {
+            filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+            replacement: (content, node, options) => {
+                const hLevel = Number(node.nodeName.charAt(1));
+                if (options.headingStyle === 'setext' && hLevel < 3) {
+                    const underline = _.repeat((hLevel === 1 ? '=' : '-'), Math.min(128, content.length));
+                    return (
+                        '\n\n' + content + '\n' + underline + '\n\n'
+                    );
+                } else {
+                    return '\n\n' + _.repeat('#', hLevel) + ' ' + content + '\n\n';
+                }
+            }
+        });
 
         turnDownService.addRule('improved-paragraph', {
             filter: 'p',
@@ -751,27 +766,32 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
             return snapshot;
         }
-        if (contentType.startsWith('text/html')) {
-            if ((await file.size) > 1024 * 1024 * 32) {
-                throw new AssertionFailureError(`Failed to access ${url}: file too large`);
+        try {
+            if (contentType.startsWith('text/html')) {
+                if ((await file.size) > 1024 * 1024 * 32) {
+                    throw new AssertionFailureError(`Failed to access ${url}: file too large`);
+                }
+                snapshot.html = await readFile(await file.filePath, { encoding: 'utf-8' });
+
+                return snapshot;
             }
-            snapshot.html = await readFile(await file.filePath, { encoding: 'utf-8' });
+            if (contentType.startsWith('text/') || contentType.startsWith('application/json')) {
+                if ((await file.size) > 1024 * 1024 * 32) {
+                    throw new AssertionFailureError(`Failed to access ${url}: file too large`);
+                }
+                snapshot.text = await readFile(await file.filePath, { encoding: 'utf-8' });
+                snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
 
-            return snapshot;
-        }
-        if (contentType.startsWith('text/') || contentType.startsWith('application/json')) {
-            if ((await file.size) > 1024 * 1024 * 32) {
-                throw new AssertionFailureError(`Failed to access ${url}: file too large`);
+                return snapshot;
             }
-            snapshot.text = await readFile(await file.filePath, { encoding: 'utf-8' });
-            snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
+            if (contentType.startsWith('application/pdf')) {
+                snapshot.pdfs = [pathToFileURL(await file.filePath).href];
 
-            return snapshot;
-        }
-        if (contentType.startsWith('application/pdf')) {
-            snapshot.pdfs = [pathToFileURL(await file.filePath).href];
-
-            return snapshot;
+                return snapshot;
+            }
+        } catch (err: any) {
+            this.logger.warn(`Failed to read from file: ${url}`, { err, url });
+            throw new DataStreamBrokenError(`Failed to access ${url}: ${err?.message}`);
         }
 
         throw new AssertionFailureError(`Failed to access ${url}: unexpected type ${contentType}`);

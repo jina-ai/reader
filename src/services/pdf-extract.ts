@@ -2,7 +2,7 @@ import 'core-js/actual/promise/with-resolvers';
 import { singleton } from 'tsyringe';
 import _ from 'lodash';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
-import { AsyncService, HashManager } from 'civkit';
+import { AssertionFailureError, AsyncService, HashManager } from 'civkit';
 import { GlobalLogger } from './logger';
 import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
@@ -325,27 +325,27 @@ export class PDFExtractor extends AsyncService {
 
         try {
             extracted = await this.extract(data);
+        } catch (err: any) {
+            this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err, url, nameUrl });
+            throw new AssertionFailureError(`Unable to process ${nameUrl} as pdf: ${err?.message}`);
+        }
 
-            if (!this.asyncLocalContext.ctx.DNT) {
-                const theID = randomUUID();
-                await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
-                    Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
-                PDFContent.save(
-                    PDFContent.from({
-                        _id: theID,
-                        src: nameUrl,
-                        meta: extracted?.meta || {},
-                        urlDigest: digest,
-                        createdAt: new Date(),
-                        expireAt: new Date(Date.now() + this.cacheRetentionMs)
-                    }).degradeForFireStore()
-                ).catch((r) => {
-                    this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
-                });
-            }
-        } catch (err) {
-            this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err });
-            throw err;
+        if (!this.asyncLocalContext.ctx.DNT) {
+            const theID = randomUUID();
+            await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
+                Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
+            PDFContent.save(
+                PDFContent.from({
+                    _id: theID,
+                    src: nameUrl,
+                    meta: extracted?.meta || {},
+                    urlDigest: digest,
+                    createdAt: new Date(),
+                    expireAt: new Date(Date.now() + this.cacheRetentionMs)
+                }).degradeForFireStore()
+            ).catch((r) => {
+                this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
+            });
         }
 
         return extracted;

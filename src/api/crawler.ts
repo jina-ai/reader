@@ -8,6 +8,7 @@ import {
     AssertionFailureError, ParamValidationError,
     RawString,
     ApplicationError,
+    DataStreamBrokenError,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import { Defer } from 'civkit/defer';
@@ -817,7 +818,10 @@ export class CrawlerHost extends RPCHost {
                 }
             } catch (err: any) {
                 this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
-                if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
+                if (err instanceof ApplicationError &&
+                    !(err instanceof ServiceBadAttemptError) &&
+                    !(err instanceof DataStreamBrokenError)
+                ) {
                     throw err;
                 }
             }
@@ -968,7 +972,7 @@ export class CrawlerHost extends RPCHost {
                 crawlOpts.targetSelector = [crawlOpts.targetSelector];
             }
             for (const s of crawlOpts.targetSelector) {
-                for (const e of s.split(',').map((x)=> x.trim())) {
+                for (const e of s.split(',').map((x) => x.trim())) {
                     if (e.startsWith('*') || e.startsWith(':') || e.includes('*:')) {
                         throw new ParamValidationError({
                             message: `Unacceptable selector: '${e}'. We cannot accept match-all selector for performance reasons. Sorry.`,

@@ -846,7 +846,7 @@ export class PuppeteerControl extends AsyncService {
             const proxy = options.proxyUrl || sideload?.proxyOrigin?.[reqUrlParsed.origin];
             const ctx = this.lifeCycleTrack.get(page);
             if (proxy && ctx) {
-                return this.asyncLocalContext.bridge(ctx, async () => {
+                return await this.asyncLocalContext.bridge(ctx, async () => {
                     try {
                         const curled = await this.curlControl.sideLoad(reqUrlParsed, {
                             ...options,
@@ -890,7 +890,7 @@ export class PuppeteerControl extends AsyncService {
                             headers: _.omit(firstReq, 'result'),
                         }, 999);
                     } catch (err: any) {
-                        this.logger.warn(`Failed to sideload ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err: marshalErrorLike(err) });
+                        this.logger.warn(`Failed to sideload browser request ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err, proxy });
                     }
                     if (req.isInterceptResolutionHandled()) {
                         return;
