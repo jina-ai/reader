@@ -228,9 +228,8 @@ export class CrawlerHost extends RPCHost {
         let chargeAmount = 0;
         const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
-        // ctx.url in Koa is still not a real URL, just the full path including search query.
-        // ctx.path in Koa does not include the search query.
-        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.url), crawlerOptions);
+        // Use koa ctx.URL, a standard URL object to avoid node.js framework prop naming confusion
+        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(`${ctx.URL.pathname}${ctx.URL.search}`), crawlerOptions);
         if (!targetUrl) {
             return await this.getIndex(auth);
         }
