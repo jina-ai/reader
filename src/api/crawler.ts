@@ -532,7 +532,7 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        if (!isIp) {
+        if (!isIp && result.protocol !== 'blob:') {
             await lookup(result.hostname).catch((err) => {
                 if (err.code === 'ENOTFOUND') {
                     return Promise.reject(new ParamValidationError({
