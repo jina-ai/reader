@@ -80,7 +80,7 @@ export class LmControl extends AsyncService {
             prompt: `Extract the main content from the given HTML and convert it to Markdown format.\n\n${tripleBackTick}html\n${html}\n${tripleBackTick}\n`,
 
             options: {
-                // system: 'You are an AI assistant developed by Jina AI',
+                // system: 'You are an AI assistant developed by VENDOR_NAME',
                 stream: true,
                 modelSpecific: {
                     top_k: 1,
@@ -119,7 +119,7 @@ export class LmControl extends AsyncService {
         const it = this.commonLLM.iterRun('readerlm-v2', {
             prompt: `${instruction}\n\n${tripleBackTick}html\n${html}\n${tripleBackTick}\n${schema ? `The JSON schema:\n${tripleBackTick}json\n${schema}\n${tripleBackTick}\n` : ''}`,
             options: {
-                // system: 'You are an AI assistant developed by Jina AI',
+                // system: 'You are an AI assistant developed by VENDOR_NAME',
                 stream: true,
                 modelSpecific: {
                     top_k: 1,

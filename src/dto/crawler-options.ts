@@ -128,7 +128,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Proxy': {
-                    description: `Use a proxy server provided by Jina AI.\n\nOptionally specify two-letter country code.`,
+                    description: `Use a proxy server provided by us.\n\nOptionally specify two-letter country code.`,
                     in: 'header',
                     schema: { type: 'string' }
                 },
