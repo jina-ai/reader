@@ -31,7 +31,7 @@ export class RobotsTxtService extends AsyncService {
 
     async getCachedRobotTxt(origin: string) {
         const digest = md5Hasher.hash(origin.toLowerCase());
-        const cacheLoc = `/robot-txt/${digest}`;
+        const cacheLoc = `/robots-txt/${digest}`;
         let buff;
         buff = await this.firebaseStorageBucketControl.downloadFile(cacheLoc).catch(() => undefined);
         if (buff) {
