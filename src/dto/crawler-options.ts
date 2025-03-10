@@ -134,6 +134,16 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Robots-Txt': {
+                    description: `Load and conform to the respective robot.txt on the target origin.\n\nOptionally specify a bot UA to check against.\n\n`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'DNT': {
+                    description: `When set to 1, prevent the result of this request to be cached in the system.\n\n`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Set-Cookie': {
                     description: `Sets cookie(s) to the headless browser for your request. \n\n` +
                         `Syntax is the same with standard Set-Cookie`,

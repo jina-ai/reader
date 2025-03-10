@@ -1,6 +1,6 @@
 import { singleton } from 'tsyringe';
 import { URL } from 'url';
-import { DownstreamServiceFailureError, ResourcePolicyDenyError } from 'civkit/civ-rpc';
+import { AssertionFailureError, DownstreamServiceFailureError, ResourcePolicyDenyError } from 'civkit/civ-rpc';
 import { AsyncService } from 'civkit/async-service';
 import { HashManager } from 'civkit/hash';
 import { marshalErrorLike } from 'civkit/lang';
@@ -40,7 +40,7 @@ export class RobotsTxtService extends AsyncService {
 
         const r = await fetch(new URL('robots.txt', origin).href, { signal: AbortSignal.timeout(5000) });
         if (!r.ok) {
-            throw new DownstreamServiceFailureError(`Failed to fetch robots.txt from ${origin}`);
+            throw new DownstreamServiceFailureError(`Failed to fetch robots.txt from ${origin}: ${r.status} ${r.statusText}`);
         }
         buff = Buffer.from(await r.arrayBuffer());
 
@@ -60,9 +60,10 @@ export class RobotsTxtService extends AsyncService {
             robotTxt = await this.getCachedRobotTxt(url.origin);
         } catch (err) {
             if (err instanceof DownstreamServiceFailureError) {
+                // Remote server is reachable but cannot provide a robot.txt; this is treated as public access
                 return true;
             }
-            throw err;
+            throw new AssertionFailureError(`Failed to load robots.txt from ${url.origin}: ${err}`);
         }
         const myUa = inputMyUa.toLowerCase();
         const lines = robotTxt.split(/\r?\n/g);
