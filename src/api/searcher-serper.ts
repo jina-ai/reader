@@ -154,7 +154,7 @@ export class SearcherHost extends RPCHost {
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count > 10 ? 20 : 10,
+            num: count > 10 ? 30 : 20,
             gl,
             hl,
             location,
@@ -176,11 +176,8 @@ export class SearcherHost extends RPCHost {
         if (crawlWithoutContent || count === 0) {
             const fakeResults = await this.fakeResult(crawlerOptions, organicSearchResults, !crawlWithoutContent, withFavicon);
             lastScrapped = fakeResults;
-            if (!crawlWithoutContent) {
-                chargeAmount = this.assignChargeAmount(lastScrapped);
-            } else {
-                chargeAmount = 10000;
-            }
+            chargeAmount = this.assignChargeAmount(!crawlWithoutContent ? lastScrapped : [], count);
+
             this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
             if ((!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) || count === 0) {
                 return lastScrapped;
@@ -207,7 +204,7 @@ export class SearcherHost extends RPCHost {
                         break;
                     }
 
-                    chargeAmount = this.assignChargeAmount(scrapped);
+                    chargeAmount = this.assignChargeAmount(scrapped, count);
                     sseStream.write({
                         event: 'data',
                         data: scrapped,
@@ -239,7 +236,7 @@ export class SearcherHost extends RPCHost {
                     if (!lastScrapped) {
                         return;
                     }
-                    chargeAmount = this.assignChargeAmount(lastScrapped);
+                    chargeAmount = this.assignChargeAmount(lastScrapped, count);
                     rpcReflect.return(lastScrapped);
                     earlyReturn = true;
                 }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
@@ -259,7 +256,7 @@ export class SearcherHost extends RPCHost {
                 if (earlyReturnTimer) {
                     clearTimeout(earlyReturnTimer);
                 }
-                chargeAmount = this.assignChargeAmount(scrapped);
+                chargeAmount = this.assignChargeAmount(scrapped, count);
 
                 this.assignTokenUsage(scrapped, chargeAmount, crawlWithoutContent);
                 return scrapped;
@@ -274,7 +271,7 @@ export class SearcherHost extends RPCHost {
             }
 
             if (!earlyReturn) {
-                chargeAmount = this.assignChargeAmount(lastScrapped);
+                chargeAmount = this.assignChargeAmount(lastScrapped, count);
             }
 
             this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
@@ -290,7 +287,7 @@ export class SearcherHost extends RPCHost {
                 if (!lastScrapped) {
                     return;
                 }
-                chargeAmount = this.assignChargeAmount(lastScrapped);
+                chargeAmount = this.assignChargeAmount(lastScrapped, count);
                 rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
                 earlyReturn = true;
             }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
@@ -313,7 +310,7 @@ export class SearcherHost extends RPCHost {
                 clearTimeout(earlyReturnTimer);
             }
 
-            chargeAmount = this.assignChargeAmount(scrapped);
+            chargeAmount = this.assignChargeAmount(scrapped, count);
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
@@ -327,7 +324,7 @@ export class SearcherHost extends RPCHost {
         }
 
         if (!earlyReturn) {
-            chargeAmount = this.assignChargeAmount(lastScrapped);
+            chargeAmount = this.assignChargeAmount(lastScrapped, count);
         }
 
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
@@ -335,7 +332,6 @@ export class SearcherHost extends RPCHost {
 
     assignTokenUsage(result: FormattedPage[], chargeAmount: number, crawlWithoutContent: boolean) {
         if (crawlWithoutContent) {
-            chargeAmount = 10000;
             if (result) {
                 result.forEach((x) => {
                     delete x.usage;
@@ -533,10 +529,15 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
         return resultArray;
     }
 
-    assignChargeAmount(formatted: FormattedPage[]) {
-        return _.sum(
+    assignChargeAmount(formatted: FormattedPage[], num: number) {
+        const countentCharge = _.sum(
             formatted.map((x) => this.crawler.assignChargeAmount(x) || 0)
         );
+
+        const numCharge = Math.ceil(num / 10) * 10000;
+
+        return Math.max(countentCharge, numCharge);
+
     }
 
     pageQualified(formattedPage: FormattedPage) {
