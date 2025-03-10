@@ -46,6 +46,8 @@ import { RobotsTxtService } from '../services/robots-text';
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
 
+const normalizeUrl = require('@esm2cjs/normalize-url').default;
+
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
     withShadowDom?: boolean;
@@ -474,8 +476,7 @@ export class CrawlerHost extends RPCHost {
 
         const targetUrlFromGet = originPath.slice(1);
         if (crawlerOptions.pdf) {
-            const pdfBuf = crawlerOptions.pdf instanceof Blob ? await crawlerOptions.pdf.arrayBuffer().then((x) => Buffer.from(x)) : Buffer.from(crawlerOptions.pdf, 'base64');
-            url = `blob://pdf/${md5Hasher.hash(pdfBuf)}`;
+            url = `blob://pdf/${randomUUID()}`;
         } else if (targetUrlFromGet) {
             url = targetUrlFromGet.trim();
         } else if (crawlerOptions.url) {
@@ -485,7 +486,6 @@ export class CrawlerHost extends RPCHost {
         }
 
         let result: URL;
-        const normalizeUrl = require('@esm2cjs/normalize-url').default;
         try {
             result = new URL(
                 normalizeUrl(
