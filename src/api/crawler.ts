@@ -228,7 +228,7 @@ export class CrawlerHost extends RPCHost {
         let chargeAmount = 0;
         const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
 
-        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.path), crawlerOptions);
+        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(ctx.url), crawlerOptions);
         if (!targetUrl) {
             return await this.getIndex(auth);
         }
