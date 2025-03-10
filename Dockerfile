@@ -33,7 +33,7 @@ RUN NODE_COMPILE_CACHE=node_modules npm run dry-run
 
 ENV OVERRIDE_CHROME_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV LD_PRELOAD=/usr/local/lib/libcurl-impersonate.so CURL_IMPERSONATE=chrome116 CURL_IMPERSONATE_HEADERS=no
-ENV NODE_CACHE_DIR=node_modules
+ENV NODE_COMPILE_CACHE=node_modules
 ENV PORT=8080
 
 EXPOSE 3000 3001 8080 8081
