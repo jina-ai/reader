@@ -21,6 +21,7 @@ import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { InsufficientBalanceError } from '../services/errors';
 import { SerperSearchQueryParams, SerperSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
+import { UpdateTimeService } from '../shared/3rd-party/cloud-flare';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES);
 
@@ -43,6 +44,7 @@ export class SearcherHost extends RPCHost {
         protected serperSearchService: SerperSearchService,
         protected crawler: CrawlerHost,
         protected snapshotFormatter: SnapshotFormatter,
+        protected updateTimeService: UpdateTimeService
     ) {
         super(...arguments);
     }
@@ -99,6 +101,7 @@ export class SearcherHost extends RPCHost {
         // Return content by default
         const crawlWithoutContent = crawlerOptions.respondWith.includes('no-content');
         const withFavicon = Boolean(ctx.get('X-With-Favicons'));
+        const withUpdatedTime = Boolean(ctx.get('X-With-Updated-Time'));
 
         let chargeAmount = 0;
         const noSlashPath = decodeURIComponent(ctx.path).slice(1);
@@ -174,7 +177,7 @@ export class SearcherHost extends RPCHost {
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const organicSearchResults = r.organic.slice(0, targetResultCount);
         if (crawlWithoutContent || count === 0) {
-            const fakeResults = await this.fakeResult(crawlerOptions, organicSearchResults, !crawlWithoutContent, withFavicon);
+            const fakeResults = await this.fakeResult(crawlerOptions, organicSearchResults, !crawlWithoutContent, withFavicon, withUpdatedTime);
             lastScrapped = fakeResults;
             chargeAmount = this.assignChargeAmount(!crawlWithoutContent ? lastScrapped : [], count);
 
@@ -188,7 +191,8 @@ export class SearcherHost extends RPCHost {
         const it = this.fetchSearchResults(crawlerOptions.respondWith, r.organic.slice(0, targetResultCount), crawlOpts,
             CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
             count,
-            withFavicon
+            withFavicon,
+            withUpdatedTime
         );
 
         if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
@@ -347,6 +351,7 @@ export class SearcherHost extends RPCHost {
         searchResults?: SerperSearchResponse['organic'],
         withContent: boolean = false,
         withFavicon: boolean = false,
+        withUpdatedTime: boolean = false,
     ) {
         const mode: string | 'markdown' | 'html' | 'text' | 'screenshot' = crawlerOptions.respondWith;
 
@@ -380,6 +385,15 @@ export class SearcherHost extends RPCHost {
                 });
             }
 
+            if (withUpdatedTime) {
+                const updatedTime = await this.getUpdatedTime(upstreamSearchResult.link);
+                result.lastUpdatedTime = updatedTime;
+                dataItems.push({
+                    key: 'lastUpdatedTime',
+                    label: 'Last Update Time',
+                });
+            }
+
             result.toString = function () {
                 const self = this as any;
                 return dataItems.map((x) => `[${index + 1}] ${x.label}: ${self[x.key]}`).join('\n') + '\n';
@@ -401,6 +415,7 @@ export class SearcherHost extends RPCHost {
         crawlerOptions?: CrawlerOptions,
         count?: number,
         withFavicon?: boolean,
+        withUpdatedTime?: boolean,
     ) {
         if (!searchResults) {
             return;
@@ -441,10 +456,21 @@ export class SearcherHost extends RPCHost {
                 });
             }).map(async (x) => {
                 const page = await x;
-                if (withFavicon && page.url) {
-                    const url = new URL(page.url);
-                    page.favicon = await this.getFavicon(url.origin);
-                }
+
+                await Promise.allSettled([
+                    async () => {
+                        if (withFavicon && page.url) {
+                            const url = new URL(page.url);
+                            page.favicon = await this.getFavicon(url.origin);
+                        }
+                    },
+                    async () => {
+                        if (withUpdatedTime && page.url) {
+                            const updatedTime = await this.getUpdatedTime(page.url);
+                            page.lastUpdatedTime = updatedTime;
+                        }
+                    }
+                ].map(f => f()));
                 return page;
             });
 
@@ -476,7 +502,7 @@ export class SearcherHost extends RPCHost {
                             const textRep = x.textRepresentation ? `\n[${i + 1}] Content: \n${x.textRepresentation}` : '';
                             return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}${textRep}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}
+[${i + 1}] Description: ${this.description}${textRep}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}${this.lastUpdatedTime !== undefined ? `\n[${i + 1}] Last Update Time: ${this.lastUpdatedTime}]` : ''}
 `;
                         }
 
@@ -514,7 +540,7 @@ export class SearcherHost extends RPCHost {
                     }
 
                     return `[${i + 1}] Title: ${this.title}
-[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}
+[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}${this.lastUpdatedTime !== undefined ? `\n[${i + 1}] Last Update Time: ${this.lastUpdatedTime}]` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
 ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
@@ -551,6 +577,16 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
 
     searchResultsQualified(results: FormattedPage[], targetResultCount = this.targetResultCount) {
         return _.every(results, (x) => this.pageQualified(x)) && results.length >= targetResultCount;
+    }
+
+    async getUpdatedTime(url: string) {
+        try {
+            const response = await this.updateTimeService.guessUpdateTime(url);
+            return response.data.bestGuess;
+        } catch (error: any) {
+            this.logger.warn(`Failed to get updated time`, { err: marshalErrorLike(error) });
+            return '';
+        }
     }
 
     async getFavicon(domain: string) {
