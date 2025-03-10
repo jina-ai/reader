@@ -14,6 +14,7 @@ import { ZSTDDecompress } from 'simple-zstd';
 import _ from 'lodash';
 import { Readable } from 'stream';
 import { AsyncLocalContext } from './async-context';
+import { BlackHoleDetector } from './blackhole-detector';
 
 export interface CURLScrappingOptions extends ScrappingOptions {
     method?: string;
@@ -36,6 +37,7 @@ export class CurlControl extends AsyncService {
         protected globalLogger: GlobalLogger,
         protected tempFileManager: TempFileManager,
         protected asyncLocalContext: AsyncLocalContext,
+        protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);
     }
@@ -349,7 +351,7 @@ export class CurlControl extends AsyncService {
 
     async sideLoad(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
         const curlResult = await this.urlToFile(targetUrl, crawlOpts);
-
+        this.blackHoleDetector.itWorked();
         let finalURL = targetUrl;
         const sideLoadOpts: CURLScrappingOptions['sideLoad'] = {
             impersonate: {},
