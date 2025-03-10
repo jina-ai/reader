@@ -219,7 +219,7 @@ export class CurlControl extends AsyncService {
                     }
                 }
 
-                if ([301, 302, 307, 308].includes(statusCode)) {
+                if ([301, 302, 303, 307, 308].includes(statusCode)) {
                     if (stream) {
                         stream.resume();
                     }
@@ -305,7 +305,7 @@ export class CurlControl extends AsyncService {
         do {
             const r = await this.urlToFile1Shot(nextHopUrl, opts);
 
-            if ([301, 302, 307, 308].includes(r.statusCode)) {
+            if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
                 fakeHeaderInfos.push(...r.headers);
                 const headers = r.headers[r.headers.length - 1];
                 const location: string | undefined = headers.Location || headers.location;
@@ -402,12 +402,19 @@ export class CurlControl extends AsyncService {
         switch (code) {
             // 400 User errors
             case CurlCode.CURLE_COULDNT_RESOLVE_HOST:
-            {
-                return new AssertionFailureError(msg);
+                {
+                    return new AssertionFailureError(msg);
+                }
+
+            // Maybe retry but dont retry with curl again
+            case CurlCode.CURLE_UNSUPPORTED_PROTOCOL:
+            case CurlCode.CURLE_PEER_FAILED_VERIFICATION: {
+                return new ServiceBadApproachError(msg);
             }
 
             // Retryable errors
             case CurlCode.CURLE_REMOTE_ACCESS_DENIED:
+            case CurlCode.CURLE_SEND_ERROR:
             case CurlCode.CURLE_RECV_ERROR:
             case CurlCode.CURLE_GOT_NOTHING:
             case CurlCode.CURLE_OPERATION_TIMEDOUT:
