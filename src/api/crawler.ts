@@ -112,7 +112,12 @@ export class CrawlerHost extends RPCHost {
             const analyzed = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
             if (analyzed.tokens < 200) {
                 // Does not contain enough content
-                return;
+                if (snapshot.status !== 200) {
+                    return;
+                }
+                if (snapshot.html.includes('captcha') || snapshot.html.includes('cf-turnstile')) {
+                    return;
+                }
             }
 
             await this.setToCache(options.url, snapshot);
