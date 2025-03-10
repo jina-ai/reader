@@ -387,7 +387,7 @@ export class SearcherHost extends RPCHost {
 
             if (withUpdatedTime) {
                 const updatedTime = await this.getUpdatedTime(upstreamSearchResult.link);
-                result.lastUpdatedTime = updatedTime;
+                Reflect.set(result, 'lastUpdatedTime', updatedTime);
                 dataItems.push({
                     key: 'lastUpdatedTime',
                     label: 'Last Update Time',
