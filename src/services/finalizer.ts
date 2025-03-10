@@ -26,7 +26,7 @@ export class FinalizerService extends AbstractFinalizerService {
     }
 
     override onUnhandledRejection(err: unknown, _triggeringPromise: Promise<unknown>): void {
-        this.logger.error(`Unhandled promise rejection in pid ${process.pid}`, { err });
+        this.logger.warn(`Unhandled promise rejection in pid ${process.pid}`, { err });
     }
 }
 
