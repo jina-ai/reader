@@ -401,14 +401,15 @@ export class CurlControl extends AsyncService {
     digestCurlCode(code: CurlCode, msg: string) {
         switch (code) {
             // 400 User errors
-            case CurlCode.CURLE_GOT_NOTHING:
             case CurlCode.CURLE_COULDNT_RESOLVE_HOST:
-            case CurlCode.CURLE_REMOTE_ACCESS_DENIED: {
+            {
                 return new AssertionFailureError(msg);
             }
 
             // Retryable errors
+            case CurlCode.CURLE_REMOTE_ACCESS_DENIED:
             case CurlCode.CURLE_RECV_ERROR:
+            case CurlCode.CURLE_GOT_NOTHING:
             case CurlCode.CURLE_OPERATION_TIMEDOUT:
             case CurlCode.CURLE_SSL_CONNECT_ERROR:
             case CurlCode.CURLE_QUIC_CONNECT_ERROR:
