@@ -53,7 +53,10 @@ export class BlackHoleDetector extends AsyncService {
 
         if (this.strikes >= 3) {
             this.logger.error(`BlackHole detected for ${this.strikes} strikes, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`);
-            this.emit('error', new Error(`BlackHole detected for ${this.strikes} strikes, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`));
+            process.nextTick(() => {
+                this.emit('error', new Error(`BlackHole detected for ${this.strikes} strikes, last worked: ${Math.ceil(dt / 1000)}s ago, concurrentRequests: ${this.concurrentRequests}`));
+                // process.exit(1);
+            });
         }
     }
 

@@ -1012,7 +1012,6 @@ export class PuppeteerControl extends AsyncService {
         }
 
         let nextSnapshotDeferred = Defer();
-        nextSnapshotDeferred.promise.catch(() => 'just dont crash anything');
         const crippleListener = () => nextSnapshotDeferred.reject(new ServiceCrashedError({ message: `Browser crashed, try again` }));
         this.once('crippled', crippleListener);
         nextSnapshotDeferred.promise.finally(() => {
@@ -1077,10 +1076,10 @@ export class PuppeteerControl extends AsyncService {
                 }
 
                 this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err: marshalErrorLike(err) });
-                return Promise.reject(new AssertionFailureError({
+                return new AssertionFailureError({
                     message: `Failed to goto ${url}: ${err}`,
                     cause: err,
-                }));
+                });
             }).then(async (stuff) => {
                 // This check is necessary because without snapshot, the condition of the page is unclear
                 // Calling evaluate directly may stall the process.
@@ -1145,7 +1144,6 @@ export class PuppeteerControl extends AsyncService {
                     );
                 }
             });
-        gotoPromise.catch(() => 'just dont crash anything');
         let waitForPromise: Promise<any> | undefined;
         if (options.waitForSelector) {
             const t0 = Date.now();
