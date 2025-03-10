@@ -74,7 +74,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Respond-With': {
-                    description: `Specifies the (non-default) form factor of the crawled data you prefer.\n\n` +
+                    description: `Specifies the (non-default) form of the crawled data you prefer.\n\n` +
                         `Supported formats: \n` +
                         `- markdown\n` +
                         `- html\n` +
@@ -82,7 +82,9 @@ class Viewport extends AutoCastable {
                         `- pageshot\n` +
                         `- screenshot\n` +
                         `- content\n` +
-                        `- any combination of the above\n\n` +
+                        `- any combination of the above\n` +
+                        `- readerlm-v2\n` +
+                        `- vlm\n\n` +
                         `Default: content\n`
                     ,
                     in: 'header',
@@ -201,7 +203,7 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Engine': {
-                    description: 'Specify the engine to use for crawling.\n\nSupported: browser, direct, vlm, readerlm-v2',
+                    description: 'Specify the engine to use for crawling.\n\nSupported: browser, direct, cf-browser-rendering',
                     in: 'header',
                     schema: { type: 'string' }
                 },
