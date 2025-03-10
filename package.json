@@ -7,7 +7,8 @@
     "build:clean": "rm -rf ./build",
     "serve": "npm run build && npm run start",
     "debug": "npm run build && npm run dev",
-    "start": "npm run shell"
+    "start": "node ./build/stand-alone/crawl.js",
+    "dry-run": "NODE_ENV=dry-run node ./build/stand-alone/search.js"
   },
   "engines": {
     "node": ">=18"
@@ -25,7 +26,7 @@
     "axios": "^1.3.3",
     "bcrypt": "^5.1.0",
     "busboy": "^1.6.0",
-    "civkit": "^0.8.4-5f839a7",
+    "civkit": "^0.8.4-f65f570",
     "core-js": "^3.37.1",
     "cors": "^2.8.5",
     "dayjs": "^1.11.9",

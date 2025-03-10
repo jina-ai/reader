@@ -1,6 +1,7 @@
 import { AbstractTempFileManger } from 'civkit/temp';
-import { unlink } from 'fs/promises';
+import { rm } from 'fs/promises';
 import { singleton } from 'tsyringe';
+import { Finalizer } from './finalizer';
 
 @singleton()
 export class TempFileManager extends AbstractTempFileManger {
@@ -13,10 +14,10 @@ export class TempFileManager extends AbstractTempFileManger {
         this.emit('ready');
     }
 
+    @Finalizer()
     override async standDown() {
         await super.standDown();
 
-        await unlink(this.rootDir);
-
+        await rm(this.rootDir, { recursive: true, force: true });
     }
 }

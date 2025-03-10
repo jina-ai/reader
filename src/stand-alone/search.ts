@@ -3,6 +3,7 @@ import { container, singleton } from 'tsyringe';
 
 import { KoaServer } from 'civkit/civ-rpc/koa';
 import http2 from 'http2';
+import http from 'http';
 import { SearcherHost } from '../api/searcher-serper';
 import { FsWalk, WalkOutEntity } from 'civkit/fswalk';
 import path from 'path';
@@ -14,21 +15,9 @@ import { AsyncResource } from 'async_hooks';
 import { runOnce } from 'civkit/decorators';
 import { randomUUID } from 'crypto';
 import { ThreadedServiceRegistry } from '../services/threaded';
-import globalLogger, { GlobalLogger } from '../services/logger';
+import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
-
-process.on('unhandledRejection', (err) => {
-    globalLogger.warn('Unhandled rejection', err);
-});
-
-process.on('uncaughtException', (err) => {
-    globalLogger.error('Uncaught exception', err);
-
-    // Looks like Firebase runtime does not handle error properly.
-    // Make sure to quit the process.
-    globalLogger.error('Uncaught exception, process quit.');
-    process.nextTick(() => process.exit(1));
-});
+import finalizer, { Finalizer } from '../services/finalizer';
 
 @singleton()
 export class SearchStandAloneServer extends KoaServer {
@@ -63,7 +52,7 @@ export class SearchStandAloneServer extends KoaServer {
         await this.walkForAssets();
         await this.dependencyReady();
 
-        for (const [k,v] of this.registry.conf.entries()) {
+        for (const [k, v] of this.registry.conf.entries()) {
             if (v.tags?.includes('crawl')) {
                 this.registry.conf.delete(k);
             }
@@ -140,9 +129,32 @@ export class SearchStandAloneServer extends KoaServer {
         this.koaApp.use(asyncHookMiddleware);
     }
 
+    @Finalizer()
+    override async standDown() {
+        const tasks: Promise<any>[] = [];
+        if (this.httpAlternativeServer?.listening) {
+            (this.httpAlternativeServer as http.Server).closeIdleConnections?.();
+            this.httpAlternativeServer.close();
+            tasks.push(new Promise<void>((resolve, reject) => {
+                this.httpAlternativeServer!.close((err) => {
+                    if (err) {
+                        return reject(err);
+                    }
+                    resolve();
+                });
+            }));
+        }
+        tasks.push(super.standDown());
+        await Promise.all(tasks);
+    }
+
 }
 const instance = container.resolve(SearchStandAloneServer);
 
 export default instance;
 
-instance.serviceReady().then((s) => s.h2c().listen(parseInt(process.env.PORT || '') || 3000));
+if (process.env.NODE_ENV?.includes('dry-run')) {
+    instance.serviceReady().then(() => finalizer.terminate());
+} else {
+    instance.serviceReady().then((s) => s.h2c().listen(parseInt(process.env.PORT || '') || 3000));
+}

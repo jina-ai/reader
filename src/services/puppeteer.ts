@@ -1,4 +1,3 @@
-import os from 'os';
 import fs from 'fs';
 import { container, singleton } from 'tsyringe';
 import { AsyncService, Defer, marshalErrorLike, AssertionFailureError, delay, Deferred, perNextTick, ParamValidationError, FancyFile } from 'civkit';
@@ -474,7 +473,7 @@ export class PuppeteerControl extends AsyncService {
         protected blackHoleDetector: BlackHoleDetector,
     ) {
         super(...arguments);
-        this.setMaxListeners(2 * Math.floor(os.totalmem() / (256 * 1024 * 1024)) + 1); 148 - 95;
+        this.setMaxListeners(Infinity);
 
         let crippledTimes = 0;
         this.on('crippled', () => {
@@ -496,6 +495,10 @@ export class PuppeteerControl extends AsyncService {
             this.__reqCapInterval = undefined;
         }
         await this.dependencyReady();
+        if (process.env.NODE_ENV?.includes('dry-run')) {
+            this.emit('ready');
+            return;
+        }
 
         if (this.browser) {
             if (this.browser.connected) {
