@@ -305,11 +305,10 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
+        const crawlOpts = await this.configure(crawlerOptions);
         if (crawlerOptions.robotsTxt) {
             await this.robotsTxtService.assertAccessAllowed(targetUrl, crawlerOptions.robotsTxt);
         }
-
-        const crawlOpts = await this.configure(crawlerOptions);
         if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
@@ -508,7 +507,27 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        if (!isIP(result.hostname)) {
+
+        if (this.puppeteerControl.circuitBreakerHosts.has(result.hostname.toLowerCase())) {
+            throw new SecurityCompromiseError({
+                message: `Circular hostname: ${result.protocol}`,
+                path: 'url'
+            });
+        }
+
+        const isIp = isIP(result.hostname);
+
+        if (
+            (result.hostname === 'localhost') ||
+            (isIp && result.hostname.startsWith('127.'))
+        ) {
+            throw new SecurityCompromiseError({
+                message: `Suspicious action: Request to localhost: ${result}`,
+                path: 'url'
+            });
+        }
+
+        if (!isIp) {
             await lookup(result.hostname).catch((err) => {
                 if (err.code === 'ENOTFOUND') {
                     return Promise.reject(new ParamValidationError({
