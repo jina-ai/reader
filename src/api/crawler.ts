@@ -782,7 +782,14 @@ export class CrawlerHost extends RPCHost {
                 if (!sideLoaded.file) {
                     throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
                 }
-                let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
+                let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(
+                    urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName
+                ).catch((err) => {
+                    if (err instanceof ApplicationError) {
+                        return Promise.reject(new ServiceBadAttemptError(err.message));
+                    }
+                    return Promise.reject(err);
+                });
                 if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
                     yield draftSnapshot;
                     return;
@@ -798,7 +805,14 @@ export class CrawlerHost extends RPCHost {
                     if (!proxyLoaded.file) {
                         throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
                     }
-                    const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName);
+                    const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(
+                        urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName
+                    ).catch((err) => {
+                        if (err instanceof ApplicationError) {
+                            return Promise.reject(new ServiceBadAttemptError(err.message));
+                        }
+                        return Promise.reject(err);
+                    });
                     analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
                     if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
                         draftSnapshot = proxySnapshot;
