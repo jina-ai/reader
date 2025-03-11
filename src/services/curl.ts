@@ -109,6 +109,8 @@ export class CurlControl extends AsyncService {
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts?.timeoutMs || 30_000);
             curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
+            curl.setOpt(Curl.option.LOW_SPEED_LIMIT, 32768);
+            curl.setOpt(Curl.option.LOW_SPEED_TIME, 5_000);
             if (crawlOpts?.method) {
                 curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
             }
@@ -401,12 +403,12 @@ export class CurlControl extends AsyncService {
     digestCurlCode(code: CurlCode, msg: string) {
         switch (code) {
             // 400 User errors
-            case CurlCode.CURLE_COULDNT_RESOLVE_HOST:
-                {
-                    return new AssertionFailureError(msg);
-                }
+            case CurlCode.CURLE_COULDNT_RESOLVE_HOST: {
+                return new AssertionFailureError(msg);
+            }
 
             // Maybe retry but dont retry with curl again
+            case CurlCode.CURLE_OPERATION_TIMEDOUT:
             case CurlCode.CURLE_UNSUPPORTED_PROTOCOL:
             case CurlCode.CURLE_PEER_FAILED_VERIFICATION: {
                 return new ServiceBadApproachError(msg);
@@ -417,7 +419,6 @@ export class CurlControl extends AsyncService {
             case CurlCode.CURLE_SEND_ERROR:
             case CurlCode.CURLE_RECV_ERROR:
             case CurlCode.CURLE_GOT_NOTHING:
-            case CurlCode.CURLE_OPERATION_TIMEDOUT:
             case CurlCode.CURLE_SSL_CONNECT_ERROR:
             case CurlCode.CURLE_QUIC_CONNECT_ERROR:
             case CurlCode.CURLE_COULDNT_RESOLVE_PROXY:

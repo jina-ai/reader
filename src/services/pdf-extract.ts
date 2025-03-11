@@ -274,19 +274,19 @@ export class PDFExtractor extends AsyncService {
         return { meta: meta.info as Record<string, any>, content: mdChunks.join(''), text: rawChunks.join('') };
     }
 
-    async cachedExtract(url: string | URL, cacheTolerance: number = 1000 * 3600 * 24, alternativeUrl?: string) {
+    async cachedExtract(url: string, cacheTolerance: number = 1000 * 3600 * 24, alternativeUrl?: string) {
         if (!url) {
             return undefined;
         }
-        const nameUrl = alternativeUrl || url.toString();
+        let nameUrl = alternativeUrl || url;
         const digest = md5Hasher.hash(nameUrl);
 
-        const data = url;
-        if (typeof url === 'string' && this.isDataUrl(url)) {
-            url = `dataurl://digest:${digest}`;
+        if (this.isDataUrl(url)) {
+            nameUrl = `blob://pdf:${digest}`;
         }
 
-        const cache: PDFContent | undefined = (await PDFContent.fromFirestoreQuery(PDFContent.COLLECTION.where('urlDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
+        const cache: PDFContent | undefined = nameUrl.startsWith('blob:') ? undefined :
+            (await PDFContent.fromFirestoreQuery(PDFContent.COLLECTION.where('urlDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
 
         if (cache) {
             const age = Date.now() - cache?.createdAt.valueOf();
@@ -324,13 +324,13 @@ export class PDFExtractor extends AsyncService {
         let extracted;
 
         try {
-            extracted = await this.extract(data);
+            extracted = await this.extract(url);
         } catch (err: any) {
             this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err, url, nameUrl });
             throw new AssertionFailureError(`Unable to process ${nameUrl} as pdf: ${err?.message}`);
         }
 
-        if (!this.asyncLocalContext.ctx.DNT) {
+        if (!this.asyncLocalContext.ctx.DNT && !nameUrl.startsWith('blob:')) {
             const theID = randomUUID();
             await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
                 Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });

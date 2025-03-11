@@ -1,4 +1,5 @@
-import { Also, AutoCastable, ParamValidationError, Prop, RPC_CALL_ENVIRONMENT } from 'civkit'; // Adjust the import based on where your decorators are defined
+import { Also, AutoCastable, ParamValidationError, Prop, RPC_CALL_ENVIRONMENT } from 'civkit/civ-rpc';
+import { FancyFile } from 'civkit/fancy-file';
 import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
 import { Context } from '../services/registry';
 import { TurnDownTweakableOptions } from './turndown-tweakable-options';
@@ -277,9 +278,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop({
         desc: 'Base64 encoded PDF.',
-        type: [File, String]
+        type: [FancyFile, String]
     })
-    pdf?: File | string;
+    pdf?: FancyFile | string;
 
     @Prop({
         default: CONTENT_FORMAT.CONTENT,
