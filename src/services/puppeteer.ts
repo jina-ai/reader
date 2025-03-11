@@ -539,7 +539,7 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             timeout: 10_000,
-            headless: false,
+            headless: true,
             executablePath: process.env.OVERRIDE_CHROME_EXECUTABLE_PATH,
             args: ['--disable-dev-shm-usage']
         }).catch((err: any) => {
