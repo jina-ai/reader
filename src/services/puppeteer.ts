@@ -470,9 +470,6 @@ class PageReqCtrlKit {
 
     onFinishRequest(req: HTTPRequest) {
         this.reqSet.delete(req);
-        if (this.reqSet.size > this.concurrency) {
-            return;
-        }
         const deferred = this.blockers.shift();
         deferred?.resolve();
     }
@@ -542,7 +539,7 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             timeout: 10_000,
-            headless: true,
+            headless: false,
             executablePath: process.env.OVERRIDE_CHROME_EXECUTABLE_PATH,
             args: ['--disable-dev-shm-usage']
         }).catch((err: any) => {
