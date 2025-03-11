@@ -623,11 +623,11 @@ export class PuppeteerControl extends AsyncService {
             if (halt) {
                 return req.abort('blockedbyclient', 1000);
             }
-            t0 ??= Date.now();
             const requestUrl = req.url();
             if (!requestUrl.startsWith('http:') && !requestUrl.startsWith('https:') && !requestUrl.startsWith('chrome-extension:') && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
             }
+            t0 ??= Date.now();
 
             const parsedUrl = new URL(requestUrl);
             if (isIP(parsedUrl.hostname)) {
