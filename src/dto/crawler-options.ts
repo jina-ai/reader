@@ -225,7 +225,8 @@ class Viewport extends AutoCastable {
                         `- html: unrendered HTML is enough to return\n` +
                         `- mutation-idle: wait for DOM mutations to settle and remain unchanged for at least 0.2s\n` +
                         `- resource-idle: wait for no additional resources that would affect page logic and content SUCCEEDED loading for at least 0.5s\n` +
-                        `- media-idle: wait for no additional resources, including media resources, SUCCEEDED loading for at least 0.5s\n\n`,
+                        `- media-idle: wait for no additional resources, including media resources, SUCCEEDED loading for at least 0.5s\n` +
+                        `- network-idle: wait for full load of webpage, as usual.\n\n`,
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -583,11 +584,13 @@ export class CrawlerOptions extends AutoCastable {
         if (respondTiming) {
             instance.respondTiming ??= respondTiming as RESPOND_TIMING;
         }
-        instance.respondTiming ??= (
-            instance.timeout ||
-            instance.respondWith.includes('shot') ||
-            instance.respondWith.includes('vlm')
-        ) ? RESPOND_TIMING.MEDIA_IDLE : RESPOND_TIMING.MUTATION_IDLE;
+        if (instance.timeout) {
+            instance.respondTiming ??= RESPOND_TIMING.NETWORK_IDLE;
+        }
+        if (instance.respondWith.includes('shot') || instance.respondWith.includes('vlm')) {
+            instance.respondTiming ??= RESPOND_TIMING.MEDIA_IDLE;
+        }
+        instance.respondTiming ??= RESPOND_TIMING.RESOURCE_IDLE;
 
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
@@ -607,7 +610,7 @@ export class CrawlerOptions extends AutoCastable {
         if (this.respondTiming === RESPOND_TIMING.HTML && snapshot.html) {
             return true;
         }
-        if (this.respondTiming === RESPOND_TIMING.MEDIA_IDLE && snapshot.lastMediaResourceLoaded) {
+        if (this.respondTiming === RESPOND_TIMING.MEDIA_IDLE && snapshot.lastMediaResourceLoaded && snapshot.lastMutationIdle) {
             const now = Date.now();
             if ((Math.max(snapshot.lastMediaResourceLoaded, snapshot.lastContentResourceLoaded || 0) + 500) < now) {
                 return true;
@@ -619,7 +622,7 @@ export class CrawlerOptions extends AutoCastable {
         if ((this.respondWith.includes('vlm') || this.respondWith.includes('screenshot')) && !snapshot.screenshot) {
             return false;
         }
-        if (this.respondTiming === RESPOND_TIMING.RESOURCE_IDLE && snapshot.lastContentResourceLoaded) {
+        if (this.respondTiming === RESPOND_TIMING.RESOURCE_IDLE && snapshot.lastContentResourceLoaded && snapshot.lastMutationIdle) {
             const now = Date.now();
             if ((snapshot.lastContentResourceLoaded + 500) < now) {
                 return true;
