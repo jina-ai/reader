@@ -655,22 +655,37 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 return `${trimmed.replace(/\n{3,}/g, '\n\n')}\n\n`;
             }
         });
-        turnDownService.addRule('improved-inline-link', {
-            filter: function (node, options) {
+
+        let realLinkStyle: 'inlined' | 'collapsed' | 'shortcut' | 'referenced' | 'discarded' = 'inlined';
+        if (turndownOpts?.linkStyle === 'referenced' || turndownOpts?.linkReferenceStyle) {
+            realLinkStyle = 'referenced';
+            if (turndownOpts?.linkReferenceStyle === 'collapsed') {
+                realLinkStyle = 'collapsed';
+            } else if (turndownOpts?.linkReferenceStyle === 'shortcut') {
+                realLinkStyle = 'shortcut';
+            } else if (turndownOpts?.linkReferenceStyle === 'discarded') {
+                realLinkStyle = 'discarded';
+            }
+        } else if (turndownOpts?.linkStyle === 'discarded') {
+            realLinkStyle = 'discarded';
+        }
+
+        turnDownService.addRule('improved-link', {
+            filter: function (node, _options) {
                 return Boolean(
-                    options.linkStyle === 'inlined' &&
                     node.nodeName === 'A' &&
                     node.getAttribute('href')
                 );
             },
 
-            replacement: function (content, node: any) {
-                const href = node.getAttribute('href');
+            replacement: function (this: { references: string[]; }, content, node: any) {
+                var href = node.getAttribute('href');
                 let title = cleanAttribute(node.getAttribute('title'));
-                if (title) title = ' "' + title.replace(/"/g, '\\"') + '"';
-
+                if (title) title = ` "${title.replace(/"/g, '\\"')}"`;
+                let replacement;
+                let reference;
                 const fixedContent = content.replace(/\s+/g, ' ').trim();
-                let fixedHref = href.replace(/\s+/g, '').trim();
+                let fixedHref = href;
                 if (options?.url) {
                     try {
                         fixedHref = new URL(fixedHref, options.url).toString();
@@ -679,7 +694,46 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     }
                 }
 
-                return `[${fixedContent}](${fixedHref}${title || ''})`;
+                switch (realLinkStyle) {
+                    case 'inlined':
+                        replacement = `[${fixedContent}](${fixedHref}${title || ''})`;
+                        reference = undefined;
+                        break;
+                    case 'collapsed':
+                        replacement = `[${fixedContent}][]`;
+                        reference = `[${fixedContent}]: ${fixedHref}${title}`;
+                        break;
+                    case 'shortcut':
+                        replacement = `[${fixedContent}]`;
+                        reference = `[${fixedContent}]: ${fixedHref}${title}`;
+                        break;
+                    case 'discarded':
+                        replacement = content;
+                        reference = undefined;
+                        break;
+                    default:
+                        const id = this.references.length + 1;
+                        replacement = `[${fixedContent}][${id}]`;
+                        reference = `[${id}]${fixedHref}${title}`;
+                }
+
+                if (reference) {
+                    this.references.push(reference);
+                }
+
+                return replacement;
+            },
+
+            // @ts-ignore
+            references: [],
+
+            append: function (this: { references: string[]; }) {
+                let references = '';
+                if (this.references.length) {
+                    references = `\n\n${this.references.join('\n')}\n\n`;
+                    this.references = []; // Reset references
+                }
+                return references;
             }
         });
         turnDownService.addRule('improved-code', {

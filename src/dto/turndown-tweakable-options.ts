@@ -36,15 +36,15 @@ export class TurnDownTweakableOptions extends AutoCastable {
 
     @Prop({
         desc: 'Turndown options > linkStyle',
-        type: new Set(['inlined', 'referenced']),
+        type: new Set(['inlined', 'referenced', 'discarded']),
     })
-    linkStyle?: 'inlined' | 'referenced';
+    linkStyle?: 'inlined' | 'referenced' | 'discarded';
 
     @Prop({
         desc: 'Turndown options > linkReferenceStyle',
-        type: new Set(['full', 'collapsed', 'shortcut']),
+        type: new Set(['full', 'collapsed', 'shortcut', 'discarded']),
     })
-    linkReferenceStyle?: 'full' | 'collapsed' | 'shortcut';
+    linkReferenceStyle?: 'full' | 'collapsed' | 'shortcut' | 'discarded';
 
     static fromCtx(ctx: Context, prefix= 'x-md-') {
         const draft: Record<string, string> = {};
