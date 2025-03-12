@@ -55,6 +55,7 @@ export interface PageSnapshot {
     href: string;
     rebase?: string;
     html: string;
+    htmlModifiedByJs?: boolean;
     shadowExpanded?: string;
     text: string;
     status?: number;
@@ -377,9 +378,11 @@ function shadowDomPresent(rootElement = document.documentElement) {
 }
 
 let lastMutationIdle = 0;
+let initialHTML;
 document.addEventListener('mutationIdle', ()=> lastMutationIdle = Date.now());
 
 function giveSnapshot(stopActiveSnapshot) {
+    initialHTML ??= document.documentElement?.outerHTML;
     if (stopActiveSnapshot) {
         window.haltSnapshot = true;
     }
@@ -395,6 +398,7 @@ function giveSnapshot(stopActiveSnapshot) {
         description: document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? '',
         href: document.location.href,
         html: document.documentElement?.outerHTML,
+        htmlModifiedByJs: false,
         text: document.body?.innerText,
         shadowExpanded: shadowDomPresent() ? cloneAndExpandShadowRoots()?.outerHTML : undefined,
         parsed: parsed,
@@ -403,6 +407,9 @@ function giveSnapshot(stopActiveSnapshot) {
         elemCount: domAnalysis.elementCount,
         lastMutationIdle,
     };
+    if (initialHTML) {
+        r.htmlModifiedByJs = initialHTML !== r.html && !r.shadowExpanded;
+    }
     if (document.baseURI !== r.href) {
         r.rebase = document.baseURI;
     }

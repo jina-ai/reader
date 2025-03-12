@@ -15,7 +15,7 @@ import { Defer } from 'civkit/defer';
 import { retryWith } from 'civkit/decorators';
 import { FancyFile } from 'civkit/fancy-file';
 
-import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE } from '../dto/crawler-options';
+import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE, RESPOND_TIMING } from '../dto/crawler-options';
 
 import { Crawled } from '../db/crawled';
 import { DomainBlockade } from '../db/domain-blockade';
@@ -585,6 +585,7 @@ export class CrawlerHost extends RPCHost {
             url: urlToCrawl.toString(),
             createdAt: nowDate,
             expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs),
+            htmlModifiedByJs: snapshot.htmlModifiedByJs,
             urlPathDigest: digest,
         });
 
@@ -730,6 +731,12 @@ export class CrawlerHost extends RPCHost {
         if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
             const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
             cache = await this.queryCache(urlToCrawl, cacheTolerance);
+        }
+
+        if (cache?.htmlModifiedByJs === false) {
+            if (crawlerOpts) {
+                crawlerOpts.respondTiming ??= RESPOND_TIMING.HTML;
+            }
         }
 
         if (cache?.isFresh &&
