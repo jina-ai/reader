@@ -249,12 +249,12 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Md-Link-Style': {
-                    description: 'Link style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: inlined, referenced',
+                    description: 'Link style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: inlined, referenced, discarded',
                     in: 'header',
                     schema: { type: 'string' }
                 },
                 'X-Md-Link-Reference-Style': {
-                    description: 'Link reference style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: full, collapsed, shortcut',
+                    description: 'Link reference style of the generated markdown.\n\nThis is an option passed through to [Turndown](https://github.com/mixmark-io/turndown?tab=readme-ov-file#options).\n\nSupported: full, collapsed, shortcut, discarded',
                     in: 'header',
                     schema: { type: 'string' }
                 },
