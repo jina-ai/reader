@@ -619,9 +619,6 @@ export class CrawlerOptions extends AutoCastable {
         if ((this.respondWith.includes('vlm') || this.respondWith.includes('screenshot')) && !snapshot.screenshot) {
             return false;
         }
-        if (this.respondTiming === RESPOND_TIMING.MUTATION_IDLE && snapshot.lastMutationIdle) {
-            return true;
-        }
         if (this.respondTiming === RESPOND_TIMING.RESOURCE_IDLE && snapshot.lastContentResourceLoaded) {
             const now = Date.now();
             if ((snapshot.lastContentResourceLoaded + 500) < now) {
@@ -629,11 +626,14 @@ export class CrawlerOptions extends AutoCastable {
             }
         }
 
+        if (this.injectFrameScript?.length || this.injectPageScript?.length) {
+            return false;
+        }
         if (this.respondTiming === RESPOND_TIMING.NETWORK_IDLE) {
             return false;
         }
-        if (this.injectFrameScript?.length || this.injectPageScript?.length) {
-            return false;
+        if (this.respondTiming === RESPOND_TIMING.MUTATION_IDLE && snapshot.lastMutationIdle) {
+            return true;
         }
         if (this.respondWith.includes('lm')) {
             return false;
