@@ -3,6 +3,7 @@ import { FancyFile } from 'civkit/fancy-file';
 import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
 import { Context } from '../services/registry';
 import { TurnDownTweakableOptions } from './turndown-tweakable-options';
+import type { PageSnapshot } from '../services/puppeteer';
 
 export enum CONTENT_FORMAT {
     CONTENT = 'content',
@@ -18,10 +19,16 @@ export enum CONTENT_FORMAT {
 export enum ENGINE_TYPE {
     AUTO = 'auto',
     BROWSER = 'browser',
-    DIRECT = 'direct',
-    VLM = 'vlm',
-    READER_LM = 'readerlm-v2',
+    CURL = 'curl',
     CF_BROWSER_RENDERING = 'cf-browser-rendering',
+}
+
+export enum RESPOND_TIMING {
+    HTML = 'html',
+    MUTATION_IDLE = 'mutation-idle',
+    RESOURCE_IDLE = 'resource-idle',
+    MEDIA_IDLE = 'media-idle',
+    NETWORK_IDLE = 'network-idle',
 }
 
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
@@ -210,6 +217,15 @@ class Viewport extends AutoCastable {
                 },
                 'X-Token-Budget': {
                     description: 'Specify a budget in tokens.\n\nIf the resulting token cost exceeds the budget, the request is rejected.',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Respond-Timing': {
+                    description: `Explicitly specify the respond timing. One of the following:\n\n` +
+                        `- html: unrendered HTML is enough to return\n` +
+                        `- mutation-idle: wait for DOM mutations to settle and remain unchanged for at least 0.2s\n` +
+                        `- resource-idle: wait for no additional resources that would affect page logic and content SUCCEEDED loading for at least 0.5s\n` +
+                        `- media-idle: wait for no additional resources, including media resources, SUCCEEDED loading for at least 0.5s\n\n`,
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -405,6 +421,11 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     markdown?: TurnDownTweakableOptions;
 
+    @Prop({
+        type: RESPOND_TIMING,
+    })
+    respondTiming?: RESPOND_TIMING;
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as Context | undefined;
@@ -498,10 +519,10 @@ export class CrawlerOptions extends AutoCastable {
         if (instance.engine) {
             instance.engine = instance.engine.toLowerCase();
         }
-        if (instance.engine === ENGINE_TYPE.VLM) {
+        if (instance.engine === 'vlm') {
             instance.engine = ENGINE_TYPE.BROWSER;
             instance.respondWith = CONTENT_FORMAT.VLM;
-        } else if (instance.engine === ENGINE_TYPE.READER_LM) {
+        } else if (instance.engine === 'readerlm-v2') {
             instance.engine = ENGINE_TYPE.AUTO;
             instance.respondWith = CONTENT_FORMAT.READER_LM;
         }
@@ -558,6 +579,16 @@ export class CrawlerOptions extends AutoCastable {
         const dnt = ctx?.get('dnt');
         instance.doNotTrack ??= (parseInt(dnt || '') || null);
 
+        const respondTiming = ctx?.get('x-respond-timing');
+        if (respondTiming) {
+            instance.respondTiming ??= respondTiming as RESPOND_TIMING;
+        }
+        instance.respondTiming ??= (
+            instance.timeout ||
+            instance.respondWith.includes('shot') ||
+            instance.respondWith.includes('vlm')
+        ) ? RESPOND_TIMING.MEDIA_IDLE : RESPOND_TIMING.MUTATION_IDLE;
+
         if (instance.cacheTolerance) {
             instance.cacheTolerance = instance.cacheTolerance * 1000;
         }
@@ -569,11 +600,36 @@ export class CrawlerOptions extends AutoCastable {
         return instance;
     }
 
-    isEarlyReturnApplicable() {
-        if (this.timeout !== undefined) {
+    isSnapshotAcceptableForEarlyResponse(snapshot: PageSnapshot) {
+        if (this.waitForSelector?.length) {
             return false;
         }
-        if (this.waitForSelector?.length) {
+        if (this.respondTiming === RESPOND_TIMING.HTML && snapshot.html) {
+            return true;
+        }
+        if (this.respondTiming === RESPOND_TIMING.MEDIA_IDLE && snapshot.lastMediaResourceLoaded) {
+            const now = Date.now();
+            if ((Math.max(snapshot.lastMediaResourceLoaded, snapshot.lastContentResourceLoaded || 0) + 500) < now) {
+                return true;
+            }
+        }
+        if ((this.respondWith.includes('vlm') || this.respondWith.includes('pageshot')) && !snapshot.pageshot) {
+            return false;
+        }
+        if ((this.respondWith.includes('vlm') || this.respondWith.includes('screenshot')) && !snapshot.screenshot) {
+            return false;
+        }
+        if (this.respondTiming === RESPOND_TIMING.MUTATION_IDLE && snapshot.lastMutationIdle) {
+            return true;
+        }
+        if (this.respondTiming === RESPOND_TIMING.RESOURCE_IDLE && snapshot.lastContentResourceLoaded) {
+            const now = Date.now();
+            if ((snapshot.lastContentResourceLoaded + 500) < now) {
+                return true;
+            }
+        }
+
+        if (this.respondTiming === RESPOND_TIMING.NETWORK_IDLE) {
             return false;
         }
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
@@ -583,7 +639,7 @@ export class CrawlerOptions extends AutoCastable {
             return false;
         }
 
-        return true;
+        return false;
     }
 
     isCacheQueryApplicable() {
@@ -611,6 +667,9 @@ export class CrawlerOptions extends AutoCastable {
     }
 
     browserIsNotRequired() {
+        if (this.respondTiming && this.respondTiming !== RESPOND_TIMING.HTML) {
+            return false;
+        }
         if (this.respondWith.includes(CONTENT_FORMAT.PAGESHOT) || this.respondWith.includes(CONTENT_FORMAT.SCREENSHOT)) {
             return false;
         }

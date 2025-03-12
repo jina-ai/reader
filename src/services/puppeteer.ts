@@ -55,13 +55,10 @@ export interface PageSnapshot {
     href: string;
     rebase?: string;
     html: string;
-    htmlModifiedByJs?: boolean;
     shadowExpanded?: string;
     text: string;
     status?: number;
     statusText?: string;
-    isIntermediate?: boolean;
-    isFromCache?: boolean;
     parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
     pageshot?: Buffer;
@@ -70,6 +67,11 @@ export interface PageSnapshot {
     maxElemDepth?: number;
     elemCount?: number;
     childFrames?: PageSnapshot[];
+    isIntermediate?: boolean;
+    isFromCache?: boolean;
+    lastMutationIdle?: number;
+    lastContentResourceLoaded?: number;
+    lastMediaResourceLoaded?: number;
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
@@ -374,9 +376,10 @@ function shadowDomPresent(rootElement = document.documentElement) {
     return false;
 }
 
-let initialHTML;
+let lastMutationIdle = 0;
+document.addEventListener('mutationIdle', ()=> lastMutationIdle = Date.now());
+
 function giveSnapshot(stopActiveSnapshot) {
-    initialHTML ??= document.documentElement?.outerHTML;
     if (stopActiveSnapshot) {
         window.haltSnapshot = true;
     }
@@ -392,17 +395,14 @@ function giveSnapshot(stopActiveSnapshot) {
         description: document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? '',
         href: document.location.href,
         html: document.documentElement?.outerHTML,
-        htmlModifiedByJs: false,
         text: document.body?.innerText,
         shadowExpanded: shadowDomPresent() ? cloneAndExpandShadowRoots()?.outerHTML : undefined,
         parsed: parsed,
         imgs: [],
         maxElemDepth: domAnalysis.maxDepth,
         elemCount: domAnalysis.elementCount,
+        lastMutationIdle,
     };
-    if (initialHTML) {
-        r.htmlModifiedByJs = initialHTML !== r.html && !r.shadowExpanded;
-    }
     if (document.baseURI !== r.href) {
         r.rebase = document.baseURI;
     }
@@ -445,9 +445,20 @@ window.briefImgs = briefImgs;
 })();
 `;
 
+const documentResourceTypes = new Set([
+    'document', 'script', 'xhr', 'fetch', 'prefetch', 'eventsource', 'websocket', 'preflight'
+]);
+const mediaResourceTypes = new Set([
+    'stylesheet', 'image', 'font', 'media'
+]);
+
+
 class PageReqCtrlKit {
     reqSet: Set<HTTPRequest> = new Set();
     blockers: Deferred<void>[] = [];
+    lastResourceLoadedAt: number = 0;
+    lastContentResourceLoadedAt: number = 0;
+    lastMediaResourceLoadedAt: number = 0;
 
     constructor(
         public concurrency: number,
@@ -472,6 +483,15 @@ class PageReqCtrlKit {
         this.reqSet.delete(req);
         const deferred = this.blockers.shift();
         deferred?.resolve();
+        const now = Date.now();
+        this.lastResourceLoadedAt = now;
+        const typ = req.resourceType();
+        if (documentResourceTypes.has(typ)) {
+            this.lastContentResourceLoadedAt = now;
+        }
+        if (mediaResourceTypes.has(typ)) {
+            this.lastMediaResourceLoadedAt = now;
+        }
     }
 }
 
@@ -491,7 +511,7 @@ export class PuppeteerControl extends AsyncService {
     lastPageCratedAt: number = 0;
     ua: string = '';
 
-    concurrentRequestsPerPage: number = 16;
+    concurrentRequestsPerPage: number = 32;
     pageReqCtrl = new WeakMap<Page, PageReqCtrlKit>();
 
     lastReqSentAt: number = 0;
@@ -1050,6 +1070,11 @@ export class PuppeteerControl extends AsyncService {
                 return;
             }
             snapshot = s;
+            if (snapshot) {
+                const kit = this.pageReqCtrl.get(page);
+                snapshot.lastContentResourceLoaded = kit?.lastContentResourceLoadedAt;
+                snapshot.lastMediaResourceLoaded = kit?.lastMediaResourceLoadedAt;
+            }
             if (s?.maxElemDepth && s.maxElemDepth > 256) {
                 return;
             }
