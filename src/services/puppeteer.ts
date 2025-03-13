@@ -6,8 +6,7 @@ import { container, singleton } from 'tsyringe';
 
 import type { Browser, CookieParam, GoToOptions, HTTPRequest, HTTPResponse, Page, Viewport } from 'puppeteer';
 import type { Cookie } from 'set-cookie-parser';
-import puppeteer from 'puppeteer-extra';
-import { TimeoutError } from 'puppeteer';
+import puppeteer, { TimeoutError } from 'puppeteer';
 
 import { Defer, Deferred } from 'civkit/defer';
 import { AssertionFailureError, ParamValidationError } from 'civkit/civ-rpc';
@@ -15,7 +14,6 @@ import { AsyncService } from 'civkit/async-service';
 import { FancyFile } from 'civkit/fancy-file';
 import { delay } from 'civkit/timeout';
 
-import puppeteerBlockResources from 'puppeteer-extra-plugin-block-resources';
 import { SecurityCompromiseError, ServiceCrashedError, ServiceNodeResourceDrainError } from '../shared/lib/errors';
 import { CurlControl } from './curl';
 import { BlackHoleDetector } from './blackhole-detector';
@@ -55,7 +53,7 @@ export interface PageSnapshot {
     href: string;
     rebase?: string;
     html: string;
-    htmlModifiedByJs?: boolean;
+    htmlSignificantlyModifiedByJs?: boolean;
     shadowExpanded?: string;
     text: string;
     status?: number;
@@ -109,11 +107,6 @@ export interface ScrappingOptions {
     };
 
 }
-
-puppeteer.use(puppeteerBlockResources({
-    blockedTypes: new Set(['media']),
-    interceptResolutionPriority: 1,
-}));
 
 const SIMULATE_SCROLL = `
 (function () {
@@ -265,7 +258,7 @@ function briefImgs(elem) {
         };
     });
 }
-function getMaxDepthAndCountUsingTreeWalker(root) {
+function getMaxDepthAndElemCountUsingTreeWalker(root=document.documentElement) {
   let maxDepth = 0;
   let currentDepth = 0;
   let elementCount = 0;
@@ -378,11 +371,10 @@ function shadowDomPresent(rootElement = document.documentElement) {
 }
 
 let lastMutationIdle = 0;
-let initialHTML;
+let initialAnalytics;
 document.addEventListener('mutationIdle', ()=> lastMutationIdle = Date.now());
 
-function giveSnapshot(stopActiveSnapshot) {
-    initialHTML ??= document.documentElement?.outerHTML;
+function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
     if (stopActiveSnapshot) {
         window.haltSnapshot = true;
     }
@@ -392,13 +384,18 @@ function giveSnapshot(stopActiveSnapshot) {
     } catch (err) {
         void 0;
     }
-    const domAnalysis = getMaxDepthAndCountUsingTreeWalker(document.documentElement);
+    const domAnalysis = overrideDomAnalysis || getMaxDepthAndElemCountUsingTreeWalker(document.documentElement);
+    initialAnalytics ??= domAnalysis;
+
+    const thisElemCount = domAnalysis.elementCount;
+    const initialElemCount = initialAnalytics.elementCount;
+    Math.abs(thisElemCount - initialElemCount) / (initialElemCount + Number.EPSILON)
     const r = {
         title: document.title,
         description: document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? '',
         href: document.location.href,
         html: document.documentElement?.outerHTML,
-        htmlModifiedByJs: false,
+        htmlSignificantlyModifiedByJs: Boolean(Math.abs(thisElemCount - initialElemCount) / (initialElemCount + Number.EPSILON) > 0.1),
         text: document.body?.innerText,
         shadowExpanded: shadowDomPresent() ? cloneAndExpandShadowRoots()?.outerHTML : undefined,
         parsed: parsed,
@@ -407,9 +404,6 @@ function giveSnapshot(stopActiveSnapshot) {
         elemCount: domAnalysis.elementCount,
         lastMutationIdle,
     };
-    if (initialHTML) {
-        r.htmlModifiedByJs = initialHTML !== r.html && !r.shadowExpanded;
-    }
     if (document.baseURI !== r.href) {
         r.rebase = document.baseURI;
     }
@@ -446,6 +440,7 @@ function waitForSelector(selectorText) {
     });
   });
 }
+window.getMaxDepthAndElemCountUsingTreeWalker = getMaxDepthAndElemCountUsingTreeWalker;
 window.waitForSelector = waitForSelector;
 window.giveSnapshot = giveSnapshot;
 window.briefImgs = briefImgs;
@@ -566,7 +561,7 @@ export class PuppeteerControl extends AsyncService {
         }
         this.browser = await puppeteer.launch({
             timeout: 10_000,
-            headless: true,
+            headless: false,
             executablePath: process.env.OVERRIDE_CHROME_EXECUTABLE_PATH,
             args: ['--disable-dev-shm-usage']
         }).catch((err: any) => {
@@ -735,23 +730,45 @@ export class PuppeteerControl extends AsyncService {
         await page.evaluateOnNewDocument(`
 (function () {
     if (window.self === window.top) {
-        let lastTextLength = 0;
+        let lastAnalytics;
+        let lastReportedAt = 0;
         const handlePageLoad = () => {
-            const thisTextLength = (document.body.innerText || '').length;
-            const deltaLength = Math.abs(thisTextLength - lastTextLength);
-            if (10 * deltaLength < lastTextLength) {
-                // Change is not significant
-                return;
-            }
-            lastTextLength = thisTextLength;
+            const now = Date.now();
+            const dt = now - lastReportedAt;
+            const previousAnalytics = lastAnalytics;
+            const thisAnalytics = getMaxDepthAndElemCountUsingTreeWalker();
+            let dElem = 0;
+
             if (window.haltSnapshot) {
                 return;
             }
-            const r = giveSnapshot();
+
+            const thisElemCount = thisAnalytics.elementCount;
+            if (previousAnalytics) {
+                const previousElemCount = previousAnalytics.elementCount;
+
+                const delta = Math.abs(thisElemCount - previousElemCount);
+                dElem = delta /(previousElemCount + Number.EPSILON);
+            }
+
+            if (dt < 1500 && dElem < 0.1) {
+                return;
+            }
+
+            lastAnalytics = thisAnalytics;
+            lastReportedAt = now;
+
+            const r = giveSnapshot(false, lastAnalytics);
             window.reportSnapshot(r);
         };
-        document.addEventListener('readystatechange', handlePageLoad);
+        document.addEventListener('readystatechange', ()=> {
+            if (document.readyState === 'interactive') {
+                handlePageLoad();
+            }
+        });
         document.addEventListener('load', handlePageLoad);
+        window.addEventListener('load', handlePageLoad);
+        document.addEventListener('DOMContentLoaded', handlePageLoad);
         document.addEventListener('mutationIdle', handlePageLoad);
     }
     document.addEventListener('DOMContentLoaded', ()=> window.simulateScroll(), { once: true });
@@ -772,11 +789,13 @@ export class PuppeteerControl extends AsyncService {
         if (this.__loadedPage.length) {
             thePage = this.__loadedPage.shift();
             if (this.__loadedPage.length <= 1) {
-                this.newPage()
-                    .then((r) => this.__loadedPage.push(r))
-                    .catch((err) => {
-                        this.logger.warn(`Failed to load new page ahead of time`, { err });
-                    });
+                process.nextTick(() => {
+                    this.newPage()
+                        .then((r) => this.__loadedPage.push(r))
+                        .catch((err) => {
+                            this.logger.warn(`Failed to load new page ahead of time`, { err });
+                        });
+                });
             }
         }
 
@@ -860,6 +879,10 @@ export class PuppeteerControl extends AsyncService {
                 return req.continue(overrides, 0);
             }
             const typ = req.resourceType();
+            if (typ === 'media') {
+                // Non-cooperative answer to block all media requests.
+                return req.abort('blockedbyclient');
+            }
             if (!options.proxyResources) {
                 const isDocRequest = ['document', 'xhr', 'fetch', 'websocket', 'prefetch', 'eventsource', 'ping'].includes(typ);
                 if (!isDocRequest) {
@@ -925,7 +948,7 @@ export class PuppeteerControl extends AsyncService {
                                     status: curled.status,
                                     headers: _.omit(curled.headers, 'result'),
                                     contentType: curled.contentType,
-                                }, 999);
+                                }, 3);
                             }
                             const body = await readFile(await curled.file.filePath);
                             if (req.isInterceptResolutionHandled()) {
@@ -936,7 +959,7 @@ export class PuppeteerControl extends AsyncService {
                                 headers: _.omit(curled.headers, 'result'),
                                 contentType: curled.contentType,
                                 body: Uint8Array.from(body),
-                            }, 999);
+                            }, 3);
                         }
                         options.sideLoad ??= curled.sideLoadOpts;
                         _.merge(options.sideLoad, curled.sideLoadOpts);
@@ -945,7 +968,7 @@ export class PuppeteerControl extends AsyncService {
                         return req.respond({
                             status: firstReq.result!.code,
                             headers: _.omit(firstReq, 'result'),
-                        }, 999);
+                        }, 3);
                     } catch (err: any) {
                         this.logger.warn(`Failed to sideload browser request ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err, proxy });
                     }

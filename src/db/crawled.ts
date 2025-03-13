@@ -22,7 +22,7 @@ export class Crawled extends FirestoreRecord {
     urlPathDigest!: string;
 
     @Prop()
-    htmlModifiedByJs?: boolean;
+    htmlSignificantlyModifiedByJs?: boolean;
 
     @Prop()
     snapshot?: PageSnapshot & { screenshot: never; pageshot: never; };

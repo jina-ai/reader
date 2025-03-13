@@ -615,9 +615,6 @@ export class CrawlerOptions extends AutoCastable {
             return false;
         }
         const presumedTiming = this.presumedRespondTiming;
-        if (presumedTiming === RESPOND_TIMING.HTML && snapshot.html) {
-            return true;
-        }
         if (presumedTiming === RESPOND_TIMING.MEDIA_IDLE && snapshot.lastMediaResourceLoaded && snapshot.lastMutationIdle) {
             const now = Date.now();
             if ((Math.max(snapshot.lastMediaResourceLoaded, snapshot.lastContentResourceLoaded || 0) + 500) < now) {
@@ -636,9 +633,11 @@ export class CrawlerOptions extends AutoCastable {
                 return true;
             }
         }
-
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
             return false;
+        }
+        if (presumedTiming === RESPOND_TIMING.HTML && snapshot.html) {
+            return true;
         }
         if (presumedTiming === RESPOND_TIMING.NETWORK_IDLE) {
             return false;

@@ -509,7 +509,7 @@ export class CrawlerHost extends RPCHost {
         return digest;
     }
 
-    async queryCache(urlToCrawl: URL, cacheTolerance: number) {
+    async *queryCache(urlToCrawl: URL, cacheTolerance: number) {
         const digest = this.getUrlDigest(urlToCrawl);
 
         const cache = (
@@ -526,8 +526,10 @@ export class CrawlerHost extends RPCHost {
                 }))
         )?.[0];
 
+        yield cache;
+
         if (!cache) {
-            return undefined;
+            return;
         }
 
         const age = Date.now() - cache.createdAt.valueOf();
@@ -561,7 +563,7 @@ export class CrawlerHost extends RPCHost {
             return undefined;
         }
 
-        return {
+        yield {
             isFresh: !stale,
             ...cache,
             snapshot: {
@@ -585,7 +587,7 @@ export class CrawlerHost extends RPCHost {
             url: urlToCrawl.toString(),
             createdAt: nowDate,
             expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs),
-            htmlModifiedByJs: snapshot.htmlModifiedByJs,
+            htmlSignificantlyModifiedByJs: snapshot.htmlSignificantlyModifiedByJs,
             urlPathDigest: digest,
         });
 
@@ -726,18 +728,20 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        let cache;
+        const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
+        const cacheIt = this.queryCache(urlToCrawl, cacheTolerance);
 
-        if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
-            const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
-            cache = await this.queryCache(urlToCrawl, cacheTolerance);
-        }
-
-        if (cache?.htmlModifiedByJs === false) {
+        let cache = (await cacheIt.next()).value;
+        if (cache?.htmlSignificantlyModifiedByJs === false) {
             if (crawlerOpts) {
                 crawlerOpts.respondTiming ??= RESPOND_TIMING.HTML;
             }
         }
+
+        if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
+            cache = (await cacheIt.next()).value;
+        }
+        cacheIt.return(undefined);
 
         if (cache?.isFresh &&
             (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && (cache.screenshotAvailable && cache.pageshotAvailable))) &&
