@@ -237,6 +237,8 @@ export class SearcherHost extends RPCHost {
                         return;
                     }
                     chargeAmount = this.assignChargeAmount(lastScrapped, count);
+
+                    this.assignTokenUsage(lastScrapped, chargeAmount, crawlWithoutContent);
                     rpcReflect.return(lastScrapped);
                     earlyReturn = true;
                 }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
