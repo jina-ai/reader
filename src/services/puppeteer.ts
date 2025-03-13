@@ -487,7 +487,10 @@ class PageReqCtrlKit {
         deferred?.resolve();
         const now = Date.now();
         this.lastResourceLoadedAt = now;
-        const typ = req.resourceType();
+        const typ = req?.resourceType();
+        if (!typ) {
+            return;
+        }
         if (documentResourceTypes.has(typ)) {
             this.lastContentResourceLoadedAt = now;
         }
