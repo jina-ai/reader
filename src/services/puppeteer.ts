@@ -487,6 +487,8 @@ class PageReqCtrlKit {
         deferred?.resolve();
         const now = Date.now();
         this.lastResourceLoadedAt = now;
+        // Beware req being undefined
+        // https://pptr.dev/api/puppeteer.pageevent#:~:text=For%20certain%20requests%2C%20might%20contain%20undefined.
         const typ = req?.resourceType();
         if (!typ) {
             return;
