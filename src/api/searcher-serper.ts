@@ -93,7 +93,7 @@ export class SearcherHost extends RPCHost {
         // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
         // Since we used 'count' as 'num' previously, we need to keep 'count' for old users.
         // Here we combine 'count' and 'num' to 'count' for the rest of the function.
-        count = (num !== undefined ? num : count) ?? 5;
+        count = (num !== undefined ? num : count) ?? 10;
 
         const uid = await auth.solveUID();
         // Return content by default
