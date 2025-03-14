@@ -152,9 +152,15 @@ export class SearcherHost extends RPCHost {
 
         const crawlOpts = await this.crawler.configure(crawlerOptions);
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
+
+        let fetchNum = count;
+        if ((page ?? 1) === 1) {
+            fetchNum = count > 10 ? 30 : 20;
+        }
+
         const r = await this.cachedWebSearch({
             q: searchQuery,
-            num: count > 10 ? 30 : 20,
+            num: fetchNum,
             gl,
             hl,
             location,
