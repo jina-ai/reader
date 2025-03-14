@@ -61,6 +61,28 @@
       "killBehavior": "forceful"
     },
     {
+      "name": "Debug Stand Alone Crawl - EU",
+      "request": "launch",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        "FIRESTORE_DATABASE": "reader-eu",
+        "GCP_STORAGE_BUCKET": "reader-eu",
+        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/crawl.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:build:watch",
+      "killBehavior": "forceful"
+    },
+    {
       "name": "Debug Stand Alone Search",
       "request": "launch",
       "runtimeArgs": [
