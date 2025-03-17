@@ -107,6 +107,9 @@ export class CrawlerHost extends RPCHost {
                 // Potentially mangeled content, dont cache if scripts are injected
                 return;
             }
+            if (snapshot.isIntermediate) {
+                return;
+            }
             if (options.locale) {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
@@ -360,27 +363,36 @@ export class CrawlerHost extends RPCHost {
 
         let lastScrapped;
         if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
-            for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
-                lastScrapped = scrapped;
-                if (rpcReflect.signal.aborted) {
-                    break;
-                }
-                if (!scrapped || !crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
-                    continue;
-                }
+            try {
+                for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
+                    lastScrapped = scrapped;
+                    if (rpcReflect.signal.aborted) {
+                        break;
+                    }
+                    if (!scrapped || !crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
+                        continue;
+                    }
+                    if (!scrapped.title) {
+                        continue;
+                    }
 
-                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
+                    chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
 
-                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                    throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+                    if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                        throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+                    }
+
+                    if (scrapped?.pdfs?.length && !chargeAmount) {
+                        continue;
+                    }
+
+                    return formatted;
                 }
-
-                if (scrapped?.pdfs?.length && !chargeAmount) {
-                    continue;
+            } catch (err) {
+                if (!lastScrapped) {
+                    throw err;
                 }
-
-                return formatted;
             }
 
             if (!lastScrapped) {
@@ -406,33 +418,42 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
-            lastScrapped = scrapped;
-            if (rpcReflect.signal.aborted) {
-                break;
-            }
-            if (!scrapped || !crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
-                continue;
-            }
+        try {
+            for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
+                lastScrapped = scrapped;
+                if (rpcReflect.signal.aborted) {
+                    break;
+                }
+                if (!scrapped || !crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
+                    continue;
+                }
+                if (!scrapped.title) {
+                    continue;
+                }
 
-            const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-            chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
-            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
-            }
+                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
+                chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                    throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
+                }
 
-            if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
-                return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-                );
-            }
-            if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
-                return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
-                );
-            }
+                if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
+                    return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
+                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
+                    );
+                }
+                if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
+                    return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
+                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
+                    );
+                }
 
-            return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null });
+                return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null });
+            }
+        } catch (err) {
+            if (!lastScrapped) {
+                throw err;
+            }
         }
 
         if (!lastScrapped) {
@@ -733,7 +754,7 @@ export class CrawlerHost extends RPCHost {
 
         let cache = (await cacheIt.next()).value;
         if (cache?.htmlSignificantlyModifiedByJs === false) {
-            if (crawlerOpts) {
+            if (crawlerOpts && crawlerOpts.timeout === undefined) {
                 crawlerOpts.respondTiming ??= RESPOND_TIMING.HTML;
             }
         }
