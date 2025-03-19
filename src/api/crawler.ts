@@ -793,7 +793,7 @@ export class CrawlerHost extends RPCHost {
                 if (!sideLoaded.file) {
                     throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
                 }
-                let draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(
+                const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(
                     urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName
                 ).catch((err) => {
                     if (err instanceof ApplicationError) {
@@ -809,6 +809,9 @@ export class CrawlerHost extends RPCHost {
                 let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
                 draftSnapshot.title ??= analyzed.title;
                 draftSnapshot.isIntermediate = true;
+                if (crawlerOpts?.browserIsNotRequired()) {
+                    yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
+                }
                 let fallbackProxyIsUsed = false;
                 if (((!crawlOpts?.allocProxy || crawlOpts.allocProxy === 'none') && !crawlOpts?.proxyUrl) &&
                     (analyzed.tokens < 42 || sideLoaded.status !== 200)
@@ -825,17 +828,17 @@ export class CrawlerHost extends RPCHost {
                         }
                         return Promise.reject(err);
                     });
+                    if (proxyLoaded.status === 200 && crawlerOpts?.browserIsNotRequired()) {
+                    }
                     analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
                     if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
-                        draftSnapshot = proxySnapshot;
-                        draftSnapshot.isIntermediate = true;
+                        proxySnapshot.isIntermediate = true;
+                        if (crawlerOpts?.browserIsNotRequired()) {
+                            yield this.jsdomControl.narrowSnapshot(proxySnapshot, crawlOpts);
+                        }
                         sideLoaded = proxyLoaded;
                         fallbackProxyIsUsed = true;
                     }
-                }
-
-                if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && crawlerOpts?.browserIsNotRequired()) {
-                    yield draftSnapshot;
                 }
 
                 if (crawlOpts && (sideLoaded.status === 200 || analyzed.tokens >= 200 || crawlOpts.allocProxy)) {

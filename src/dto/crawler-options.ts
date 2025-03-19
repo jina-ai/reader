@@ -25,6 +25,7 @@ export enum ENGINE_TYPE {
 
 export enum RESPOND_TIMING {
     HTML = 'html',
+    VISIBLE_CONTENT = 'visible-content',
     MUTATION_IDLE = 'mutation-idle',
     RESOURCE_IDLE = 'resource-idle',
     MEDIA_IDLE = 'media-idle',
@@ -222,11 +223,12 @@ class Viewport extends AutoCastable {
                 },
                 'X-Respond-Timing': {
                     description: `Explicitly specify the respond timing. One of the following:\n\n` +
-                        `- html: unrendered HTML is enough to return\n` +
+                        `- html: directly return unrendered HTML\n` +
+                        `- visible-content: return immediately when any content becomes available\n` +
                         `- mutation-idle: wait for DOM mutations to settle and remain unchanged for at least 0.2s\n` +
-                        `- resource-idle: wait for no additional resources that would affect page logic and content SUCCEEDED loading for at least 0.5s\n` +
-                        `- media-idle: wait for no additional resources, including media resources, SUCCEEDED loading for at least 0.5s\n` +
-                        `- network-idle: wait for full load of webpage, as usual.\n\n`,
+                        `- resource-idle: wait for no additional resources that would affect page logic and content has SUCCEEDED loading in 0.5s\n` +
+                        `- media-idle: wait for no additional resources, including media resources, has SUCCEEDED loading in 0.5s\n` +
+                        `- network-idle: wait for full load of webpage, also known as networkidle0.\n\n`,
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -600,7 +602,7 @@ export class CrawlerOptions extends AutoCastable {
         if (this.respondTiming) {
             return this.respondTiming;
         }
-        if (this.timeout) {
+        if (this.timeout && this.timeout >= 20) {
             return RESPOND_TIMING.NETWORK_IDLE;
         }
         if (this.respondWith.includes('shot') || this.respondWith.includes('vlm')) {
@@ -635,6 +637,9 @@ export class CrawlerOptions extends AutoCastable {
         }
         if (this.injectFrameScript?.length || this.injectPageScript?.length) {
             return false;
+        }
+        if (presumedTiming === RESPOND_TIMING.VISIBLE_CONTENT && snapshot.parsed?.content) {
+            return true;
         }
         if (presumedTiming === RESPOND_TIMING.HTML && snapshot.html) {
             return true;
@@ -677,7 +682,7 @@ export class CrawlerOptions extends AutoCastable {
     }
 
     browserIsNotRequired() {
-        if (this.respondTiming && this.respondTiming !== RESPOND_TIMING.HTML) {
+        if (this.respondTiming && ![RESPOND_TIMING.HTML, RESPOND_TIMING.VISIBLE_CONTENT].includes(this.respondTiming)) {
             return false;
         }
         if (this.respondWith.includes(CONTENT_FORMAT.PAGESHOT) || this.respondWith.includes(CONTENT_FORMAT.SCREENSHOT)) {
