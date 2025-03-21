@@ -44,6 +44,8 @@ jobs:
         run: npm ci
       - name: get maxmind mmdb
         run: mkdir -p licensed && curl -o licensed/GeoLite2-City.mmdb https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb
+      - name: get source han sans font
+        run: curl -o licensed/SourceHanSansSC-Regular.otf https://raw.githubusercontent.com/adobe-fonts/source-han-sans/refs/heads/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf
       - name: build application
         run: npm run build
       - name: Set package version
