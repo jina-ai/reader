@@ -1,7 +1,7 @@
 import { AssertionFailureError, AsyncService, HashManager } from 'civkit';
 import { singleton } from 'tsyringe';
 import { GlobalLogger } from './logger';
-import { CanvasService } from '../shared/services/canvas';
+import { CanvasService } from './canvas';
 import { ImageInterrogationManager } from '../shared/services/common-iminterrogate';
 import { ImgBrief } from './puppeteer';
 import { ImgAlt } from '../db/img-alt';
@@ -32,13 +32,20 @@ export class AltTextService extends AsyncService {
     async caption(url: string) {
         try {
             const img = await this.canvasService.loadImage(url);
+            const contentTypeHint = Reflect.get(img, 'contentType');
+            if (Math.min(img.naturalHeight, img.naturalWidth) < 64) {
+                throw new AssertionFailureError({ message: `Image is too small to generate alt text for url ${url}` });
+            }
             const resized = this.canvasService.fitImageToSquareBox(img, 1024);
             const exported = await this.canvasService.canvasToBuffer(resized, 'image/png');
 
-            const r = await this.imageInterrogator.interrogate('vertex-gemini-1.5-flash-002', {
+            const svgHint = contentTypeHint.includes('svg') ? `Beware this image is a SVG rendered on a gray background, the gray background is not part of the image.\n\n` : '';
+            const svgSystemHint = contentTypeHint.includes('svg') ? ` Sometimes the system renders SVG on a gray background. When this happens, you must not include the gray background in the description.` : '';
+
+            const r = await this.imageInterrogator.interrogate('vertex-gemini-2.0-flash', {
                 image: exported,
-                prompt: `Yield a concise image caption sentence in third person.`,
-                system: 'You are BLIP2, an image caption model.',
+                prompt: `${svgHint}Give a concise image caption descriptive sentence in third person. Start directly with the description.`,
+                system: `You are BLIP2, an image caption model. You will generate Alt Text (in web pages) for any image for a11y purposes. You must not start with "This image is sth...", instead, start direly with "sth..."${svgSystemHint}`,
             });
 
             return r.replaceAll(/[\n\"]|(\.\s*$)/g, '').trim();
@@ -73,7 +80,7 @@ export class AltTextService extends AsyncService {
 
         if (this.asyncLocalContext.ctx.DNT) {
             // Don't cache alt text if DNT is set
-            return;
+            return generatedCaption;
         }
 
         // Don't try again until the next day

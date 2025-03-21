@@ -169,10 +169,12 @@ export class JSDomControl extends AsyncService {
         Array.from(rootDoc.querySelectorAll('img[src],img[data-src]'))
             .map((x: any) => [x.getAttribute('src'), x.getAttribute('data-src'), x.getAttribute('alt')])
             .forEach(([u1, u2, alt]) => {
+                let absUrl: string | undefined;
                 if (u1) {
                     try {
                         const u1Txt = new URL(u1, snapshot.rebase || snapshot.href).toString();
                         imgSet.add(u1Txt);
+                        absUrl = u1Txt;
                     } catch (err) {
                         // void 0;
                     }
@@ -181,14 +183,17 @@ export class JSDomControl extends AsyncService {
                     try {
                         const u2Txt = new URL(u2, snapshot.rebase || snapshot.href).toString();
                         imgSet.add(u2Txt);
+                        absUrl = u2Txt;
                     } catch (err) {
                         // void 0;
                     }
                 }
-                rebuiltImgs.push({
-                    src: u1 || u2,
-                    alt
-                });
+                if (absUrl) {
+                    rebuiltImgs.push({
+                        src: absUrl,
+                        alt
+                    });
+                }
             });
 
         const r = {

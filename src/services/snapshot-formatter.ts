@@ -213,6 +213,7 @@ export class SnapshotFormatter extends AsyncService {
         const imageSummary = {} as { [k: string]: string; };
         const imageIdxTrack = new Map<string, number[]>();
         const uid = this.threadLocal.get('uid');
+
         do {
             if (pdfMode) {
                 contentText = (snapshot.parsed?.content || snapshot.text || '').trim();
@@ -229,10 +230,10 @@ export class SnapshotFormatter extends AsyncService {
                 break;
             }
 
-            const urlToAltMap: { [k: string]: string | undefined; } = {};
             const noGFMOpts = this.threadLocal.get('noGfm');
             const imageRetention = this.threadLocal.get('retainImages') as CrawlerOptions['retainImages'];
             let imgIdx = 0;
+            const urlToAltMap: { [k: string]: string | undefined; } = {};
             const customRules: { [k: string]: Rule; } = {
                 'img-retention': {
                     filter: 'img',
@@ -267,41 +268,37 @@ export class SnapshotFormatter extends AsyncService {
                         if (!src) {
                             return '';
                         }
-                        const mapped = urlToAltMap[originalSrc];
+
+                        const keySrc = (originalSrc.startsWith('data:') ? this.dataUrlToBlobUrl(originalSrc, snapshot.rebase) : src).trim();
+                        const mapped = urlToAltMap[keySrc];
                         const imgSerial = ++imgIdx;
-                        const idxArr = imageIdxTrack.has(src) ? imageIdxTrack.get(src)! : [];
+                        const idxArr = imageIdxTrack.has(keySrc) ? imageIdxTrack.get(keySrc)! : [];
                         idxArr.push(imgSerial);
-                        imageIdxTrack.set(src, idxArr);
+                        imageIdxTrack.set(keySrc, idxArr);
 
                         if (mapped) {
-                            imageSummary[src] = mapped || alt;
+                            imageSummary[keySrc] = mapped || alt;
 
                             if (imageRetention === 'alt_p') {
-                                return `(Image ${imgIdx}: ${mapped || alt})`;
+                                return `(Image ${imgSerial}: ${mapped || alt})`;
                             }
 
-                            if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
-                                const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
-                                mappedUrl.protocol = 'blob:';
-
-                                return `![Image ${imgIdx}: ${mapped || alt}](${mappedUrl})`;
+                            if (imgDataUrlToObjectUrl) {
+                                return `![Image ${imgSerial}: ${mapped || alt}](${keySrc})`;
                             }
 
-                            return `![Image ${imgIdx}: ${mapped || alt}](${src})`;
+                            return `![Image ${imgSerial}: ${mapped || alt}](${src})`;
                         } else if (imageRetention === 'alt_p') {
-                            return alt ? `(Image ${imgIdx}: ${alt})` : '';
+                            return alt ? `(Image ${imgSerial}: ${alt})` : '';
                         }
 
-                        imageSummary[src] = alt || '';
+                        imageSummary[keySrc] = alt || '';
 
-                        if (src?.startsWith('data:') && imgDataUrlToObjectUrl) {
-                            const mappedUrl = new URL(`blob:${nominalUrl?.origin || ''}/${md5Hasher.hash(src)}`);
-                            mappedUrl.protocol = 'blob:';
-
-                            return alt ? `![Image ${imgIdx}: ${alt}](${mappedUrl})` : `![Image ${imgIdx}](${mappedUrl})`;
+                        if (imgDataUrlToObjectUrl) {
+                            return alt ? `![Image ${imgSerial}: ${alt}](${keySrc})` : `![Image ${imgSerial}](${keySrc})`;
                         }
 
-                        return alt ? `![Image ${imgIdx}: ${alt}](${src})` : `![Image ${imgIdx}](${src})`;
+                        return alt ? `![Image ${imgSerial}: ${alt}](${src})` : `![Image ${imgSerial}](${src})`;
                     }
                 } as Rule
             };
@@ -343,7 +340,9 @@ export class SnapshotFormatter extends AsyncService {
                         return undefined;
                     });
                     if (r && x.src) {
-                        urlToAltMap[x.src.trim()] = r;
+                        // note x.src here is already rebased to absolute url by browser/upstream.
+                        const keySrc = (x.src.startsWith('data:') ? this.dataUrlToBlobUrl(x.src, snapshot.rebase) : x.src).trim();
+                        urlToAltMap[keySrc] = r;
                     }
                 });
 
@@ -416,13 +415,10 @@ export class SnapshotFormatter extends AsyncService {
                     .toPairs()
                     .map(
                         ([url, alt], i) => {
-                            if (imgDataUrlToObjectUrl && url.startsWith('data:')) {
-                                const refUrl = new URL(formatted.url!);
-                                const mappedUrl = new URL(`blob:${refUrl.origin}/${md5Hasher.hash(url)}`);
+                            const idxTrack = imageIdxTrack.get(url);
+                            const tag = idxTrack?.length ? `Image ${_.uniq(idxTrack).join(',')}` : `Hidden Image ${i + 1}`;
 
-                                url = mappedUrl.toString();
-                            }
-                            return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
+                            return [`${tag}${alt ? `: ${alt}` : ''}`, url];
                         }
                     ).fromPairs()
                     .value();
@@ -522,6 +518,13 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         return f as FormattedPage;
     }
 
+    dataUrlToBlobUrl(dataUrl: string, baseUrl: string = 'http://localhost/') {
+        const refUrl = new URL(baseUrl);
+        const mappedUrl = new URL(`blob:${refUrl.origin || 'localhost'}/${md5Hasher.hash(dataUrl)}`);
+
+        return mappedUrl.href;
+    }
+
     async getGeneralSnapshotMixins(snapshot: PageSnapshot) {
         let inferred;
         const mixin: any = {};
@@ -534,10 +537,11 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
 
             for (const img of inferred.imgs) {
                 const imgSerial = ++imgIdx;
-                const idxArr = imageIdxTrack.has(img.src) ? imageIdxTrack.get(img.src)! : [];
+                const keySrc = (img.src.startsWith('data:') ? this.dataUrlToBlobUrl(img.src, snapshot.rebase) : img.src).trim();
+                const idxArr = imageIdxTrack.has(keySrc) ? imageIdxTrack.get(keySrc)! : [];
                 idxArr.push(imgSerial);
-                imageIdxTrack.set(img.src, idxArr);
-                imageSummary[img.src] = img.alt || '';
+                imageIdxTrack.set(keySrc, idxArr);
+                imageSummary[keySrc] = img.alt || '';
             }
 
             mixin.images =
@@ -545,7 +549,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     .toPairs()
                     .map(
                         ([url, alt], i) => {
-                            return [`Image ${(imageIdxTrack?.get(url) || [i + 1]).join(',')}${alt ? `: ${alt}` : ''}`, url];
+                            const idxTrack = imageIdxTrack.get(url);
+                            const tag = idxTrack?.length ? `Image ${_.uniq(idxTrack).join(',')}` : `Hidden Image ${i + 1}`;
+
+                            return [`${tag}${alt ? `: ${alt}` : ''}`, url];
                         }
                     ).fromPairs()
                     .value();
@@ -611,14 +618,9 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     const src = (node.getAttribute('src') || '').trim();
                     const alt = cleanAttribute(node.getAttribute('alt')) || '';
 
-                    if (options.url) {
-                        const refUrl = new URL(options.url);
-                        const mappedUrl = new URL(`blob:${refUrl.origin}/${md5Hasher.hash(src)}`);
+                    const blobUrl = this.dataUrlToBlobUrl(src, options.url?.toString());
 
-                        return `![${alt}](${mappedUrl})`;
-                    }
-
-                    return `![${alt}](blob:${md5Hasher.hash(src)})`;
+                    return `![${alt}](${blobUrl})`;
                 }
             });
         }
@@ -817,6 +819,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
         if (contentType.startsWith('image/')) {
             snapshot.html = `<html style="height: 100%;"><head><meta name="viewport" content="width=device-width, minimum-scale=0.1"><title>${fileName}</title></head><body style="margin: 0px; height: 100%; background-color: rgb(14, 14, 14);"><img style="display: block;-webkit-user-select: none;margin: auto;background-color: hsl(0, 0%, 90%);transition: background-color 300ms;" src="${url.href}"></body></html>`;
             snapshot.title = fileName;
+            snapshot.imgs = [{ src: url.href }];
 
             return snapshot;
         }

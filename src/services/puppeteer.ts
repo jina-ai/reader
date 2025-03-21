@@ -395,7 +395,7 @@ function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
         description: document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? '',
         href: document.location.href,
         html: document.documentElement?.outerHTML,
-        htmlSignificantlyModifiedByJs: Boolean(Math.abs(thisElemCount - initialElemCount) / (initialElemCount + Number.EPSILON) > 0.1),
+        htmlSignificantlyModifiedByJs: Boolean(Math.abs(thisElemCount - initialElemCount) / (initialElemCount + Number.EPSILON) > 0.05),
         text: document.body?.innerText,
         shadowExpanded: shadowDomPresent() ? cloneAndExpandShadowRoots()?.outerHTML : undefined,
         parsed: parsed,
@@ -407,16 +407,18 @@ function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
     if (document.baseURI !== r.href) {
         r.rebase = document.baseURI;
     }
-    if (parsed && parsed.content) {
-        const elem = document.createElement('div');
-        elem.innerHTML = parsed.content;
-        r.imgs = briefImgs(elem);
-    } else {
-        const allImgs = briefImgs();
-        if (allImgs.length === 1) {
-            r.imgs = allImgs;
+    r.imgs = briefImgs().filter((x)=> {
+        if (x.complete) {
+            if (Math.min(x.width, x.height, x.naturalWidth, x.naturalHeight) < 64) {
+                return false;
+            }
         }
-    }
+        const m = Math.min(x.width, x.height);
+        if (m && m < 64) {
+            return false;
+        }
+        return true;
+    });
 
     return r;
 }
@@ -756,7 +758,7 @@ export class PuppeteerControl extends AsyncService {
                 dElem = delta /(previousElemCount + Number.EPSILON);
             }
 
-            if (dt < 1500 && dElem < 0.1) {
+            if (dt < 1200 && dElem < 0.05) {
                 return;
             }
 
