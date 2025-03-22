@@ -33,8 +33,11 @@ export class AltTextService extends AsyncService {
         try {
             const img = await this.canvasService.loadImage(url);
             const contentTypeHint = Reflect.get(img, 'contentType');
+            if (Math.min(img.naturalHeight, img.naturalWidth) <= 1) {
+                return `A ${img.naturalWidth}x${img.naturalHeight} image, likely be a tacker probe`;
+            }
             if (Math.min(img.naturalHeight, img.naturalWidth) < 64) {
-                throw new AssertionFailureError({ message: `Image is too small to generate alt text for url ${url}` });
+                return `A ${img.naturalWidth}x${img.naturalHeight} small image, likely a logo, icon or avatar`;
             }
             const resized = this.canvasService.fitImageToSquareBox(img, 1024);
             const exported = await this.canvasService.canvasToBuffer(resized, 'image/png');
@@ -63,6 +66,32 @@ export class AltTextService extends AsyncService {
         }
         const digest = md5Hasher.hash(imgBrief.src);
         const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
+        let dims: number[] = [];
+        do {
+            if (imgBrief.loaded) {
+                if (imgBrief.naturalWidth && imgBrief.naturalHeight) {
+                    if (Math.min(imgBrief.naturalWidth, imgBrief.naturalHeight) < 64) {
+                        dims = [imgBrief.naturalWidth, imgBrief.naturalHeight];
+                        break;
+                    }
+                }
+            }
+
+            if (imgBrief.width && imgBrief.height) {
+                if (Math.min(imgBrief.width, imgBrief.height) < 64) {
+                    dims = [imgBrief.width, imgBrief.height];
+                    break;
+                }
+            }
+
+        } while (false);
+
+        if (Math.min(...dims) <= 1) {
+            return `A ${dims[0]}x${dims[1]} image, likely be a tacker probe`;
+        }
+        if (Math.min(...dims) < 64) {
+            return `A ${dims[0]}x${dims[1]} small image, likely a logo, icon or avatar`;
+        }
 
         const existing = await ImgAlt.fromFirestore(shortDigest);
 
@@ -102,4 +131,4 @@ export class AltTextService extends AsyncService {
 
         return generatedCaption;
     }
-}
+};

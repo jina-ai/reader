@@ -407,18 +407,7 @@ function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
     if (document.baseURI !== r.href) {
         r.rebase = document.baseURI;
     }
-    r.imgs = briefImgs().filter((x)=> {
-        if (x.complete) {
-            if (Math.min(x.width, x.height, x.naturalWidth, x.naturalHeight) < 64) {
-                return false;
-            }
-        }
-        const m = Math.min(x.width, x.height);
-        if (m && m < 64) {
-            return false;
-        }
-        return true;
-    });
+    r.imgs = briefImgs();
 
     return r;
 }

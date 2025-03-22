@@ -43,7 +43,7 @@ export interface FormattedPage {
 
     textRepresentation?: string;
 
-    [Symbol.dispose]: () => void;
+    [Symbol.dispose]?: () => void;
 }
 
 export const md5Hasher = new HashManager('md5', 'hex');
@@ -199,7 +199,6 @@ export class SnapshotFormatter extends AsyncService {
                 description: (snapshot.description || '').trim(),
                 url: nominalUrl?.toString() || snapshot.href?.trim(),
                 publishedTime: snapshot.parsed?.publishedTime || undefined,
-                [Symbol.dispose]: () => { },
             };
 
             Object.assign(f, formatted);
@@ -395,7 +394,6 @@ export class SnapshotFormatter extends AsyncService {
             url: nominalUrl?.toString() || snapshot.href?.trim(),
             content: contentText,
             publishedTime: snapshot.parsed?.publishedTime || undefined,
-            [Symbol.dispose]: () => { },
         };
 
         if (snapshot.status) {

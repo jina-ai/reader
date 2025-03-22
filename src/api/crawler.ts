@@ -1069,7 +1069,6 @@ export class CrawlerHost extends RPCHost {
                 title: snapshot.title,
                 content: snapshot.parsed?.textContent,
                 url: presumedURL?.href || snapshot.href,
-                [Symbol.dispose]: () => undefined,
             };
 
             Object.defineProperty(output, 'textRepresentation', {
