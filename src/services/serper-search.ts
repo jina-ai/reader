@@ -4,7 +4,7 @@ import { GlobalLogger } from './logger';
 import { SecretExposer } from '../shared/services/secrets';
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncLocalContext } from './async-context';
-import { SerperGoogleHTTP, SerperSearchQueryParams, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
+import { SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
 import { BlackHoleDetector } from './blackhole-detector';
 import { Context } from './registry';
 
@@ -32,7 +32,10 @@ export class SerperSearchService extends AsyncService {
         this.serperSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
     }
 
-    async webSearch(query: SerperSearchQueryParams) {
+    doSearch(variant: 'web', query: SerperSearchQueryParams): Promise<SerperWebSearchResponse>;
+    doSearch(variant: 'images', query: SerperSearchQueryParams): Promise<SerperImageSearchResponse>;
+    doSearch(variant: 'news', query: SerperSearchQueryParams): Promise<SerperNewsSearchResponse>;
+    async doSearch(variant: 'web' | 'images' | 'news', query: SerperSearchQueryParams) {
         const ip = this.threadLocal.get('ip');
         if (ip) {
             const geoip = await this.geoipControl.lookupCity(ip, GEOIP_SUPPORTED_LANGUAGES.EN);
@@ -62,22 +65,48 @@ export class SerperSearchService extends AsyncService {
         while (maxTries--) {
             try {
                 this.logger.debug(`Doing external search`, query);
-                const r = await this.serperSearchHTTP.webSearch(query);
+                let r;
+                switch (variant) {
+                    case 'images': {
+                        r = await this.serperSearchHTTP.imageSearch(query);
+                        break;
+                    }
+                    case 'news': {
+                        r = await this.serperSearchHTTP.newsSearch(query);
+                        break;
+                    }
+                    case 'web':
+                    default: {
+                        r = await this.serperSearchHTTP.webSearch(query);
+                        break;
+                    }
+                }
                 this.blackHoleDetector.itWorked();
 
                 return r.parsed;
             } catch (err: any) {
-                this.logger.error(`Web search failed: ${err?.message}`, { err: marshalErrorLike(err) });
+                this.logger.error(`${variant} search failed: ${err?.message}`, { err: marshalErrorLike(err) });
                 if (err?.status === 429) {
                     await delay(500 + 1000 * Math.random());
                     continue;
                 }
 
-                throw new DownstreamServiceFailureError({ message: `Search failed` });
+                throw new DownstreamServiceFailureError({ message: `Search(${variant}) failed` });
             }
         }
 
-        throw new DownstreamServiceFailureError({ message: `Search failed` });
+        throw new DownstreamServiceFailureError({ message: `Search(${variant}) failed` });
+    }
+
+
+    async webSearch(query: SerperSearchQueryParams) {
+        return this.doSearch('web', query);
+    }
+    async imageSearch(query: SerperSearchQueryParams) {
+        return this.doSearch('images', query);
+    }
+    async newsSearch(query: SerperSearchQueryParams) {
+        return this.doSearch('news', query);
     }
 
 }

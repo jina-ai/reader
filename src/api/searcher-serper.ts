@@ -414,11 +414,10 @@ export class SearcherHost extends RPCHost {
 
     async *fetchSearchResults(
         mode: string | 'markdown' | 'html' | 'text' | 'screenshot' | 'favicon' | 'content',
-        searchResults?: SerperSearchResponse['organic'],
+        searchResults?: SerperSearchResponse[],
         options?: ExtraScrappingOptions,
         crawlerOptions?: CrawlerOptions,
         count?: number,
-        withFavicon?: boolean,
     ) {
         if (!searchResults) {
             return;
@@ -460,13 +459,6 @@ export class SearcherHost extends RPCHost {
                         content: x.text,
                     };
                 });
-            }).map(async (x) => {
-                const page = await x;
-                if (withFavicon && page.url) {
-                    const url = new URL(page.url);
-                    page.favicon = await this.getFavicon(url.origin);
-                }
-                return page;
             });
 
             const resultArray = await Promise.all(mapped) as FormattedPage[];
@@ -640,5 +632,19 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
             throw err;
         }
 
+    }
+
+    serperSearch(query: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; }) {
+        const variant = query.variant;
+        Reflect.deleteProperty(query, 'variant');
+        switch (variant) {
+            case 'images':
+                return this.serperSearchService.imageSearch(query);
+            case 'news':
+                return this.serperSearchService.newsSearch(query);
+            case 'web':
+            default:
+                return this.serperSearchService.webSearch(query);
+        }
     }
 }
