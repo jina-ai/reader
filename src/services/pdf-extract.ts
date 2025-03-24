@@ -1,4 +1,3 @@
-import 'core-js/actual/promise/with-resolvers';
 import { singleton } from 'tsyringe';
 import _ from 'lodash';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
