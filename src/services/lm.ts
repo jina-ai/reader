@@ -90,7 +90,8 @@ export class LmControl extends AsyncService {
                     frequency_penalty: 0.25,
                     max_tokens: 8192,
                 }
-            }
+            },
+            maxTry: 1,
         });
 
         const chunks: string[] = [];
@@ -129,7 +130,8 @@ export class LmControl extends AsyncService {
                     frequency_penalty: 0.25,
                     max_tokens: 8192,
                 }
-            }
+            },
+            maxTry: 1,
         });
 
         const chunks: string[] = [];
