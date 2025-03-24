@@ -338,7 +338,7 @@ export class CrawlerHost extends RPCHost {
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                    chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+                    chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
                     }
@@ -379,7 +379,7 @@ export class CrawlerHost extends RPCHost {
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                    chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+                    chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
 
                     if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                         throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
@@ -405,7 +405,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
-            chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+            chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
             if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                 throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
             }
@@ -434,7 +434,7 @@ export class CrawlerHost extends RPCHost {
                 }
 
                 const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+                chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                     throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
                 }
@@ -466,7 +466,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
-        chargeAmount = this.assignChargeAmount(formatted, crawlOpts);
+        chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
             throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
         }
@@ -674,7 +674,10 @@ export class CrawlerHost extends RPCHost {
             const finalAutoSnapshot = await this.getFinalSnapshot(urlToCrawl, {
                 ...crawlOpts,
                 engine: crawlOpts?.engine || ENGINE_TYPE.AUTO,
-            }, crawlerOpts);
+            }, CrawlerOptions.from({
+                ...crawlerOpts,
+                respondWith: 'html',
+            }));
 
             if (!finalAutoSnapshot?.html) {
                 throw new AssertionFailureError(`Unexpected non HTML content for ReaderLM: ${urlToCrawl}`);
@@ -890,7 +893,7 @@ export class CrawlerHost extends RPCHost {
         }
     }
 
-    assignChargeAmount(formatted: FormattedPage, scrappingOptions?: ExtraScrappingOptions) {
+    assignChargeAmount(formatted: FormattedPage, crawlerOptions?: CrawlerOptions) {
         if (!formatted) {
             return 0;
         }
@@ -898,7 +901,7 @@ export class CrawlerHost extends RPCHost {
         let amount = 0;
         if (formatted.content) {
             const x1 = estimateToken(formatted.content);
-            if (scrappingOptions?.engine?.toLowerCase().includes('lm')) {
+            if (crawlerOptions?.respondWith?.toLowerCase().includes('lm')) {
                 amount += x1 * 2;
             }
             amount += x1;
