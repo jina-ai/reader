@@ -739,11 +739,20 @@ export class CrawlerHost extends RPCHost {
             // deprecated name
             crawlOpts?.engine === 'direct'
         ) {
-            const sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
-                await this.sideLoadWithAllocatedProxy(urlToCrawl, crawlOpts) :
-                await this.curlControl.sideLoad(urlToCrawl, crawlOpts);
-            if (!sideLoaded.file) {
-                throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
+            let sideLoaded;
+            try {
+                sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
+                    await this.sideLoadWithAllocatedProxy(urlToCrawl, crawlOpts) :
+                    await this.curlControl.sideLoad(urlToCrawl, crawlOpts);
+
+            } catch (err) {
+                if (err instanceof ServiceBadAttemptError) {
+                    throw new AssertionFailureError(err.message);
+                }
+                throw err;
+            }
+            if (!sideLoaded?.file) {
+                throw new AssertionFailureError(`Remote server did not return a body: ${urlToCrawl}`);
             }
             const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
             yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
