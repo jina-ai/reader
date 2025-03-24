@@ -35,6 +35,7 @@ export interface FormattedPage {
     images?: { [k: string]: string; } | [string, string][];
     warning?: string;
     favicon?: string;
+    date?: string;
     usage?: {
         total_tokens?: number;
         totalTokens?: number;

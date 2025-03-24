@@ -367,6 +367,7 @@ export class SearcherHost extends RPCHost {
                 url: upstreamSearchResult.link,
                 title: upstreamSearchResult.title,
                 description: upstreamSearchResult.snippet,
+                date: upstreamSearchResult.date,
             } as FormattedPage;
 
             const dataItems = [
@@ -374,6 +375,10 @@ export class SearcherHost extends RPCHost {
                 { key: 'url', label: 'URL Source' },
                 { key: 'description', label: 'Description' },
             ];
+
+            if (upstreamSearchResult.date) {
+                dataItems.push({key: 'date', label: 'Date'});
+            }
 
             if (withContent) {
                 result.content = ['html', 'text', 'screenshot'].includes(mode) ? undefined : '';
@@ -425,6 +430,7 @@ export class SearcherHost extends RPCHost {
                         url,
                         title: upstreamSearchResult.title,
                         description: upstreamSearchResult.snippet,
+                        date: upstreamSearchResult.date,
                         content: ['html', 'text', 'screenshot'].includes(mode) ? undefined : ''
                     };
                 }
@@ -434,6 +440,7 @@ export class SearcherHost extends RPCHost {
                 return this.crawler.formatSnapshotWithPDFSideLoad(mode, x, urls[i], undefined, options).then((r) => {
                     r.title ??= upstreamSearchResult.title;
                     r.description = upstreamSearchResult.snippet;
+                    r.date ??= upstreamSearchResult.date;
                     snapshotMap.set(x, r);
 
                     return r;
@@ -444,6 +451,7 @@ export class SearcherHost extends RPCHost {
                         url,
                         title: upstreamSearchResult.title,
                         description: upstreamSearchResult.snippet,
+                        date: upstreamSearchResult.date,
                         content: x.text,
                     };
                 });
@@ -484,7 +492,7 @@ export class SearcherHost extends RPCHost {
                             const textRep = x.textRepresentation ? `\n[${i + 1}] Content: \n${x.textRepresentation}` : '';
                             return `[${i + 1}] Title: ${this.title}
 [${i + 1}] URL Source: ${this.url}
-[${i + 1}] Description: ${this.description}${textRep}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}
+[${i + 1}] Description: ${this.description}${textRep}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}${this.date ? `\n[${i + 1}] Date: ${this.date}` : ''}
 `;
                         }
 
@@ -522,7 +530,7 @@ export class SearcherHost extends RPCHost {
                     }
 
                     return `[${i + 1}] Title: ${this.title}
-[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}
+[${i + 1}] URL Source: ${this.url}${mixins.length ? `\n${mixins.join('\n')}` : ''}${this.favicon !== undefined ? `\n[${i + 1}] Favicon: ${this.favicon}` : ''}${this.date ? `\n[${i + 1}] Date: ${this.date}` : ''}
 [${i + 1}] Markdown Content:
 ${this.content}
 ${suffixMixins.length ? `\n${suffixMixins.join('\n')}\n` : ''}`;
