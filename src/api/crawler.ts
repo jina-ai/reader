@@ -35,7 +35,8 @@ import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import {
     BudgetExceededError, InsufficientBalanceError,
-    SecurityCompromiseError, ServiceBadApproachError, ServiceBadAttemptError
+    SecurityCompromiseError, ServiceBadApproachError, ServiceBadAttemptError,
+    ServiceNodeResourceDrainError
 } from '../services/errors';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
@@ -45,6 +46,7 @@ import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { RobotsTxtService } from '../services/robots-text';
 import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
+import { HTTPServiceError } from 'civkit';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -685,7 +687,14 @@ export class CrawlerHost extends RPCHost {
                 return;
             }
 
-            yield* this.lmControl.readerLMMarkdownFromSnapshot(finalAutoSnapshot);
+            try {
+                yield* this.lmControl.readerLMMarkdownFromSnapshot(finalAutoSnapshot);
+            } catch (err) {
+                if (err instanceof HTTPServiceError && err.status === 429) {
+                    throw new ServiceNodeResourceDrainError(`Reader LM is at capacity, please try again later.`);
+                }
+                throw err;
+            }
 
             return;
         }
