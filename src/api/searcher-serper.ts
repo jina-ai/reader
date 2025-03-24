@@ -11,7 +11,7 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { SerperSearchResult } from '../db/searched';
 import { CrawlerOptions } from '../dto/crawler-options';
-import { SnapshotFormatter, FormattedPage } from '../services/snapshot-formatter';
+import { SnapshotFormatter, FormattedPage as RealFormattedPage } from '../services/snapshot-formatter';
 import { GoogleSearchExplicitOperatorsDto, SerperSearchService } from '../services/serper-search';
 
 import { GlobalLogger } from '../services/logger';
@@ -23,6 +23,11 @@ import { InsufficientBalanceError } from '../services/errors';
 import { SerperSearchQueryParams, SerperSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES);
+
+interface FormattedPage extends RealFormattedPage {
+    favicon?: string;
+    date?: string;
+}
 
 @singleton()
 export class SearcherHost extends RPCHost {
@@ -377,7 +382,7 @@ export class SearcherHost extends RPCHost {
             ];
 
             if (upstreamSearchResult.date) {
-                dataItems.push({key: 'date', label: 'Date'});
+                dataItems.push({ key: 'date', label: 'Date' });
             }
 
             if (withContent) {
