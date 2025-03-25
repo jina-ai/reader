@@ -914,12 +914,12 @@ export class CrawlerHost extends RPCHost {
                 amount += x1 * 2;
             }
             amount += x1;
-        } else if (formatted.description) {
-            amount += estimateToken(formatted.description);
         }
+
         if (formatted.text) {
             amount += estimateToken(formatted.text);
         }
+
         if (formatted.html) {
             amount += estimateToken(formatted.html);
         }

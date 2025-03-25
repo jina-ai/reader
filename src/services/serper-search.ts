@@ -4,16 +4,18 @@ import { GlobalLogger } from './logger';
 import { SecretExposer } from '../shared/services/secrets';
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncLocalContext } from './async-context';
-import { SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
+import { SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
 import { BlackHoleDetector } from './blackhole-detector';
 import { Context } from './registry';
+import { ServiceBadAttemptError } from '../shared';
 
 @singleton()
 export class SerperSearchService extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    serperSearchHTTP!: SerperGoogleHTTP;
+    serperGoogleSearchHTTP!: SerperGoogleHTTP;
+    serperBingSearchHTTP!: SerperBingHTTP;
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -29,7 +31,18 @@ export class SerperSearchService extends AsyncService {
         await this.dependencyReady();
         this.emit('ready');
 
-        this.serperSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.serperGoogleSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.serperBingSearchHTTP = new SerperBingHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+    }
+
+    *iterClient() {
+        const preferBingSearch = this.threadLocal.get('bing-preferred');
+        if (preferBingSearch) {
+            yield this.serperBingSearchHTTP;
+        }
+        while (true) {
+            yield this.serperGoogleSearchHTTP;
+        }
     }
 
     doSearch(variant: 'web', query: SerperSearchQueryParams): Promise<SerperWebSearchResponse>;
@@ -60,6 +73,12 @@ export class SerperSearchService extends AsyncService {
             }
         }
 
+        const clientIt = this.iterClient();
+        let client = clientIt.next().value;
+        if (!client) {
+            throw new Error(`Error iterating serper client`);
+        }
+
         let maxTries = 3;
 
         while (maxTries--) {
@@ -68,16 +87,43 @@ export class SerperSearchService extends AsyncService {
                 let r;
                 switch (variant) {
                     case 'images': {
-                        r = await this.serperSearchHTTP.imageSearch(query);
+                        r = await client.imageSearch(query);
+                        const nextClient = clientIt.next().value;
+                        if (nextClient && nextClient !== client) {
+                            const results = r.parsed.images;
+                            if (!results.length) {
+                                client = nextClient;
+                                throw new ServiceBadAttemptError('No results found');
+                            }
+                        }
+
                         break;
                     }
                     case 'news': {
-                        r = await this.serperSearchHTTP.newsSearch(query);
+                        r = await client.newsSearch(query);
+                        const nextClient = clientIt.next().value;
+                        if (nextClient && nextClient !== client) {
+                            const results = r.parsed.news;
+                            if (!results.length) {
+                                client = nextClient;
+                                throw new ServiceBadAttemptError('No results found');
+                            }
+                        }
+
                         break;
                     }
                     case 'web':
                     default: {
-                        r = await this.serperSearchHTTP.webSearch(query);
+                        r = await client.webSearch(query);
+                        const nextClient = clientIt.next().value;
+                        if (nextClient && nextClient !== client) {
+                            const results = r.parsed.organic;
+                            if (!results.length) {
+                                client = nextClient;
+                                throw new ServiceBadAttemptError('No results found');
+                            }
+                        }
+
                         break;
                     }
                 }
@@ -88,6 +134,9 @@ export class SerperSearchService extends AsyncService {
                 this.logger.error(`${variant} search failed: ${err?.message}`, { err: marshalErrorLike(err) });
                 if (err?.status === 429) {
                     await delay(500 + 1000 * Math.random());
+                    continue;
+                }
+                if (err instanceof ServiceBadAttemptError) {
                     continue;
                 }
 
