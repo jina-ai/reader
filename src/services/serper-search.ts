@@ -4,16 +4,18 @@ import { GlobalLogger } from './logger';
 import { SecretExposer } from '../shared/services/secrets';
 import { GEOIP_SUPPORTED_LANGUAGES, GeoIPService } from './geoip';
 import { AsyncLocalContext } from './async-context';
-import { SerperGoogleHTTP, SerperSearchQueryParams, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
+import { SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse, WORLD_COUNTRIES } from '../shared/3rd-party/serper-search';
 import { BlackHoleDetector } from './blackhole-detector';
 import { Context } from './registry';
+import { ServiceBadAttemptError } from '../shared';
 
 @singleton()
 export class SerperSearchService extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    serperSearchHTTP!: SerperGoogleHTTP;
+    serperGoogleSearchHTTP!: SerperGoogleHTTP;
+    serperBingSearchHTTP!: SerperBingHTTP;
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -29,10 +31,24 @@ export class SerperSearchService extends AsyncService {
         await this.dependencyReady();
         this.emit('ready');
 
-        this.serperSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.serperGoogleSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.serperBingSearchHTTP = new SerperBingHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
     }
 
-    async webSearch(query: SerperSearchQueryParams) {
+    *iterClient() {
+        const preferBingSearch = this.threadLocal.get('bing-preferred');
+        if (preferBingSearch) {
+            yield this.serperBingSearchHTTP;
+        }
+        while (true) {
+            yield this.serperGoogleSearchHTTP;
+        }
+    }
+
+    doSearch(variant: 'web', query: SerperSearchQueryParams): Promise<SerperWebSearchResponse>;
+    doSearch(variant: 'images', query: SerperSearchQueryParams): Promise<SerperImageSearchResponse>;
+    doSearch(variant: 'news', query: SerperSearchQueryParams): Promise<SerperNewsSearchResponse>;
+    async doSearch(variant: 'web' | 'images' | 'news', query: SerperSearchQueryParams) {
         const ip = this.threadLocal.get('ip');
         if (ip) {
             const geoip = await this.geoipControl.lookupCity(ip, GEOIP_SUPPORTED_LANGUAGES.EN);
@@ -57,27 +73,89 @@ export class SerperSearchService extends AsyncService {
             }
         }
 
+        const clientIt = this.iterClient();
+        let client = clientIt.next().value;
+        if (!client) {
+            throw new Error(`Error iterating serper client`);
+        }
+
         let maxTries = 3;
 
         while (maxTries--) {
             try {
                 this.logger.debug(`Doing external search`, query);
-                const r = await this.serperSearchHTTP.webSearch(query);
+                let r;
+                switch (variant) {
+                    case 'images': {
+                        r = await client.imageSearch(query);
+                        const nextClient = clientIt.next().value;
+                        if (nextClient && nextClient !== client) {
+                            const results = r.parsed.images;
+                            if (!results.length) {
+                                client = nextClient;
+                                throw new ServiceBadAttemptError('No results found');
+                            }
+                        }
+
+                        break;
+                    }
+                    case 'news': {
+                        r = await client.newsSearch(query);
+                        const nextClient = clientIt.next().value;
+                        if (nextClient && nextClient !== client) {
+                            const results = r.parsed.news;
+                            if (!results.length) {
+                                client = nextClient;
+                                throw new ServiceBadAttemptError('No results found');
+                            }
+                        }
+
+                        break;
+                    }
+                    case 'web':
+                    default: {
+                        r = await client.webSearch(query);
+                        const nextClient = clientIt.next().value;
+                        if (nextClient && nextClient !== client) {
+                            const results = r.parsed.organic;
+                            if (!results.length) {
+                                client = nextClient;
+                                throw new ServiceBadAttemptError('No results found');
+                            }
+                        }
+
+                        break;
+                    }
+                }
                 this.blackHoleDetector.itWorked();
 
                 return r.parsed;
             } catch (err: any) {
-                this.logger.error(`Web search failed: ${err?.message}`, { err: marshalErrorLike(err) });
+                this.logger.error(`${variant} search failed: ${err?.message}`, { err: marshalErrorLike(err) });
                 if (err?.status === 429) {
                     await delay(500 + 1000 * Math.random());
                     continue;
                 }
+                if (err instanceof ServiceBadAttemptError) {
+                    continue;
+                }
 
-                throw new DownstreamServiceFailureError({ message: `Search failed` });
+                throw new DownstreamServiceFailureError({ message: `Search(${variant}) failed` });
             }
         }
 
-        throw new DownstreamServiceFailureError({ message: `Search failed` });
+        throw new DownstreamServiceFailureError({ message: `Search(${variant}) failed` });
+    }
+
+
+    async webSearch(query: SerperSearchQueryParams) {
+        return this.doSearch('web', query);
+    }
+    async imageSearch(query: SerperSearchQueryParams) {
+        return this.doSearch('images', query);
+    }
+    async newsSearch(query: SerperSearchQueryParams) {
+        return this.doSearch('news', query);
     }
 
 }

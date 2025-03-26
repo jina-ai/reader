@@ -16,3 +16,12 @@ export function tryDecodeURIComponent(input: string) {
         throw new ParamValidationError(`Invalid URIComponent: ${input}`);
     }
 }
+
+
+export async function* toAsyncGenerator<T>(val: T) {
+    yield val;
+}
+
+export async function* toGenerator<T>(val: T) {
+    yield val;
+}

@@ -279,7 +279,7 @@ export class CrawlerHost extends RPCHost {
                     return;
                 }
                 if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
+                    auth.reportUsage(chargeAmount, `reader-crawl`).catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
                     apiRoll.chargeAmount = chargeAmount;
@@ -914,12 +914,12 @@ export class CrawlerHost extends RPCHost {
                 amount += x1 * 2;
             }
             amount += x1;
-        } else if (formatted.description) {
-            amount += estimateToken(formatted.description);
         }
+
         if (formatted.text) {
             amount += estimateToken(formatted.text);
         }
+
         if (formatted.html) {
             amount += estimateToken(formatted.html);
         }
