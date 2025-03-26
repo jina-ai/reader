@@ -454,7 +454,6 @@ export class SearcherHost extends RPCHost {
             const itemAmount = this.crawler.assignChargeAmount(x) || 0;
 
             if (!itemAmount) {
-                Reflect.deleteProperty(x, 'usage');
                 continue;
             }
 
@@ -464,6 +463,13 @@ export class SearcherHost extends RPCHost {
         const numCharge = Math.ceil(formatted.length / 10) * 10000 * scaler;
 
         const final = Math.max(contentCharge, numCharge);
+
+        if (final === numCharge) {
+            for (const x of formatted) {
+                x.usage = { tokens: Math.ceil(numCharge / formatted.length) };
+            }
+        }
+
 
         assignMeta(formatted, { usage: { tokens: final } });
 
