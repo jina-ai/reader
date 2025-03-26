@@ -23,7 +23,7 @@ import { InsufficientBalanceError } from '../services/errors';
 import { SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperSearchResponse, SerperWebSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 import { toAsyncGenerator } from '../utils/misc';
 
-const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES);
+const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
 interface FormattedPage extends RealFormattedPage {
     favicon?: string;
@@ -94,7 +94,7 @@ export class SearcherHost extends RPCHost {
         searchEngine: 'google' | 'bing',
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
-        @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v) }) gl?: string,
+        @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
