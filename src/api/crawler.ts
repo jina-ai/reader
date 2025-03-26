@@ -260,7 +260,7 @@ export class CrawlerHost extends RPCHost {
             const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
                 parseInt(user.metadata?.speed_level) >= 2 ?
                     RateLimitDesc.from({
-                        occurrence: 1000,
+                        occurrence: 2000,
                         periodSeconds: 60
                     }) :
                     RateLimitDesc.from({

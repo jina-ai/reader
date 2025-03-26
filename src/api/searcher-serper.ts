@@ -130,7 +130,7 @@ export class SearcherHost extends RPCHost {
         const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
             parseInt(user.metadata?.speed_level) >= 2 ?
                 RateLimitDesc.from({
-                    occurrence: 100,
+                    occurrence: 400,
                     periodSeconds: 60
                 }) :
                 RateLimitDesc.from({
