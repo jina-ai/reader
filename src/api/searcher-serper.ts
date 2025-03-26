@@ -90,8 +90,8 @@ export class SearcherHost extends RPCHost {
         count: number,
         @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
         variant: 'web' | 'images' | 'news',
-        @Param('provider', { type: new Set(['google', 'bing']), default: 'google' })
-        searchEngine: 'google' | 'bing',
+        @Param('provider', { type: new Set(['google', 'bing', 'wechat']), default: 'google' })
+        searchEngine: 'google' | 'bing' | 'wechat',
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
@@ -171,6 +171,9 @@ export class SearcherHost extends RPCHost {
         }
 
         let chargeAmountScaler = 1;
+        if (searchEngine === 'wechat') {
+            this.threadLocal.set('wechat-preferred', true);
+        }
         if (searchEngine === 'bing') {
             this.threadLocal.set('bing-preferred', true);
             chargeAmountScaler = 3;

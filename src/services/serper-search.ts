@@ -7,6 +7,7 @@ import { SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse, SerperNews
 import { BlackHoleDetector } from './blackhole-detector';
 import { Context } from './registry';
 import { ServiceBadAttemptError } from '../shared';
+import { WechatSearchHTTP } from '../shared/3rd-party/wechat-search';
 
 @singleton()
 export class SerperSearchService extends AsyncService {
@@ -15,6 +16,7 @@ export class SerperSearchService extends AsyncService {
 
     serperGoogleSearchHTTP!: SerperGoogleHTTP;
     serperBingSearchHTTP!: SerperBingHTTP;
+    wechatSearchHTTP!: WechatSearchHTTP;
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -31,12 +33,17 @@ export class SerperSearchService extends AsyncService {
 
         this.serperGoogleSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
         this.serperBingSearchHTTP = new SerperBingHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.wechatSearchHTTP = new WechatSearchHTTP(this.secretExposer.WECHAT_SEARCH_API_KEY);
     }
 
     *iterClient() {
         const preferBingSearch = this.threadLocal.get('bing-preferred');
+        const preferWechatSearch = this.threadLocal.get('wechat-preferred');
         if (preferBingSearch) {
             yield this.serperBingSearchHTTP;
+        }
+        if (preferWechatSearch) {
+            yield this.wechatSearchHTTP;
         }
         while (true) {
             yield this.serperGoogleSearchHTTP;
@@ -59,6 +66,17 @@ export class SerperSearchService extends AsyncService {
             try {
                 this.logger.debug(`Doing external search`, query);
                 let r;
+
+                if (client instanceof WechatSearchHTTP) {
+                    r = await client.blogSearch({
+                        kw: query.q,
+                        page: query.page
+                    });
+
+                    this.blackHoleDetector.itWorked();
+
+                    return r.parsed;
+                }
                 switch (variant) {
                     case 'images': {
                         r = await client.imageSearch(query);
