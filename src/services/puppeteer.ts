@@ -19,6 +19,7 @@ import { CurlControl } from './curl';
 import { BlackHoleDetector } from './blackhole-detector';
 import { AsyncLocalContext } from './async-context';
 import { GlobalLogger } from './logger';
+import { minimalStealth } from './minimal-stealth';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -234,6 +235,7 @@ const SCRIPT_TO_INJECT_INTO_FRAME = `
 ${READABILITY_JS}
 ${SIMULATE_SCROLL}
 ${MUTATION_IDLE_WATCH}
+(${minimalStealth.toString()})();
 
 (function(){
 function briefImgs(elem) {
@@ -559,7 +561,9 @@ export class PuppeteerControl extends AsyncService {
             timeout: 10_000,
             headless: !Boolean(process.env.DEBUG_BROWSER),
             executablePath: process.env.OVERRIDE_CHROME_EXECUTABLE_PATH,
-            args: ['--disable-dev-shm-usage']
+            args: [
+                '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'
+            ]
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
             process.nextTick(() => {
@@ -1172,8 +1176,8 @@ export class PuppeteerControl extends AsyncService {
                 try {
                     const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                    screenshot = Buffer.from(await page.screenshot());
-                    pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
+                    screenshot = await this.takeScreenShot(page);
+                    pageshot = await this.takeScreenShot(page, { fullPage: true });
                     if (snapshot) {
                         snapshot.childFrames = await pSubFrameSnapshots;
                     }
@@ -1190,22 +1194,6 @@ export class PuppeteerControl extends AsyncService {
                         throw stuff;
                     }
                 }
-                // try {
-                //     if ((!snapshot?.title || !snapshot?.parsed?.content) && !(snapshot?.pdfs?.length)) {
-                //         const salvaged = await this.salvage(url, page);
-                //         if (salvaged) {
-                //             const pSubFrameSnapshots = this.snapshotChildFrames(page);
-                //             snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                //             screenshot = Buffer.from(await page.screenshot());
-                //             pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
-                //             if (snapshot) {
-                //                 snapshot.childFrames = await pSubFrameSnapshots;
-                //             }
-                //         }
-                //     }
-                // } catch (err: any) {
-                //     this.logger.warn(`Page ${sn}: Failed to salvage ${url}`, { err });
-                // }
 
                 finalized = true;
                 if (snapshot?.html) {
@@ -1236,8 +1224,8 @@ export class PuppeteerControl extends AsyncService {
                     .then(async () => {
                         const pSubFrameSnapshots = this.snapshotChildFrames(page);
                         snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                        screenshot = Buffer.from(await page.screenshot());
-                        pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
+                        screenshot = await this.takeScreenShot(page);
+                        pageshot = await this.takeScreenShot(page, { fullPage: true });
                         if (snapshot) {
                             snapshot.childFrames = await pSubFrameSnapshots;
                         }
@@ -1279,8 +1267,8 @@ export class PuppeteerControl extends AsyncService {
                     break;
                 }
                 if (options.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
-                    screenshot = Buffer.from(await page.screenshot());
-                    pageshot = Buffer.from(await page.screenshot({ fullPage: true }));
+                    screenshot = await this.takeScreenShot(page);
+                    pageshot = await this.takeScreenShot(page, { fullPage: true });
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {
@@ -1306,28 +1294,17 @@ export class PuppeteerControl extends AsyncService {
         }
     }
 
-    // async salvage(url: string, page: Page) {
-    //     this.logger.info(`Salvaging ${url}`);
-    //     const googleArchiveUrl = `https://webcache.googleusercontent.com/search?q=cache:${encodeURIComponent(url)}`;
-    //     const resp = await fetch(googleArchiveUrl, {
-    //         headers: {
-    //             'User-Agent': `Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`
-    //         }
-    //     });
-    //     resp.body?.cancel().catch(() => void 0);
-    //     if (!resp.ok) {
-    //         this.logger.warn(`No salvation found for url: ${url}`, { status: resp.status, url });
-    //         return null;
-    //     }
+    protected async takeScreenShot(page: Page, opts?: Parameters<typeof page.screenshot>[0]): Promise<Buffer | undefined> {
+        const r = await page.screenshot(opts).catch((err) => {
+            this.logger.warn(`Failed to take screenshot`, { err });
+        });
 
-    //     await page.goto(googleArchiveUrl, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'], timeout: 15_000 }).catch((err) => {
-    //         this.logger.warn(`Page salvation did not fully succeed.`, { err });
-    //     });
+        if (r) {
+            return Buffer.from(r);
+        }
 
-    //     this.logger.info(`Salvation completed.`);
-
-    //     return true;
-    // }
+        return undefined;
+    }
 
     async snapshotChildFrames(page: Page): Promise<PageSnapshot[]> {
         const childFrames = page.mainFrame().childFrames();
