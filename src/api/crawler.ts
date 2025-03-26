@@ -279,7 +279,7 @@ export class CrawlerHost extends RPCHost {
                     return;
                 }
                 if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
+                    auth.reportUsage(chargeAmount, `reader-crawl`).catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
                     apiRoll.chargeAmount = chargeAmount;
