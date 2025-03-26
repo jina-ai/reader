@@ -88,7 +88,7 @@ export class SearcherHost extends RPCHost {
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
         @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
         count: number,
-        @Param('variant', { type: new Set(['web', 'images', 'news']), default: 'web' })
+        @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
         variant: 'web' | 'images' | 'news',
         @Param('provider', { type: new Set(['google', 'bing']), default: 'google' })
         searchEngine: 'google' | 'bing',
@@ -173,10 +173,10 @@ export class SearcherHost extends RPCHost {
         let chargeAmountScaler = 1;
         if (searchEngine === 'bing') {
             this.threadLocal.set('bing-preferred', true);
-            chargeAmountScaler = 2;
+            chargeAmountScaler = 3;
         }
         if (variant !== 'web') {
-            chargeAmountScaler = 3;
+            chargeAmountScaler = 5;
         }
 
         const r = await this.cachedSearch({
