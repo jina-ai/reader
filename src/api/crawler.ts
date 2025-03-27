@@ -9,6 +9,7 @@ import {
     RawString,
     ApplicationError,
     DataStreamBrokenError,
+    assignMeta,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import { Defer } from 'civkit/defer';
@@ -755,6 +756,8 @@ export class CrawlerHost extends RPCHost {
                 throw new AssertionFailureError(`Remote server did not return a body: ${urlToCrawl}`);
             }
             const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
+            draftSnapshot.status = sideLoaded.status;
+            draftSnapshot.statusText = sideLoaded.statusText;
             yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
             return;
         }
@@ -822,6 +825,8 @@ export class CrawlerHost extends RPCHost {
                     }
                     return Promise.reject(err);
                 });
+                draftSnapshot.status = sideLoaded.status;
+                draftSnapshot.statusText = sideLoaded.statusText;
                 if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
                     yield draftSnapshot;
                     return;
@@ -849,6 +854,8 @@ export class CrawlerHost extends RPCHost {
                         }
                         return Promise.reject(err);
                     });
+                    proxySnapshot.status = proxyLoaded.status;
+                    proxySnapshot.statusText = proxyLoaded.statusText;
                     if (proxyLoaded.status === 200 && crawlerOpts?.browserIsNotRequired()) {
                     }
                     analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
@@ -931,6 +938,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         Object.assign(formatted, { usage: { tokens: amount } });
+        assignMeta(formatted, { usage: { tokens: amount } });
 
         return amount;
     }

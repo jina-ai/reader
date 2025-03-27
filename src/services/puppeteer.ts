@@ -1176,8 +1176,8 @@ export class PuppeteerControl extends AsyncService {
                 try {
                     const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                    screenshot = await this.takeScreenShot(page);
-                    pageshot = await this.takeScreenShot(page, { fullPage: true });
+                    screenshot = (await this.takeScreenShot(page)) || screenshot;
+                    pageshot = (await this.takeScreenShot(page, { fullPage: true })) || pageshot;
                     if (snapshot) {
                         snapshot.childFrames = await pSubFrameSnapshots;
                     }
@@ -1224,8 +1224,8 @@ export class PuppeteerControl extends AsyncService {
                     .then(async () => {
                         const pSubFrameSnapshots = this.snapshotChildFrames(page);
                         snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                        screenshot = await this.takeScreenShot(page);
-                        pageshot = await this.takeScreenShot(page, { fullPage: true });
+                        screenshot = (await this.takeScreenShot(page)) || screenshot;
+                        pageshot = (await this.takeScreenShot(page, { fullPage: true })) || pageshot;
                         if (snapshot) {
                             snapshot.childFrames = await pSubFrameSnapshots;
                         }
@@ -1267,8 +1267,8 @@ export class PuppeteerControl extends AsyncService {
                     break;
                 }
                 if (options.favorScreenshot && snapshot?.title && snapshot?.html !== lastHTML) {
-                    screenshot = await this.takeScreenShot(page);
-                    pageshot = await this.takeScreenShot(page, { fullPage: true });
+                    screenshot = (await this.takeScreenShot(page)) || screenshot;
+                    pageshot = (await this.takeScreenShot(page, { fullPage: true })) || pageshot;
                     lastHTML = snapshot.html;
                 }
                 if (snapshot || screenshot) {
@@ -1324,6 +1324,373 @@ export class PuppeteerControl extends AsyncService {
         })) as PageSnapshot[];
 
         return r.filter(Boolean);
+    }
+
+    async simpleScrap(parsedUrl: URL, options: ScrappingOptions = {}): Promise<PageSnapshot> {
+        // parsedUrl.search = '';
+        const url = parsedUrl.toString();
+        let snapshot: PageSnapshot | undefined;
+        let navigationResponse: HTTPResponse | undefined;
+        const page = await this.getNextPage();
+        this.lifeCycleTrack.set(page, this.asyncLocalContext.ctx);
+        this.pagePhase.set(page, 'active');
+        page.on('response', (resp) => {
+            this.blackHoleDetector.itWorked();
+            const req = resp.request();
+            if (req.frame() === page.mainFrame() && req.isNavigationRequest()) {
+                navigationResponse = resp;
+            }
+            if (!resp.ok()) {
+                return;
+            }
+        });
+        page.on('request', async (req) => {
+            if (req.isInterceptResolutionHandled()) {
+                return;
+            };
+            const reqUrlParsed = new URL(req.url());
+            if (!reqUrlParsed.protocol.startsWith('http')) {
+                const overrides = req.continueRequestOverrides();
+
+                return req.continue(overrides, 0);
+            }
+            const typ = req.resourceType();
+            if (typ === 'media') {
+                // Non-cooperative answer to block all media requests.
+                return req.abort('blockedbyclient');
+            }
+            if (!options.proxyResources) {
+                const isDocRequest = ['document', 'xhr', 'fetch', 'websocket', 'prefetch', 'eventsource', 'ping'].includes(typ);
+                if (!isDocRequest) {
+                    if (options.extraHeaders) {
+                        const overrides = req.continueRequestOverrides();
+                        const continueArgs = [{
+                            ...overrides,
+                            headers: {
+                                ...req.headers(),
+                                ...overrides?.headers,
+                                ...options.extraHeaders,
+                            }
+                        }, 1] as const;
+
+                        return req.continue(continueArgs[0], continueArgs[1]);
+                    }
+                    const overrides = req.continueRequestOverrides();
+
+                    return req.continue(overrides, 0);
+                }
+            }
+            const sideload = options.sideLoad;
+
+            const impersonate = sideload?.impersonate[reqUrlParsed.href];
+            if (impersonate) {
+                let body;
+                if (impersonate.body) {
+                    body = await readFile(await impersonate.body.filePath);
+                    if (req.isInterceptResolutionHandled()) {
+                        return;
+                    }
+                }
+                return req.respond({
+                    status: impersonate.status,
+                    headers: impersonate.headers,
+                    contentType: impersonate.contentType,
+                    body: body ? Uint8Array.from(body) : undefined,
+                }, 999);
+            }
+
+            const proxy = options.proxyUrl || sideload?.proxyOrigin?.[reqUrlParsed.origin];
+            const ctx = this.lifeCycleTrack.get(page);
+            if (proxy && ctx) {
+                return await this.asyncLocalContext.bridge(ctx, async () => {
+                    try {
+                        const curled = await this.curlControl.sideLoad(reqUrlParsed, {
+                            ...options,
+                            method: req.method(),
+                            body: req.postData(),
+                            extraHeaders: {
+                                ...req.headers(),
+                                ...options.extraHeaders,
+                            },
+                            proxyUrl: proxy
+                        });
+                        if (req.isInterceptResolutionHandled()) {
+                            return;
+                        };
+
+                        if (curled.chain.length === 1) {
+                            if (!curled.file) {
+                                return req.respond({
+                                    status: curled.status,
+                                    headers: _.omit(curled.headers, 'result'),
+                                    contentType: curled.contentType,
+                                }, 3);
+                            }
+                            const body = await readFile(await curled.file.filePath);
+                            if (req.isInterceptResolutionHandled()) {
+                                return;
+                            };
+                            return req.respond({
+                                status: curled.status,
+                                headers: _.omit(curled.headers, 'result'),
+                                contentType: curled.contentType,
+                                body: Uint8Array.from(body),
+                            }, 3);
+                        }
+                        options.sideLoad ??= curled.sideLoadOpts;
+                        _.merge(options.sideLoad, curled.sideLoadOpts);
+                        const firstReq = curled.chain[0];
+
+                        return req.respond({
+                            status: firstReq.result!.code,
+                            headers: _.omit(firstReq, 'result'),
+                        }, 3);
+                    } catch (err: any) {
+                        this.logger.warn(`Failed to sideload browser request ${reqUrlParsed.origin}`, { href: reqUrlParsed.href, err, proxy });
+                    }
+                    if (req.isInterceptResolutionHandled()) {
+                        return;
+                    };
+                    const overrides = req.continueRequestOverrides();
+                    const continueArgs = [{
+                        ...overrides,
+                        headers: {
+                            ...req.headers(),
+                            ...overrides?.headers,
+                            ...options.extraHeaders,
+                        }
+                    }, 1] as const;
+
+                    return req.continue(continueArgs[0], continueArgs[1]);
+                });
+            }
+
+            if (req.isInterceptResolutionHandled()) {
+                return;
+            };
+            const overrides = req.continueRequestOverrides();
+            const continueArgs = [{
+                ...overrides,
+                headers: {
+                    ...req.headers(),
+                    ...overrides?.headers,
+                    ...options.extraHeaders,
+                }
+            }, 1] as const;
+
+            return req.continue(continueArgs[0], continueArgs[1]);
+        });
+
+        const sn = this.snMap.get(page);
+        this.logger.info(`Page ${sn}: Scraping ${url}`, { url });
+        if (options.locale) {
+            // Add headers via request interception to walk around this bug
+            // https://github.com/puppeteer/puppeteer/issues/10235
+            // await page.setExtraHTTPHeaders({
+            //     'Accept-Language': options.locale
+            // });
+
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, "language", {
+                    get: function () {
+                        return options.locale;
+                    }
+                });
+                Object.defineProperty(navigator, "languages", {
+                    get: function () {
+                        return [options.locale];
+                    }
+                });
+            });
+        }
+
+        if (options.cookies) {
+            const mapped = options.cookies.map((x) => {
+                const draft: CookieParam = {
+                    name: x.name,
+                    value: encodeURIComponent(x.value),
+                    secure: x.secure,
+                    domain: x.domain,
+                    path: x.path,
+                    expires: x.expires ? Math.floor(x.expires.valueOf() / 1000) : undefined,
+                    sameSite: x.sameSite as any,
+                };
+                if (!draft.expires && x.maxAge) {
+                    draft.expires = Math.floor(Date.now() / 1000) + x.maxAge;
+                }
+                if (!draft.domain) {
+                    draft.url = parsedUrl.toString();
+                }
+
+                return draft;
+            });
+            try {
+                await page.setCookie(...mapped);
+            } catch (err: any) {
+                this.logger.warn(`Page ${sn}: Failed to set cookies`, { err });
+                throw new ParamValidationError({
+                    path: 'cookies',
+                    message: `Failed to set cookies: ${err?.message}`
+                });
+            }
+        }
+        if (options.overrideUserAgent) {
+            await page.setUserAgent(options.overrideUserAgent);
+        }
+        if (options.viewport) {
+            await page.setViewport(options.viewport);
+        }
+
+        let nextSnapshotDeferred = Defer();
+        const crippleListener = () => nextSnapshotDeferred.reject(new ServiceCrashedError({ message: `Browser crashed, try again` }));
+        this.once('crippled', crippleListener);
+        nextSnapshotDeferred.promise.finally(() => {
+            this.off('crippled', crippleListener);
+        });
+        let finalized = false;
+        const hdl = (s: any) => {
+            if (snapshot === s) {
+                return;
+            }
+            snapshot = s;
+            if (snapshot) {
+                const kit = this.pageReqCtrl.get(page);
+                snapshot.lastContentResourceLoaded = kit?.lastContentResourceLoadedAt;
+                snapshot.lastMediaResourceLoaded = kit?.lastMediaResourceLoadedAt;
+            }
+            if (s?.maxElemDepth && s.maxElemDepth > 256) {
+                return;
+            }
+            if (s?.elemCount && s.elemCount > 10_000) {
+                return;
+            }
+            nextSnapshotDeferred.resolve(s);
+            nextSnapshotDeferred = Defer();
+            this.once('crippled', crippleListener);
+            nextSnapshotDeferred.promise.finally(() => {
+                this.off('crippled', crippleListener);
+            });
+        };
+        page.on('snapshot', hdl);
+        page.once('abuse', (event: any) => {
+            this.emit('abuse', { ...event, url: parsedUrl });
+            if (snapshot?.href && parsedUrl.href !== snapshot.href) {
+                this.emit('abuse', { ...event, url: snapshot.href });
+            }
+
+            nextSnapshotDeferred.reject(
+                new SecurityCompromiseError(`Abuse detected: ${event.reason}`)
+            );
+        });
+
+        const timeout = options.timeoutMs || 30_000;
+        const goToOptions: GoToOptions = {
+            waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
+            timeout,
+        };
+
+        if (options.referer) {
+            goToOptions.referer = options.referer;
+        }
+
+        const gotoPromise = page.goto(url, goToOptions)
+            .catch((err) => {
+                if (err instanceof TimeoutError) {
+                    this.logger.warn(`Page ${sn}: Browsing of ${url} timed out`, { err });
+                    return new AssertionFailureError({
+                        message: `Failed to goto ${url}: ${err}`,
+                        cause: err,
+                    });
+                }
+
+                this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err });
+                return new AssertionFailureError({
+                    message: `Failed to goto ${url}: ${err}`,
+                    cause: err,
+                });
+            }).then(async (stuff) => {
+                // This check is necessary because without snapshot, the condition of the page is unclear
+                // Calling evaluate directly may stall the process.
+                if (!snapshot) {
+                    if (stuff instanceof Error) {
+                        finalized = true;
+                        throw stuff;
+                    }
+                }
+                try {
+                    const pSubFrameSnapshots = this.snapshotChildFrames(page);
+                    snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
+                    if (snapshot) {
+                        snapshot.childFrames = await pSubFrameSnapshots;
+                    }
+                } catch (err: any) {
+                    this.logger.warn(`Page ${sn}: Failed to finalize ${url}`, { err });
+                    if (stuff instanceof Error) {
+                        finalized = true;
+                        throw stuff;
+                    }
+                }
+                if (!snapshot?.html) {
+                    if (stuff instanceof Error) {
+                        finalized = true;
+                        throw stuff;
+                    }
+                }
+
+                finalized = true;
+                if (snapshot?.html) {
+                    this.logger.info(`Page ${sn}: Snapshot of ${url} done`, { url, title: snapshot?.title, href: snapshot?.href });
+                    this.emit(
+                        'crawled',
+                        {
+                            ...snapshot,
+                            status: navigationResponse?.status(),
+                            statusText: navigationResponse?.statusText(),
+                        },
+                        { ...options, url: parsedUrl }
+                    );
+                }
+            });
+
+        try {
+            while (true) {
+                const ckpt = [nextSnapshotDeferred.promise, gotoPromise];
+                if (options.minIntervalMs) {
+                    ckpt.push(delay(options.minIntervalMs));
+                }
+                let error;
+                await Promise.race(ckpt).catch((err) => error = err);
+                if (finalized && !error) {
+                    if (!snapshot) {
+                        if (error) {
+                            throw error;
+                        }
+                        throw new AssertionFailureError(`Could not extract any meaningful content from the page`);
+                    }
+                    return {
+                        ...snapshot,
+                        status: navigationResponse?.status(),
+                        statusText: navigationResponse?.statusText(),
+                    } as PageSnapshot;
+                }
+
+                if (snapshot?.lastMutationIdle) {
+                    return {
+                        ...snapshot,
+                        status: navigationResponse?.status(),
+                        statusText: navigationResponse?.statusText(),
+                    } as PageSnapshot;
+                }
+                if (error) {
+                    throw error;
+                }
+            }
+        } finally {
+            this.pagePhase.set(page, 'background');
+            page.off('snapshot', hdl);
+            this.ditchPage(page);
+            nextSnapshotDeferred.resolve();
+        }
     }
 
 }

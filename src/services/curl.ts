@@ -98,6 +98,7 @@ export class CurlControl extends AsyncService {
     urlToFile1Shot(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
         return new Promise<{
             statusCode: number,
+            statusText?: string,
             data?: FancyFile,
             headers: HeaderInfo[],
         }>((resolve, reject) => {
@@ -179,6 +180,7 @@ export class CurlControl extends AsyncService {
             });
             curl.setOpt(Curl.option.MAXFILESIZE, 4 * 1024 * 1024 * 1024); // 4GB
             let status = -1;
+            let statusText: string|undefined;
             let contentEncoding = '';
             curl.once('end', () => {
                 if (curlStream) {
@@ -208,6 +210,7 @@ export class CurlControl extends AsyncService {
                     }
                 }
                 const lastResHeaders = headers[headers.length - 1];
+                statusText = (lastResHeaders as HeaderInfo).result?.reason;
                 for (const [k, v] of Object.entries(lastResHeaders)) {
                     const kl = k.toLowerCase();
                     if (kl === 'content-type') {
@@ -227,6 +230,7 @@ export class CurlControl extends AsyncService {
                     }
                     resolve({
                         statusCode: status,
+                        statusText,
                         data: undefined,
                         headers: headers as HeaderInfo[],
                     });
@@ -236,6 +240,7 @@ export class CurlControl extends AsyncService {
                 if (!stream) {
                     resolve({
                         statusCode: status,
+                        statusText,
                         data: undefined,
                         headers: headers as HeaderInfo[],
                     });
@@ -289,6 +294,7 @@ export class CurlControl extends AsyncService {
                 this.tempFileManager.bindPathTo(fancyFile, fpath);
                 resolve({
                     statusCode: status,
+                    statusText,
                     data: fancyFile,
                     headers: headers as HeaderInfo[],
                 });
@@ -343,6 +349,7 @@ export class CurlControl extends AsyncService {
 
             return {
                 statusCode: r.statusCode,
+                statusText: r.statusText,
                 data: r.data,
                 headers: fakeHeaderInfos.concat(r.headers),
             };
@@ -392,6 +399,7 @@ export class CurlControl extends AsyncService {
             sideLoadOpts,
             chain: curlResult.headers,
             status: curlResult.statusCode,
+            statusText: curlResult.statusText,
             headers: lastHeaders,
             contentType,
             contentDisposition,
