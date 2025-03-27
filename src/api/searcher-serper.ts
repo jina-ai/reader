@@ -22,6 +22,7 @@ import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { InsufficientBalanceError } from '../services/errors';
 import { SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperSearchResponse, SerperWebSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 import { toAsyncGenerator } from '../utils/misc';
+import { WechatSearchService } from '../services/wechat-search';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
@@ -49,6 +50,7 @@ export class SearcherHost extends RPCHost {
         protected serperSearchService: SerperSearchService,
         protected crawler: CrawlerHost,
         protected snapshotFormatter: SnapshotFormatter,
+        protected wechatSearchService: WechatSearchService,
     ) {
         super(...arguments);
     }
@@ -88,10 +90,10 @@ export class SearcherHost extends RPCHost {
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
         @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
         count: number,
-        @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
-        variant: 'web' | 'images' | 'news',
-        @Param('provider', { type: new Set(['google', 'bing', 'wechat']), default: 'google' })
-        searchEngine: 'google' | 'bing' | 'wechat',
+        @Param('type', { type: new Set(['web', 'images', 'news', 'wechat']), default: 'web' })
+        variant: 'web' | 'images' | 'news' | 'wechat',
+        @Param('provider', { type: new Set(['google', 'bing']), default: 'google' })
+        searchEngine: 'google' | 'bing',
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
@@ -171,9 +173,6 @@ export class SearcherHost extends RPCHost {
         }
 
         let chargeAmountScaler = 1;
-        if (searchEngine === 'wechat') {
-            this.threadLocal.set('wechat-preferred', true);
-        }
         if (searchEngine === 'bing') {
             this.threadLocal.set('bing-preferred', true);
             chargeAmountScaler = 3;
@@ -201,6 +200,10 @@ export class SearcherHost extends RPCHost {
             }
             case 'news': {
                 results = (r as SerperNewsSearchResponse).news;
+                break;
+            }
+            case 'wechat': {
+                results = (r as unknown as SerperWebSearchResponse['organic']);
                 break;
             }
             case 'web':
@@ -510,7 +513,7 @@ export class SearcherHost extends RPCHost {
         }
     }
 
-    async cachedSearch(query: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; }, noCache: boolean = false) {
+    async cachedSearch(query: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news' | 'wechat'; provider?: string; }, noCache: boolean = false) {
         const queryDigest = objHashMd5B64Of(query);
         Reflect.deleteProperty(query, 'provider');
         let cache;
@@ -544,6 +547,13 @@ export class SearcherHost extends RPCHost {
                 }
                 case 'news': {
                     r = await this.serperSearchService.newsSearch(query);
+                    break;
+                }
+                case 'wechat':{
+                    r = await this.wechatSearchService.search({
+                        kw: query.q,
+                        page: query.page,
+                    });
                     break;
                 }
                 case 'web':
