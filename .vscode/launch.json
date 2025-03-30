@@ -102,5 +102,26 @@
       "preLaunchTask": "Backend:build:watch",
       "killBehavior": "forceful"
     },
+    {
+      "name": "Debug Stand Alone SERP",
+      "request": "launch",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        "DEBUG_BROWSER": "true",
+        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/serp.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:build:watch",
+      "killBehavior": "forceful"
+    },
   ]
 }

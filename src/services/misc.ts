@@ -57,7 +57,11 @@ export class MiscService extends AsyncService {
         }
 
         const normalizedHostname = result.hostname.startsWith('[') ? result.hostname.slice(1, -1) : result.hostname;
+        let ips: string[] = [];
         const isIp = isIP(normalizedHostname);
+        if (isIp) {
+            ips.push(normalizedHostname);
+        }
         if (
             (result.hostname === 'localhost') ||
             (isIp && isIPInNonPublicRange(normalizedHostname))
@@ -88,12 +92,16 @@ export class MiscService extends AsyncService {
                             path: 'url'
                         });
                     }
+                    ips.push(x.address);
                 }
 
             }
         }
 
-        return result;
+        return {
+            url: result,
+            ips
+        };
     }
 
 }

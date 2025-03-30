@@ -4,6 +4,7 @@ import { CityResponse, Reader } from 'maxmind';
 import { AsyncService, AutoCastable, Prop, runOnce } from 'civkit';
 import { GlobalLogger } from './logger';
 import path from 'path';
+import { Threaded } from './threaded';
 
 export enum GEOIP_SUPPORTED_LANGUAGES {
     EN = 'en',
@@ -85,6 +86,7 @@ export class GeoIPService extends AsyncService {
     }
 
 
+    @Threaded()
     async lookupCity(ip: string, lang: GEOIP_SUPPORTED_LANGUAGES = GEOIP_SUPPORTED_LANGUAGES.EN) {
         await this._lazyload();
 
@@ -114,6 +116,13 @@ export class GeoIPService extends AsyncService {
             ] : undefined,
             timezone: r.location?.time_zone,
         });
+    }
+
+    @Threaded()
+    async lookupCities(ips: string[], lang: GEOIP_SUPPORTED_LANGUAGES = GEOIP_SUPPORTED_LANGUAGES.EN) {
+        const r = (await Promise.all(ips.map((ip) => this.lookupCity(ip, lang)))).filter(Boolean) as GeoIPCityResponse[];
+
+        return r;
     }
 
 }

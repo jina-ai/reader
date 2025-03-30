@@ -429,6 +429,8 @@ export class CrawlerOptions extends AutoCastable {
     })
     respondTiming?: RESPOND_TIMING;
 
+    _hintIps?: string[];
+
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
         const ctx = Reflect.get(input, RPC_CALL_ENVIRONMENT) as Context | undefined;
