@@ -2,7 +2,8 @@ import { singleton } from 'tsyringe';
 import { GlobalLogger } from './logger';
 import { AsyncService, DownstreamServiceFailureError, marshalErrorLike } from 'civkit';
 import { SecretExposer } from '../shared/services/secrets';
-import { WechatBlogQueryParams, WechatSearchHTTP } from '../shared/3rd-party/wechat-search';
+import { DajalaWechatSearchHttp, WechatSearchHTTP } from '../shared/3rd-party/wechat-search';
+import { SerperSearchQueryParams } from '../shared/3rd-party/serper-search';
 
 
 @singleton()
@@ -10,7 +11,7 @@ export class WechatSearchService extends AsyncService {
 
   logger = this.globalLogger.child({ service: this.constructor.name });
 
-  wechatSearchHTTP!: WechatSearchHTTP;
+  dajalaWechatSearchHttp!: DajalaWechatSearchHttp;
 
   constructor(
     protected globalLogger: GlobalLogger,
@@ -23,30 +24,22 @@ export class WechatSearchService extends AsyncService {
     await this.dependencyReady();
     this.emit('ready');
 
-    this.wechatSearchHTTP = new WechatSearchHTTP(this.secretExposer.WECHAT_SEARCH_API_KEY);
+    this.dajalaWechatSearchHttp = new DajalaWechatSearchHttp(this.secretExposer.WECHAT_SEARCH_API_KEY);
   }
 
-  async search(query: WechatBlogQueryParams) {
+  async search(query: SerperSearchQueryParams) {
     this.logger.info('searching for official account blogs', query);
 
+    const client: WechatSearchHTTP = this.dajalaWechatSearchHttp;
     try {
       // get wechat blog search results and convert format
-      const r = await this.wechatSearchHTTP.blogSearch(query);
+      const r = await client.blogSearch(client.transformSerpQuery(query));
 
       if (r.parsed.code > 100 && r.parsed.code < 200) {
         throw new DownstreamServiceFailureError({ message: `Search(wechat) failed` });
       }
 
-      return r.parsed.data?.map((page: any) => {
-        return {
-          title: page.title,
-          link: page.url,
-          content: page.content,
-          snippet: '',
-          publishedTime: page.publish_time,
-          date: page.publish_time_str,
-        };
-      });
+      return client.toSerpResponse(r.parsed);
 
     } catch (err: any) {
       this.logger.error(`Wechat search failed: ${err?.message}`, { err: marshalErrorLike(err) });

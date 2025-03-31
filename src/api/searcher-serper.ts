@@ -550,10 +550,7 @@ export class SearcherHost extends RPCHost {
                     break;
                 }
                 case 'wechat':{
-                    r = await this.wechatSearchService.search({
-                        kw: query.q,
-                        page: query.page,
-                    });
+                    r = await this.wechatSearchService.search(query);
                     break;
                 }
                 case 'web':
