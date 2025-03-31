@@ -173,7 +173,7 @@ async function getWebSearchResults() {
     }
 
     // @ts-ignore
-    await window.waitForSelector('div[data-async-context^="query"]');
+    await Promise.race([window.waitForSelector('div[data-async-context^="query"]'), window.waitForSelector('#botstuff .mnr-c')]);
 
     const wrapper1 = document.querySelector('div[data-async-context^="query"]');
 
@@ -267,7 +267,7 @@ async function getNewsSearchResults() {
     }
 
     // @ts-ignore
-    await window.waitForSelector('div[data-async-context^="query"]');
+    await Promise.race([window.waitForSelector('div[data-async-context^="query"]'), window.waitForSelector('#botstuff .mnr-c')]);
 
     const wrapper1 = document.querySelector('div[data-async-context^="query"]');
 

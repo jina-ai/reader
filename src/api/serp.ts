@@ -285,7 +285,7 @@ export class SerpHost extends RPCHost {
                     }
                 } catch (err) {
                     lastError = err;
-                    this.logger.warn(`Failed to do ${variant} search using ${client}`, { err });
+                    this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err });
                 }
             }
 
