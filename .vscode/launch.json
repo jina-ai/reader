@@ -110,7 +110,7 @@
       ],
       "env": {
         "GCLOUD_PROJECT": "reader-6b7dc",
-        "DEBUG_BROWSER": "true",
+        "PREFERRED_PROXY_COUNTRY": "us",
         "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
       },
       "cwd": "${workspaceFolder}",

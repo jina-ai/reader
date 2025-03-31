@@ -23,7 +23,6 @@ import { BlackHoleDetector } from '../blackhole-detector';
 export interface ScrappingOptions {
     proxyUrl?: string;
     cookies?: Cookie[];
-    waitForSelector?: string | string[];
     overrideUserAgent?: string;
     timeoutMs?: number;
     locale?: string;
@@ -31,6 +30,7 @@ export interface ScrappingOptions {
     extraHeaders?: Record<string, string>;
     viewport?: Viewport;
     proxyResources?: boolean;
+    allocProxy?: string;
 
     sideLoad?: {
         impersonate: {
@@ -666,11 +666,8 @@ func().then((result) => {
                     });
                 }
 
-                this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err });
-                return new AssertionFailureError({
-                    message: `Failed to goto ${url}: ${err}`,
-                    cause: err,
-                });
+                this.logger.warn(`Page ${sn}: Browsing of ${url} aborted`, { err });
+                return undefined;
             }).then(async (r) => {
                 await delay(5000);
                 resultDeferred.reject(new TimeoutError(`Control function did not respond in time`));

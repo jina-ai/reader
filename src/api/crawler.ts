@@ -261,7 +261,7 @@ export class CrawlerHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
+            const rateLimitPolicy = auth.getRateLimits('CRAWL') || [
                 parseInt(user.metadata?.speed_level) >= 2 ?
                     RateLimitDesc.from({
                         occurrence: 2000,

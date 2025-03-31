@@ -5,8 +5,8 @@ export interface WebSearchEntry {
     date?: string;
     snippet?: string;
     imageUrl?: string;
-    subLinks?: {
-        url: string; text: string;
+    siteLinks?: {
+        link: string; title: string; snippet?: string;
     }[];
     variant?: 'web' | 'images' | 'news';
 }

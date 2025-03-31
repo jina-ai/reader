@@ -8,18 +8,23 @@ import { WebSearchEntry } from './compat';
 import { ScrappingOptions, SERPSpecializedPuppeteerControl } from './puppeteer';
 import { CurlControl } from '../curl';
 import { readFile } from 'fs/promises';
-import { parseJSONText } from 'civkit';
-
-
+import { ApplicationError } from 'civkit/civ-rpc';
+import { ServiceBadApproachError, ServiceBadAttemptError } from '../errors';
+import { parseJSONText } from 'civkit/vectorize';
+import { retryWith } from 'civkit/decorators';
+import { ProxyProvider } from '../../shared/services/proxy-provider';
 
 @singleton()
 export class GoogleSERP extends AsyncService {
+
+    googleDomain = process.env.OVERRIDE_GOOGLE_DOMAIN || 'www.google.com';
 
     constructor(
         protected globalLogger: GlobalLogger,
         protected puppeteerControl: SERPSpecializedPuppeteerControl,
         protected jsDomControl: JSDomControl,
         protected curlControl: CurlControl,
+        protected proxyProvider: ProxyProvider,
     ) {
         const filteredDeps = isMainThread ? arguments : _.without(arguments, puppeteerControl);
         super(...filteredDeps);
@@ -31,13 +36,83 @@ export class GoogleSERP extends AsyncService {
         this.emit('ready');
     }
 
-    async webSearch(query: { [k: string]: any; }, opts?: ScrappingOptions) {
-        const url = new URL(`https://www.google.com/search`);
-        for (const [k, v] of Object.entries(query)) {
+    retryDet = new WeakSet<ScrappingOptions>();
+    @retryWith((err) => {
+        if (err instanceof ServiceBadApproachError) {
+            return false;
+        }
+        if (err instanceof ServiceBadAttemptError) {
+            // Keep trying
+            return true;
+        }
+        if (err instanceof ApplicationError) {
+            // Quit with this error
+            return false;
+        }
+        return undefined;
+    }, 3)
+    async sideLoadWithAllocatedProxy(url: URL, opts?: ScrappingOptions) {
+        if (opts?.allocProxy === 'none') {
+            return this.curlControl.sideLoad(url, opts);
+        }
+
+        const proxy = await this.proxyProvider.alloc(
+            process.env.PREFERRED_PROXY_COUNTRY || 'auto'
+        );
+        if (opts) {
+            if (this.retryDet.has(opts) && proxy.protocol === 'socks5h:') {
+                proxy.protocol = 'socks5:';
+            }
+            this.retryDet.add(opts);
+        }
+        const r = await this.curlControl.sideLoad(url, {
+            ...opts,
+            proxyUrl: proxy.href,
+        });
+
+        if (r.status === 429) {
+            throw new ServiceBadAttemptError('Google returned a 429 error. This may happen due to various reasons, including rate limiting or other issues.');
+        }
+
+        if (opts && opts.allocProxy) {
+            opts.proxyUrl ??= proxy.href;
+        }
+
+        return { ...r, proxy };
+    }
+
+    digestQuery(query: { [k: string]: any; }) {
+        const url = new URL(`https://${this.googleDomain}/search`);
+        const clone = { ...query };
+        const num = clone.num || 10;
+        if (clone.page) {
+            const page = parseInt(clone.page);
+            delete clone.page;
+            clone.start = (page - 1) * num;
+            if (clone.start === 0) {
+                delete clone.start;
+            }
+        }
+        if (clone.location) {
+            delete clone.location;
+        }
+
+        for (const [k, v] of Object.entries(clone)) {
             if (v === undefined || v === null) {
                 continue;
             }
             url.searchParams.set(k, `${v}`);
+        }
+
+        return url;
+    }
+
+    async webSearch(query: { [k: string]: any; }, opts?: ScrappingOptions) {
+        const url = this.digestQuery(query);
+
+        const sideLoaded = await this.sideLoadWithAllocatedProxy(url, opts);
+        if (opts && sideLoaded.sideLoadOpts) {
+            opts.sideLoad = sideLoaded.sideLoadOpts;
         }
 
         const snapshot = await this.puppeteerControl.controlledScrap(url, getWebSearchResults, opts);
@@ -46,14 +121,14 @@ export class GoogleSERP extends AsyncService {
     }
 
     async newsSearch(query: { [k: string]: any; }, opts?: ScrappingOptions) {
-        const url = new URL(`https://www.google.com/search`);
-        for (const [k, v] of Object.entries(query)) {
-            if (v === undefined || v === null) {
-                continue;
-            }
-            url.searchParams.set(k, `${v}`);
-        }
+        const url = this.digestQuery(query);
+
         url.searchParams.set('tbm', 'nws');
+
+        const sideLoaded = await this.sideLoadWithAllocatedProxy(url, opts);
+        if (opts && sideLoaded.sideLoadOpts) {
+            opts.sideLoad = sideLoaded.sideLoadOpts;
+        }
 
         const snapshot = await this.puppeteerControl.controlledScrap(url, getNewsSearchResults, opts);
 
@@ -61,20 +136,19 @@ export class GoogleSERP extends AsyncService {
     }
 
     async imageSearch(query: { [k: string]: any; }, opts?: ScrappingOptions) {
-        const url = new URL(`https://www.google.com/search`);
-        for (const [k, v] of Object.entries(query)) {
-            if (v === undefined || v === null) {
-                continue;
-            }
-            url.searchParams.set(k, `${v}`);
-        }
+        const url = this.digestQuery(query);
+
         url.searchParams.set('tbm', 'isch');
         url.searchParams.set('asearch', 'isch');
         url.searchParams.set('async', `_fmt:json,p:1,ijn:${query.start ? Math.floor(query.start / (query.num || 10)) : 0}`);
 
-        const r = await this.curlControl.urlToFile(url, opts);
+        const sideLoaded = await this.sideLoadWithAllocatedProxy(url, opts);
 
-        const jsonTxt = (await readFile((await r.data?.filePath!))).toString();
+        if (sideLoaded.status !== 200 || !sideLoaded.file) {
+            throw new ServiceBadAttemptError('Google returned an error page. This may happen due to various reasons, including rate limiting or other issues.');
+        }
+
+        const jsonTxt = (await readFile((await sideLoaded.file.filePath))).toString();
         const rJSON = parseJSONText(jsonTxt.slice(jsonTxt.indexOf('{"ischj":')));
 
         return _.get(rJSON, 'ischj.metadata').map((x: any) => {
@@ -115,7 +189,7 @@ async function getWebSearchResults() {
 
     const candidates = Array.from(wrapper1.querySelectorAll('div[lang],div[data-surl]'));
 
-    return candidates.map((x) => {
+    return candidates.map((x, pos) => {
         const primaryLink = x.querySelector('a:not([href="#"])');
         if (!primaryLink) {
             return undefined;
@@ -123,18 +197,19 @@ async function getWebSearchResults() {
         const url = primaryLink.getAttribute('href');
 
         if (primaryLink.querySelector('div[role="heading"]')) {
-            const spans = primaryLink.querySelectorAll('span');
-            const title = spans[0]?.textContent;
-            const source = spans[1]?.textContent;
-            const date = spans[spans.length - 1].textContent;
+            // const spans = primaryLink.querySelectorAll('span');
+            // const title = spans[0]?.textContent;
+            // const source = spans[1]?.textContent;
+            // const date = spans[spans.length - 1].textContent;
 
-            return {
-                link: url,
-                title,
-                source,
-                date,
-                variant: 'video'
-            };
+            // return {
+            //     link: url,
+            //     title,
+            //     source,
+            //     date,
+            //     variant: 'video'
+            // };
+            return undefined;
         }
 
         const title = primaryLink.querySelector('h3')?.textContent;
@@ -142,24 +217,45 @@ async function getWebSearchResults() {
         const cite = primaryLink.querySelector('cite[role=text]')?.textContent;
         let date = cite?.split('·')[1]?.trim();
         const snippets = Array.from(x.querySelectorAll('div[data-sncf*="1"] span'));
-        const snippet = snippets[snippets.length - 1]?.textContent;
+        let snippet = snippets[snippets.length - 1]?.textContent;
+        if (!snippet) {
+            snippet = x.querySelector('div.IsZvec')?.textContent?.trim() || null;
+        }
         date ??= snippets[snippets.length - 2]?.textContent?.trim();
         const imageUrl = x.querySelector('div[data-sncf*="1"] img[src]:not(img[src^="data"])')?.getAttribute('src');
-        const subLinks = Array.from(x.querySelectorAll('div[data-sncf*="3"] a[href]')).map((l) => {
+        let siteLinks = Array.from(x.querySelectorAll('div[data-sncf*="3"] a[href]')).map((l) => {
             return {
-                url: l.getAttribute('href'),
-                text: l.textContent,
+                link: l.getAttribute('href'),
+                title: l.textContent,
             };
         });
+        const perhapsParent = x.parentElement?.closest('div[data-hveid]');
+        if (!siteLinks?.length && perhapsParent) {
+            const candidates = Array.from(perhapsParent.querySelectorAll('td h3'));
+            if (candidates.length) {
+                siteLinks = candidates.map((l) => {
+                    const link = l.querySelector('a');
+                    if (!link) {
+                        return undefined;
+                    }
+                    const snippet = l.nextElementSibling?.textContent;
+                    return {
+                        link: link.getAttribute('href'),
+                        title: link.textContent,
+                        snippet,
+                    };
+                }).filter(Boolean) as any;
+            }
+        }
 
         return {
             link: url,
             title,
             source,
             date,
-            snippet,
+            snippet: snippet ?? undefined,
             imageUrl: imageUrl?.startsWith('data:') ? undefined : imageUrl,
-            subLinks: subLinks.length ? subLinks : undefined,
+            siteLinks: siteLinks.length ? siteLinks : undefined,
             variant: 'web',
         };
     }).filter(Boolean) as WebSearchEntry[];
