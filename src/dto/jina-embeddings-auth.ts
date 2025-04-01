@@ -109,7 +109,7 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
         const jitter = Math.ceil(Math.random() * 30 * 1000);
 
         if (account && !ignoreCache) {
-            if (account && age < (180_000 - jitter)) {
+            if (account && (age < (180_000 - jitter))) {
                 this.user = account;
                 this.uid = this.user?.user_id;
 
