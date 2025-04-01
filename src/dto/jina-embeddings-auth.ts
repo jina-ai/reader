@@ -105,10 +105,11 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
         }
 
 
-        const age = account?.lastSyncedAt ? Date.now() - account.lastSyncedAt.getTime() : Infinity;
+        const age = account?.lastSyncedAt ? Date.now() - account.lastSyncedAt.valueOf() : Infinity;
+        const jitter = Math.ceil(Math.random() * 30 * 1000);
 
         if (account && !ignoreCache) {
-            if (account && age < 180_000) {
+            if (account && age < (180_000 - jitter)) {
                 this.user = account;
                 this.uid = this.user?.user_id;
 
