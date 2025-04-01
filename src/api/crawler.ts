@@ -258,7 +258,7 @@ export class CrawlerHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
-            const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
+            const rateLimitPolicy = auth.getRateLimits('CRAWL') || [
                 parseInt(user.metadata?.speed_level) >= 2 ?
                     RateLimitDesc.from({
                         occurrence: 2000,
@@ -271,7 +271,7 @@ export class CrawlerHost extends RPCHost {
             ];
 
             const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
-                rpcReflect, uid, [rpcReflect.name.toUpperCase()],
+                rpcReflect, uid, ['CRAWL'],
                 ...rateLimitPolicy
             );
 
@@ -287,7 +287,7 @@ export class CrawlerHost extends RPCHost {
                 }
             });
         } else if (ctx.ip) {
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.ip, [rpcReflect.name.toUpperCase()],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.ip, ['CRAWL'],
                 [
                     // 20 requests per minute
                     new Date(Date.now() - 60 * 1000), 20
