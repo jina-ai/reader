@@ -110,7 +110,8 @@
       ],
       "env": {
         "GCLOUD_PROJECT": "reader-6b7dc",
-        "PREFERRED_PROXY_COUNTRY": "us",
+        "PREFERRED_PROXY_COUNTRY": "hk",
+        "OVERRIDE_GOOGLE_DOMAIN": "www.google.com.hk",
         "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
       },
       "cwd": "${workspaceFolder}",

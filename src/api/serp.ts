@@ -12,7 +12,7 @@ import { AsyncLocalContext } from '../services/async-context';
 import { Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { InsufficientBalanceError } from '../services/errors';
+import { InsufficientBalanceError, RateLimitTriggeredError } from '../services/errors';
 import { WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 import { GoogleSERP } from '../services/serp/google';
 import { WebSearchEntry } from '../services/serp/compat';
@@ -21,8 +21,15 @@ import { ScrappingOptions } from '../services/serp/puppeteer';
 import { objHashMd5B64Of } from 'civkit/hash';
 import { SERPResult } from '../db/searched';
 import { SerperBingSearchService, SerperGoogleSearchService } from '../services/serp/serper';
+import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
+import { LRUCache } from 'lru-cache';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
+
+type RateLimitCache = {
+    blockedUntil?: Date;
+    user?: JinaEmbeddingsTokenAccount;
+};
 
 @singleton()
 export class SerpHost extends RPCHost {
@@ -35,6 +42,13 @@ export class SerpHost extends RPCHost {
     reasonableDelayMs = 15_000;
 
     targetResultCount = 5;
+
+    highFreqKeyCache = new LRUCache<string, RateLimitCache>({
+        max: 256,
+        ttl: 60 * 60 * 1000,
+        updateAgeOnGet: false,
+        updateAgeOnHas: false,
+    });
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -89,6 +103,14 @@ export class SerpHost extends RPCHost {
         @Param('location') location?: string,
         @Param('page') page?: number,
     ) {
+        const authToken = auth.bearerToken;
+        let highFreqKey: RateLimitCache | undefined;
+        if (authToken && this.highFreqKeyCache.has(authToken)) {
+            highFreqKey = this.highFreqKeyCache.get(authToken)!;
+            auth.user = highFreqKey.user;
+            auth.uid = highFreqKey.user?.user_id;
+        }
+
         const uid = await auth.solveUID();
         // Return content by default
         const user = await auth.assertUser();
@@ -96,10 +118,22 @@ export class SerpHost extends RPCHost {
             throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
         }
 
-        const rateLimitPolicy = auth.getRateLimits('SERP') || [
+        if (highFreqKey?.blockedUntil) {
+            const now = new Date();
+            const blockedTimeRemaining = (highFreqKey.blockedUntil.valueOf() - now.valueOf());
+            if (blockedTimeRemaining > 0) {
+                throw RateLimitTriggeredError.from({
+                    message: `Per UID rate limit exceeded (async)`,
+                    retryAfter: Math.ceil(blockedTimeRemaining / 1000),
+                });
+            }
+        }
+
+        const PREMIUM_KEY_LIMIT = 400;
+        const rateLimitPolicy = auth.getRateLimits('SEARCH') || [
             parseInt(user.metadata?.speed_level) >= 2 ?
                 RateLimitDesc.from({
-                    occurrence: 400,
+                    occurrence: PREMIUM_KEY_LIMIT,
                     periodSeconds: 60
                 }) :
                 RateLimitDesc.from({
@@ -108,16 +142,75 @@ export class SerpHost extends RPCHost {
                 })
         ];
 
-        const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
-            rpcReflect, uid!, [rpcReflect.name.toUpperCase()],
+        const apiRollPromise = this.rateLimitControl.simpleRPCUidBasedLimit(
+            rpcReflect, uid!, ['SEARCH'],
             ...rateLimitPolicy
         );
+
+        if (!highFreqKey) {
+            // Normal path
+            await apiRollPromise;
+
+            if (rateLimitPolicy.some(
+                (x) => {
+                    const rpm = x.occurrence / (x.periodSeconds / 60);
+                    if (rpm >= PREMIUM_KEY_LIMIT) {
+                        return true;
+                    }
+
+                    return false;
+                })
+            ) {
+                this.highFreqKeyCache.set(auth.bearerToken!, {
+                    user,
+                });
+            }
+        } else {
+            // High freq key path
+            apiRollPromise.then(
+                // Rate limit not triggered, make sure not blocking.
+                () => {
+                    delete highFreqKey.blockedUntil;
+                },
+                // Rate limit triggered
+                (err) => {
+                    if (!(err instanceof RateLimitTriggeredError)) {
+                        return;
+                    }
+                    const now = Date.now();
+                    let tgtDate;
+                    if (err.retryAfter) {
+                        tgtDate = new Date(now + err.retryAfter * 1000);
+                    } else if (err.retryAfterDate) {
+                        tgtDate = err.retryAfterDate;
+                    }
+
+                    if (tgtDate) {
+                        const dt = tgtDate.valueOf() - now;
+                        highFreqKey.blockedUntil = tgtDate;
+                        setTimeout(() => {
+                            if (highFreqKey.blockedUntil === tgtDate) {
+                                delete highFreqKey.blockedUntil;
+                            }
+                        }, dt).unref();
+                    }
+                }
+            ).finally(async () => {
+                // Always asynchronously update user(wallet);
+                const user = await auth.getBrief().catch(() => undefined);
+                if (user) {
+                    highFreqKey.user = user;
+                }
+            });
+        }
+
         let chargeAmount = 0;
-        rpcReflect.finally(() => {
+        rpcReflect.finally(async () => {
             if (chargeAmount) {
                 auth.reportUsage(chargeAmount, `reader-serp`).catch((err) => {
                     this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                 });
+                const apiRoll = await apiRollPromise;
                 apiRoll.chargeAmount = chargeAmount;
             }
         });

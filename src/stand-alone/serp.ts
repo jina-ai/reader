@@ -20,7 +20,7 @@ import finalizer, { Finalizer } from '../services/finalizer';
 import { SerpHost } from '../api/serp';
 
 @singleton()
-export class SearchStandAloneServer extends KoaServer {
+export class SERPStandAloneServer extends KoaServer {
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     httpAlternativeServer?: typeof this['httpServer'];
@@ -149,7 +149,7 @@ export class SearchStandAloneServer extends KoaServer {
     }
 
 }
-const instance = container.resolve(SearchStandAloneServer);
+const instance = container.resolve(SERPStandAloneServer);
 
 export default instance;
 
