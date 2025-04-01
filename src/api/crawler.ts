@@ -274,7 +274,7 @@ export class CrawlerHost extends RPCHost {
             ];
 
             const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
-                rpcReflect, uid, [rpcReflect.name.toUpperCase()],
+                rpcReflect, uid, ['CRAWL'],
                 ...rateLimitPolicy
             );
 
@@ -290,7 +290,7 @@ export class CrawlerHost extends RPCHost {
                 }
             });
         } else if (ctx.ip) {
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.ip, [rpcReflect.name.toUpperCase()],
+            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.ip, ['CRAWL'],
                 [
                     // 20 requests per minute
                     new Date(Date.now() - 60 * 1000), 20
