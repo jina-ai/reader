@@ -77,7 +77,7 @@ jobs:
           gcloud beta run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region us-central1 --async --min-instances 0 --deploy-health-check --use-http2
       - name: Deploy SERP with Tag
         run: |
-          gcloud beta run deploy search --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/serp.js --region us-central1 --async --min-instances 0 --deploy-health-check --use-http2
+          gcloud beta run deploy serp --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/serp.js --region us-central1 --async --min-instances 0 --deploy-health-check --use-http2
       - name: Deploy CRAWL-EU with Tag
         run: |
           gcloud beta run deploy crawl-eu --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/crawl.js --region europe-west1 --async --min-instances 0 --deploy-health-check --use-http2
