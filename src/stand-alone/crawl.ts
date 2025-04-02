@@ -18,6 +18,7 @@ import { ThreadedServiceRegistry } from '../services/threaded';
 import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
 import finalizer, { Finalizer } from '../services/finalizer';
+import koaCompress from 'koa-compress';
 
 @singleton()
 export class CrawlStandAloneServer extends KoaServer {
@@ -98,6 +99,23 @@ export class CrawlStandAloneServer extends KoaServer {
     }
 
     registerRoutes(): void {
+        this.koaApp.use(koaCompress({
+            filter(type) {
+                if (type.startsWith('text/')) {
+                    return true;
+                }
+
+                if (type.includes('application/json') || type.includes('+json') || type.includes('+xml')) {
+                    return true;
+                }
+
+                if (type.includes('application/x-ndjson')) {
+                    return true;
+                }
+
+                return false;
+            }
+        }));
         this.koaApp.use(this.makeAssetsServingController());
         this.koaApp.use(this.registry.makeShimController());
     }
