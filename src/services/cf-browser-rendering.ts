@@ -3,6 +3,8 @@ import { AsyncService } from 'civkit/async-service';
 import { SecretExposer } from '../shared/services/secrets';
 import { GlobalLogger } from './logger';
 import { CloudFlareHTTP } from '../shared/3rd-party/cloud-flare';
+import { HTTPServiceError } from 'civkit/http';
+import { ServiceNodeResourceDrainError } from './errors';
 
 @singleton()
 export class CFBrowserRendering extends AsyncService {
@@ -27,9 +29,22 @@ export class CFBrowserRendering extends AsyncService {
     }
 
     async fetchContent(url: string) {
-        const r = await this.client.fetchBrowserRenderedHTML({ url });
+        try {
+            const r = await this.client.fetchBrowserRenderedHTML({ url });
 
-        return r.parsed.result;
+            return r.parsed.result;
+        } catch (err) {
+            if (err instanceof HTTPServiceError) {
+                if (err.status === 429) {
+                    // Rate limit exceeded, return empty result
+                    this.logger.warn('Cloudflare browser rendering rate limit exceeded', { url });
+
+                    throw new ServiceNodeResourceDrainError(`Cloudflare browser rendering (our account) is at capacity, please try again later or switch to another engine.`,);
+                }
+            }
+
+            throw err;
+        }
     }
 
 }
