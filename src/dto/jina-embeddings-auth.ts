@@ -122,8 +122,19 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
 
         if (firestoreDegradation) {
             logger.debug(`Using remote UC cached user`);
-            const r = await this.jinaEmbeddingsDashboard.authorization(this.bearerToken);
-            const brief = r.data;
+            let r;
+            try {
+                r = await this.jinaEmbeddingsDashboard.authorization(this.bearerToken);
+            } catch (err: any) {
+                if (err?.status === 401) {
+                    throw new AuthenticationFailedError({
+                        message: 'Invalid API key, please get a new one from https://jina.ai'
+                    });
+                }
+                logger.warn(`Failed load remote cached user: ${err}`, { err });
+                throw new DownstreamServiceError(`Failed to authenticate: ${err}`);
+            }
+            const brief = r?.data;
             const draftAccount = JinaEmbeddingsTokenAccount.from({
                 ...account, ...brief, _id: this.bearerToken,
                 lastSyncedAt: new Date()
