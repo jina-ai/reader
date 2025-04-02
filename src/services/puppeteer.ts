@@ -562,7 +562,8 @@ export class PuppeteerControl extends AsyncService {
             headless: !Boolean(process.env.DEBUG_BROWSER),
             executablePath: process.env.OVERRIDE_CHROME_EXECUTABLE_PATH,
             args: [
-                '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled'
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled'
             ]
         }).catch((err: any) => {
             this.logger.error(`Unknown firebase issue, just die fast.`, { err });
@@ -1618,11 +1619,7 @@ export class PuppeteerControl extends AsyncService {
                     }
                 }
                 try {
-                    const pSubFrameSnapshots = this.snapshotChildFrames(page);
                     snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
-                    if (snapshot) {
-                        snapshot.childFrames = await pSubFrameSnapshots;
-                    }
                 } catch (err: any) {
                     this.logger.warn(`Page ${sn}: Failed to finalize ${url}`, { err });
                     if (stuff instanceof Error) {

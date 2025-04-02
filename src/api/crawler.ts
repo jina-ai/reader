@@ -48,6 +48,7 @@ import { RobotsTxtService } from '../services/robots-text';
 import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
 import { HTTPServiceError } from 'civkit';
+import { GeoIPService } from '../services/geoip';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -58,6 +59,7 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     engine?: string;
     allocProxy?: string;
     private?: boolean;
+    countryHint?: string;
 }
 
 const indexProto = {
@@ -94,6 +96,7 @@ export class CrawlerHost extends RPCHost {
         protected threadLocal: AsyncLocalContext,
         protected robotsTxtService: RobotsTxtService,
         protected tempFileManager: TempFileManager,
+        protected geoIpService: GeoIPService,
         protected miscService: MiscService,
     ) {
         super(...arguments);
@@ -511,15 +514,16 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        const result = await this.miscService.assertNormalizedUrl(url);
-        if (this.puppeteerControl.circuitBreakerHosts.has(result.hostname.toLowerCase())) {
+        const { url: safeURL, ips } = await this.miscService.assertNormalizedUrl(url);
+        if (this.puppeteerControl.circuitBreakerHosts.has(safeURL.hostname.toLowerCase())) {
             throw new SecurityCompromiseError({
-                message: `Circular hostname: ${result.protocol}`,
+                message: `Circular hostname: ${safeURL.protocol}`,
                 path: 'url'
             });
         }
+        crawlerOptions._hintIps = ips;
 
-        return result;
+        return safeURL;
     }
 
     getUrlDigest(urlToCrawl: URL) {
@@ -886,7 +890,11 @@ export class CrawlerHost extends RPCHost {
                 }
             }
         } else if (crawlOpts?.allocProxy && crawlOpts.allocProxy !== 'none' && !crawlOpts.proxyUrl) {
-            crawlOpts.proxyUrl = (await this.proxyProvider.alloc(crawlOpts.allocProxy)).href;
+            const proxyUrl = await this.proxyProvider.alloc(this.figureOutBestProxyCountry(crawlOpts));
+            if (proxyUrl.protocol === 'socks5h:') {
+                proxyUrl.protocol = 'socks5:';
+            }
+            crawlOpts.proxyUrl = proxyUrl.href;
         }
 
         try {
@@ -1030,6 +1038,7 @@ export class CrawlerHost extends RPCHost {
             proxyResources: (opts.proxyUrl || opts.proxy?.endsWith('+')) ? true : false,
             private: Boolean(opts.doNotTrack),
         };
+
         if (crawlOpts.targetSelector?.length) {
             if (typeof crawlOpts.targetSelector === 'string') {
                 crawlOpts.targetSelector = [crawlOpts.targetSelector];
@@ -1044,6 +1053,18 @@ export class CrawlerHost extends RPCHost {
                     }
                 }
             }
+        }
+
+        if (opts._hintIps?.length) {
+            const hints = await this.geoIpService.lookupCities(opts._hintIps);
+            const board: Record<string, number> = {};
+            for (const x of hints) {
+                if (x.country?.code) {
+                    board[x.country.code] = (board[x.country.code] || 0) + 1;
+                }
+            }
+            const hintCountry = _.maxBy(Array.from(Object.entries(board)), 1)?.[0];
+            crawlOpts.countryHint = hintCountry?.toLowerCase();
         }
 
         if (opts.locale) {
@@ -1221,6 +1242,7 @@ export class CrawlerHost extends RPCHost {
         };
     }
 
+    retryDet = new WeakSet<ExtraScrappingOptions>();
     @retryWith((err) => {
         if (err instanceof ServiceBadApproachError) {
             return false;
@@ -1239,7 +1261,14 @@ export class CrawlerHost extends RPCHost {
         if (opts?.allocProxy === 'none') {
             return this.curlControl.sideLoad(url, opts);
         }
-        const proxy = await this.proxyProvider.alloc(opts?.allocProxy);
+
+        const proxy = await this.proxyProvider.alloc(this.figureOutBestProxyCountry(opts));
+        if (opts) {
+            if (this.retryDet.has(opts) && proxy.protocol === 'socks5h:') {
+                proxy.protocol = 'socks5:';
+            }
+            this.retryDet.add(opts);
+        }
         const r = await this.curlControl.sideLoad(url, {
             ...opts,
             proxyUrl: proxy.href,
@@ -1250,6 +1279,34 @@ export class CrawlerHost extends RPCHost {
         }
 
         return { ...r, proxy };
+    }
+
+    protected figureOutBestProxyCountry(opts?: ExtraScrappingOptions) {
+        if (!opts) {
+            return 'auto';
+        }
+
+        let draft;
+
+        if (opts.allocProxy) {
+            if (this.proxyProvider.supports(opts.allocProxy)) {
+                draft = opts.allocProxy;
+            } else if (opts.allocProxy === 'none') {
+                return 'none';
+            }
+        }
+
+        if (opts.countryHint) {
+            if (this.proxyProvider.supports(opts.countryHint)) {
+                draft ??= opts.countryHint;
+            } else if (opts.countryHint === 'cn') {
+                draft ??= 'hk';
+            }
+        }
+
+        draft ??= opts.allocProxy || 'auto';
+
+        return draft;
     }
 
     knownUrlThatSideLoadingWouldCrashTheBrowser(url: URL) {
