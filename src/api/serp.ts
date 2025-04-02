@@ -288,9 +288,10 @@ export class SerpHost extends RPCHost {
 
         if (fallback && !results.length && (!page || page === 1)) {
             let tryTimes = 1;
+            const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
             const terms = q.split(/\s+/g).filter((x) => !!x);
             while (terms.length > 1) {
-                terms.pop(); // reduce the query by one term at a time
+                containsRTL ? terms.shift() : terms.pop(); // reduce the query by one term at a time
                 realQuery = terms.join(' ').trim();
                 if (!realQuery) {
                     break;
@@ -314,9 +315,6 @@ export class SerpHost extends RPCHost {
 
         if (!results?.length) {
             results = [];
-            if (!fallback) {
-                chargeAmountScaler = 0;
-            }
         }
 
         const finalResults = results.map((x: any) => this.mapToFinalResults(x));
