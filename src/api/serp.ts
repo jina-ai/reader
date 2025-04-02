@@ -149,7 +149,7 @@ export class SerpHost extends RPCHost {
         const uid = await auth.solveUID();
         if (!q) {
             if (ctx.path === '/') {
-                const indexObject = this.getIndex(ctx, auth);
+                const indexObject = await this.getIndex(ctx, auth);
                 if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
                     return indexObject;
                 }
