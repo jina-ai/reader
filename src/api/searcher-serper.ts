@@ -112,6 +112,7 @@ export class SearcherHost extends RPCHost {
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
+        @Param('fallback', { type: Boolean, default: false }) fallback?: boolean,
         @Param('q') q?: string,
     ) {
         // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
@@ -262,16 +263,19 @@ export class SearcherHost extends RPCHost {
             fetchNum = count > 10 ? 30 : 20;
         }
 
+        let fallbackQuery: string | undefined;
         let chargeAmountScaler = 1;
         if (searchEngine === 'bing') {
             this.threadLocal.set('bing-preferred', true);
             chargeAmountScaler = 3;
         }
+
         if (variant !== 'web') {
             chargeAmountScaler = 5;
         }
 
-        const r = await this.cachedSearch({
+        // Search with fallback logic if enabled
+        const searchParams = {
             variant,
             provider: searchEngine,
             q: searchQuery,
@@ -280,7 +284,14 @@ export class SearcherHost extends RPCHost {
             hl,
             location,
             page,
-        }, crawlerOptions.noCache);
+        };
+
+        const { response: r, query: successQuery, tryTimes } = await this.searchWithFallback(
+            searchParams, fallback, crawlerOptions.noCache
+        );
+        chargeAmountScaler *= tryTimes;
+
+        fallbackQuery = successQuery !== searchQuery ? successQuery : undefined;
 
         let results;
         switch (variant) {
@@ -312,7 +323,11 @@ export class SearcherHost extends RPCHost {
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const trimmedResults = results.filter((x) => Boolean(x.link)).slice(0, targetResultCount).map((x) => this.mapToFinalResults(x));
         trimmedResults.toString = function () {
-            return this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
+            let r =  this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
+            if (fallbackQuery) {
+                r = `Fallback query: ${fallbackQuery}\n\n${r}`;
+            }
+            return r;
         };
         if (!crawlerOptions.respondWith.includes('no-content') &&
             ['html', 'text', 'shot', 'markdown', 'content'].some((x) => crawlerOptions.respondWith.includes(x))
@@ -349,8 +364,16 @@ export class SearcherHost extends RPCHost {
                         break;
                     }
 
-                    chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler);
+                    chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler, fallbackQuery);
                     lastScrapped = scrapped;
+
+                    if (fallbackQuery) {
+                        sseStream.write({
+                            event: 'meta',
+                            data: { fallback: fallbackQuery },
+                        });
+                    }
+
                     sseStream.write({
                         event: 'data',
                         data: scrapped,
@@ -383,7 +406,8 @@ export class SearcherHost extends RPCHost {
                         return;
                     }
                     await assigningOfGeneralMixins;
-                    chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
+                    chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
+
                     rpcReflect.return(lastScrapped);
                     earlyReturn = true;
                 }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
@@ -404,7 +428,7 @@ export class SearcherHost extends RPCHost {
                     clearTimeout(earlyReturnTimer);
                 }
                 await assigningOfGeneralMixins;
-                chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler);
+                chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler, fallbackQuery);
 
                 return scrapped;
             }
@@ -419,7 +443,7 @@ export class SearcherHost extends RPCHost {
 
             if (!earlyReturn) {
                 await assigningOfGeneralMixins;
-                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
+                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
             }
 
             return lastScrapped;
@@ -435,7 +459,8 @@ export class SearcherHost extends RPCHost {
                     return;
                 }
                 await assigningOfGeneralMixins;
-                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
+                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
+
                 rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
                 earlyReturn = true;
             }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
@@ -458,7 +483,7 @@ export class SearcherHost extends RPCHost {
                 clearTimeout(earlyReturnTimer);
             }
             await assigningOfGeneralMixins;
-            chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler);
+            chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler, fallbackQuery);
 
             return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
         }
@@ -473,10 +498,68 @@ export class SearcherHost extends RPCHost {
 
         if (!earlyReturn) {
             await assigningOfGeneralMixins;
-            chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
+            chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
         }
 
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
+    }
+
+    /**
+     * Search with fallback to progressively shorter queries if no results found
+     * @param params Search parameters
+     * @param useFallback Whether to use the fallback mechanism
+     * @param noCache Whether to bypass cache
+     * @returns Search response and the successful query
+     */
+    async searchWithFallback(
+        params: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; },
+        useFallback: boolean = false,
+        noCache: boolean = false
+    ): Promise<{ response: SerperSearchResponse; query: string; tryTimes: number }> {
+        // Try original query first
+        const originalQuery = params.q;
+        const response = await this.cachedSearch(params, noCache);
+
+        // Extract results based on variant
+        let results: any[] = [];
+        let tryTimes = 1;
+        switch (params.variant) {
+            case 'images': results = (response as SerperImageSearchResponse).images; break;
+            case 'news': results = (response as SerperNewsSearchResponse).news; break;
+            case 'web': default: results = (response as SerperWebSearchResponse).organic; break;
+        }
+
+        // Return early if we got results or fallback is disabled
+        if (results.length > 0 || !useFallback) {
+            return { response, query: originalQuery, tryTimes };
+        }
+
+        // Try with progressively shorter queries
+        const terms = originalQuery.trim().split(/\s+/);
+
+        this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
+
+        while (terms.length > 1) {
+            terms.pop(); // Remove last term
+            const shortenedQuery = terms.join(' ');
+
+            const fallbackParams = { ...params, q: shortenedQuery };
+            const fallbackResponse = await this.cachedSearch(fallbackParams, noCache);
+
+            let fallbackResults: any[] = [];
+            switch (params.variant) {
+                case 'images': fallbackResults = (fallbackResponse as SerperImageSearchResponse).images; break;
+                case 'news': fallbackResults = (fallbackResponse as SerperNewsSearchResponse).news; break;
+                case 'web': default: fallbackResults = (fallbackResponse as SerperWebSearchResponse).organic; break;
+            }
+
+            tryTimes++;
+            if (fallbackResults.length > 0) {
+                return { response: fallbackResponse, query: shortenedQuery, tryTimes };
+            }
+        }
+
+        return { response, query: originalQuery, tryTimes };
     }
 
     async *fetchSearchResults(
@@ -540,7 +623,7 @@ export class SearcherHost extends RPCHost {
         return resultArray;
     }
 
-    assignChargeAmount(formatted: FormattedPage[], num: number, scaler: number) {
+    assignChargeAmount(formatted: FormattedPage[], num: number, scaler: number, fallbackQuery?: string) {
         let contentCharge = 0;
         for (const x of formatted) {
             const itemAmount = this.crawler.assignChargeAmount(x) || 0;
@@ -562,8 +645,12 @@ export class SearcherHost extends RPCHost {
             }
         }
 
+        const metadata: Record<string, any> = { usage: { tokens: final } };
+        if (fallbackQuery) {
+            metadata.fallback = fallbackQuery;
+        }
 
-        assignMeta(formatted, { usage: { tokens: final } });
+        assignMeta(formatted,  metadata);
 
         return final;
     }
