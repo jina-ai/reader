@@ -285,7 +285,9 @@ export class SerpHost extends RPCHost {
             page,
         }, crawlerOptions);
 
+
         if (fallback && !results.length && (!page || page === 1)) {
+            let tryTimes = 1;
             const terms = q.split(/\s+/g).filter((x) => !!x);
             while (terms.length > 1) {
                 terms.pop(); // reduce the query by one term at a time
@@ -302,11 +304,19 @@ export class SerpHost extends RPCHost {
                     hl,
                     location,
                 }, crawlerOptions);
+                tryTimes += 1;
+                if (results?.length) {
+                    break;
+                }
             }
+            chargeAmountScaler *= tryTimes;
         }
 
         if (!results?.length) {
             results = [];
+            if (!fallback) {
+                chargeAmountScaler = 0;
+            }
         }
 
         const finalResults = results.map((x: any) => this.mapToFinalResults(x));
