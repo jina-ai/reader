@@ -1,6 +1,6 @@
 import { singleton } from 'tsyringe';
 import {
-    RPCHost, RPCReflection, AssertionFailureError, assignMeta, RawString,
+    RPCHost, RPCReflection, assignMeta, RawString,
     ParamValidationError,
     assignTransferProtocolMeta,
 } from 'civkit/civ-rpc';
@@ -136,6 +136,7 @@ export class SerpHost extends RPCHost {
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
+        @Param('fallback') fallback?: boolean,
     ) {
         const authToken = auth.bearerToken;
         let highFreqKey: RateLimitCache | undefined;
@@ -273,7 +274,8 @@ export class SerpHost extends RPCHost {
             chargeAmountScaler = 5;
         }
 
-        const results = await this.cachedSearch(variant, {
+        let realQuery = q;
+        let results = await this.cachedSearch(variant, {
             provider: searchEngine,
             q,
             num,
@@ -283,8 +285,28 @@ export class SerpHost extends RPCHost {
             page,
         }, crawlerOptions);
 
+        if (fallback && !results.length && (!page || page === 1)) {
+            const terms = q.split(/\s+/g).filter((x) => !!x);
+            while (terms.length > 1) {
+                terms.pop(); // reduce the query by one term at a time
+                realQuery = terms.join(' ').trim();
+                if (!realQuery) {
+                    break;
+                }
+                this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
+                results = await this.cachedSearch(variant, {
+                    provider: searchEngine,
+                    q: realQuery,
+                    num,
+                    gl,
+                    hl,
+                    location,
+                }, crawlerOptions);
+            }
+        }
+
         if (!results?.length) {
-            throw new AssertionFailureError(`No search results available for query ${q}`);
+            results = [];
         }
 
         const finalResults = results.map((x: any) => this.mapToFinalResults(x));
@@ -292,6 +314,10 @@ export class SerpHost extends RPCHost {
         await Promise.all(finalResults.map((x: any) => this.assignGeneralMixin(x)));
 
         this.assignChargeAmount(finalResults, chargeAmountScaler);
+        assignMeta(finalResults, {
+            query: realQuery,
+            fallback: realQuery === q ? undefined : realQuery,
+        });
 
         return finalResults;
     }
