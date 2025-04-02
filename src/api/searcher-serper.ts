@@ -112,7 +112,7 @@ export class SearcherHost extends RPCHost {
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
-        @Param('fallback', { type: Boolean, default: false }) fallback?: boolean,
+        @Param('fallback', { type: Boolean, default: true }) fallback?: boolean,
         @Param('q') q?: string,
     ) {
         // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
