@@ -84,6 +84,6 @@ jobs:
       - name: Deploy SEARCH-EU with Tag
         run: |
           gcloud beta run deploy search-eu --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/search.js --region europe-west1 --async --min-instances 0 --deploy-health-check --use-http2
-      - name: Deploy SERP-HK with Tag
+      - name: Deploy SERP-JP with Tag
         run: |
           gcloud beta run deploy serp-jp --image us-docker.pkg.dev/reader-6b7dc/jina-reader/reader@${{steps.container.outputs.imageid}} --tag ${{ env.RELEASE_VERSION }} --command '' --args build/stand-alone/serp.js --region asia-east1 --async --min-instances 0 --deploy-health-check --use-http2
