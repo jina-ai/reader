@@ -36,6 +36,7 @@ import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import {
     BudgetExceededError, InsufficientBalanceError,
+    RateLimitTriggeredError,
     SecurityCompromiseError, ServiceBadApproachError, ServiceBadAttemptError,
     ServiceNodeResourceDrainError
 } from '../services/errors';
@@ -48,6 +49,8 @@ import { RobotsTxtService } from '../services/robots-text';
 import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
 import { HTTPServiceError } from 'civkit';
+import { LRUCache } from 'lru-cache';
+import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -70,6 +73,11 @@ const indexProto = {
     }
 };
 
+type RateLimitCache = {
+    blockedUntil?: Date;
+    user?: JinaEmbeddingsTokenAccount;
+};
+
 @singleton()
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
@@ -79,6 +87,13 @@ export class CrawlerHost extends RPCHost {
     urlValidMs = 1000 * 3600 * 4;
     abuseBlockMs = 1000 * 3600;
     domainProfileRetentionMs = 1000 * 3600 * 24 * 30;
+
+    highFreqKeyCache = new LRUCache<string, RateLimitCache>({
+        max: 256,
+        ttl: 60 * 60 * 1000,
+        updateAgeOnGet: false,
+        updateAgeOnHas: false,
+    });
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -237,6 +252,15 @@ export class CrawlerHost extends RPCHost {
         crawlerOptionsHeaderOnly: CrawlerOptionsHeaderOnly,
         crawlerOptionsParamsAllowed: CrawlerOptions,
     ) {
+        const authToken = auth.bearerToken;
+
+        let highFreqKey: RateLimitCache | undefined;
+        if (authToken && this.highFreqKeyCache.has(authToken)) {
+            highFreqKey = this.highFreqKeyCache.get(authToken)!;
+            auth.user = highFreqKey.user;
+            auth.uid = highFreqKey.user?.user_id;
+        }
+
         const uid = await auth.solveUID();
         let chargeAmount = 0;
         const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
@@ -258,6 +282,17 @@ export class CrawlerHost extends RPCHost {
                 throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
             }
 
+            if (highFreqKey?.blockedUntil) {
+                const now = new Date();
+                const blockedTimeRemaining = (highFreqKey.blockedUntil.valueOf() - now.valueOf());
+                if (blockedTimeRemaining > 0) {
+                    throw RateLimitTriggeredError.from({
+                        message: `Per UID rate limit exceeded (async)`,
+                        retryAfter: Math.ceil(blockedTimeRemaining / 1000),
+                    });
+                }
+            }
+
             const rateLimitPolicy = auth.getRateLimits('CRAWL') || [
                 parseInt(user.metadata?.speed_level) >= 2 ?
                     RateLimitDesc.from({
@@ -270,12 +305,70 @@ export class CrawlerHost extends RPCHost {
                     })
             ];
 
-            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
+            const apiRollPromise = this.rateLimitControl.simpleRPCUidBasedLimit(
                 rpcReflect, uid, ['CRAWL'],
                 ...rateLimitPolicy
             );
 
-            rpcReflect.finally(() => {
+            if (!highFreqKey) {
+                // Normal path
+                await apiRollPromise;
+
+                if (rateLimitPolicy.some(
+                    (x) => {
+                        const rpm = x.occurrence / (x.periodSeconds / 60);
+                        if (rpm >= 400) {
+                            return true;
+                        }
+
+                        return false;
+                    })
+                ) {
+                    this.highFreqKeyCache.set(auth.bearerToken!, {
+                        user,
+                    });
+                }
+
+            } else {
+                // High freq key path
+                apiRollPromise.then(
+                    // Rate limit not triggered, make sure not blocking.
+                    () => {
+                        delete highFreqKey.blockedUntil;
+                    },
+                    // Rate limit triggered
+                    (err) => {
+                        if (!(err instanceof RateLimitTriggeredError)) {
+                            return;
+                        }
+                        const now = Date.now();
+                        let tgtDate;
+                        if (err.retryAfter) {
+                            tgtDate = new Date(now + err.retryAfter * 1000);
+                        } else if (err.retryAfterDate) {
+                            tgtDate = err.retryAfterDate;
+                        }
+
+                        if (tgtDate) {
+                            const dt = tgtDate.valueOf() - now;
+                            highFreqKey.blockedUntil = tgtDate;
+                            setTimeout(() => {
+                                if (highFreqKey.blockedUntil === tgtDate) {
+                                    delete highFreqKey.blockedUntil;
+                                }
+                            }, dt).unref();
+                        }
+                    }
+                ).finally(async () => {
+                    // Always asynchronously update user(wallet);
+                    const user = await auth.getBrief().catch(() => undefined);
+                    if (user) {
+                        highFreqKey.user = user;
+                    }
+                });
+            }
+
+            rpcReflect.finally(async () => {
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                     return;
                 }
@@ -283,6 +376,12 @@ export class CrawlerHost extends RPCHost {
                     auth.reportUsage(chargeAmount, `reader-crawl`).catch((err) => {
                         this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                     });
+                    const apiRoll = await apiRollPromise.catch((e) => {
+                        return undefined;
+                    });
+                    if (!apiRoll) {
+                        return;
+                    }
                     apiRoll.chargeAmount = chargeAmount;
                 }
             });
