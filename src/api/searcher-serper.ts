@@ -286,9 +286,10 @@ export class SearcherHost extends RPCHost {
             page,
         };
 
-        const { response: r, query: successQuery } = await this.searchWithFallback(
+        const { response: r, query: successQuery, tryTimes } = await this.searchWithFallback(
             searchParams, fallback, crawlerOptions.noCache
         );
+        chargeAmountScaler *= tryTimes;
 
         fallbackQuery = successQuery !== searchQuery ? successQuery : undefined;
 
@@ -514,13 +515,14 @@ export class SearcherHost extends RPCHost {
         params: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; },
         useFallback: boolean = false,
         noCache: boolean = false
-    ): Promise<{ response: SerperSearchResponse; query: string }> {
+    ): Promise<{ response: SerperSearchResponse; query: string; tryTimes: number }> {
         // Try original query first
         const originalQuery = params.q;
         const response = await this.cachedSearch(params, noCache);
 
         // Extract results based on variant
         let results: any[] = [];
+        let tryTimes = 1;
         switch (params.variant) {
             case 'images': results = (response as SerperImageSearchResponse).images; break;
             case 'news': results = (response as SerperNewsSearchResponse).news; break;
@@ -529,7 +531,7 @@ export class SearcherHost extends RPCHost {
 
         // Return early if we got results or fallback is disabled
         if (results.length > 0 || !useFallback) {
-            return { response, query: originalQuery };
+            return { response, query: originalQuery, tryTimes };
         }
 
         // Try with progressively shorter queries
@@ -551,12 +553,13 @@ export class SearcherHost extends RPCHost {
                 case 'web': default: fallbackResults = (fallbackResponse as SerperWebSearchResponse).organic; break;
             }
 
+            tryTimes++;
             if (fallbackResults.length > 0) {
-                return { response: fallbackResponse, query: shortenedQuery };
+                return { response: fallbackResponse, query: shortenedQuery, tryTimes };
             }
         }
 
-        return { response, query: originalQuery };
+        return { response, query: originalQuery, tryTimes };
     }
 
     async *fetchSearchResults(
