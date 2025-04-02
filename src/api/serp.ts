@@ -1,6 +1,8 @@
 import { singleton } from 'tsyringe';
 import {
     RPCHost, RPCReflection, AssertionFailureError, assignMeta, RawString,
+    ParamValidationError,
+    assignTransferProtocolMeta,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import _ from 'lodash';
@@ -9,7 +11,7 @@ import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 
 import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
-import { Method, Param, RPCReflect } from '../services/registry';
+import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { InsufficientBalanceError, RateLimitTriggeredError } from '../services/errors';
@@ -31,6 +33,16 @@ type RateLimitCache = {
     user?: JinaEmbeddingsTokenAccount;
 };
 
+const indexProto = {
+    toString: function (): string {
+        return _(this)
+            .toPairs()
+            .map(([k, v]) => k ? `[${_.upperFirst(_.lowerCase(k))}] ${v}` : '')
+            .value()
+            .join('\n') + '\n';
+    }
+};
+
 @singleton()
 export class SerpHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
@@ -49,6 +61,27 @@ export class SerpHost extends RPCHost {
         updateAgeOnGet: false,
         updateAgeOnHas: false,
     });
+
+    async getIndex(ctx: Context, auth?: JinaEmbeddingsAuthDTO) {
+        const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
+        Object.assign(indexObject, {
+            usage1: 'https://r.jina.ai/YOUR_URL',
+            usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
+            usage3: `${ctx.origin}/search/YOUR_SEARCH_QUERY`,
+            homepage: 'https://jina.ai/reader',
+            sourceCode: 'https://github.com/jina-ai/reader',
+        });
+
+        if (auth && auth.user) {
+            indexObject[''] = undefined;
+            indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
+            indexObject.balanceLeft = auth.user.wallet.total_balance;
+        } else {
+            indexObject.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
+        }
+
+        return indexObject;
+    }
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -89,11 +122,12 @@ export class SerpHost extends RPCHost {
     })
     async search(
         @RPCReflect() rpcReflect: RPCReflection,
+        @Ctx() ctx: Context,
         crawlerOptions: CrawlerOptions,
         auth: JinaEmbeddingsAuthDTO,
-        @Param('q', { required: true }) q: string,
         @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
         variant: 'web' | 'images' | 'news',
+        @Param('q') q?: string,
         @Param('provider', { type: new Set(['google', 'bing']) })
         searchEngine?: 'google' | 'bing',
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
@@ -112,6 +146,22 @@ export class SerpHost extends RPCHost {
         }
 
         const uid = await auth.solveUID();
+        if (!q) {
+            if (ctx.path === '/') {
+                const indexObject = this.getIndex(ctx, auth);
+                if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
+                    return indexObject;
+                }
+
+                return assignTransferProtocolMeta(`${indexObject}`,
+                    { contentType: 'text/plain; charset=utf-8', envelope: null }
+                );
+            }
+            throw new ParamValidationError({
+                path: 'q',
+                message: `Required but not provided`
+            });
+        }
         // Return content by default
         const user = await auth.assertUser();
         if (!(user.wallet.total_balance > 0)) {
