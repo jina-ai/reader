@@ -136,7 +136,7 @@ export class SerpHost extends RPCHost {
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
-        @Param('fallback') fallback?: boolean,
+        @Param('fallback', { default: true }) fallback?: boolean,
     ) {
         const authToken = auth.bearerToken;
         let highFreqKey: RateLimitCache | undefined;
@@ -286,7 +286,7 @@ export class SerpHost extends RPCHost {
         }, crawlerOptions);
 
 
-        if (fallback && !results.length && (!page || page === 1)) {
+        if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
             const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
             const terms = q.split(/\s+/g).filter((x) => !!x);
