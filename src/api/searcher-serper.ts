@@ -538,9 +538,10 @@ export class SearcherHost extends RPCHost {
         const terms = originalQuery.trim().split(/\s+/);
 
         this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
+        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
 
         while (terms.length > 1) {
-            terms.pop(); // Remove last term
+            containsRTL ? terms.shift() : terms.pop(); // Remove last term
             const shortenedQuery = terms.join(' ');
 
             const fallbackParams = { ...params, q: shortenedQuery };
