@@ -137,7 +137,7 @@ export class SerpHost extends RPCHost {
         @Param('location') location?: string,
         @Param('page') page?: number,
         @Param('fallback', { default: true }) fallback?: boolean,
-        @Param('cutoff', { type: Number, default: 20 }) cutoff?: number,
+        @Param('cutoff', { type: Number, default: 20 }) cutoff: number,
     ) {
         const authToken = auth.bearerToken;
         let highFreqKey: RateLimitCache | undefined;
@@ -276,20 +276,9 @@ export class SerpHost extends RPCHost {
         }
 
         let realQuery = q;
-        const queryTerms = q.split(/\s+/g).filter((x) => !!x);
+        let queryTerms = q.split(/\s+/g).filter((x) => !!x);
         const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
 
-        // cutoff query
-        if (cutoff && cutoff > 0 && cutoff < queryTerms.length) {
-            this.logger.info(`Query "${realQuery}" is too long, cutting it down to ${cutoff} words`);
-
-            if (containsRTL && queryTerms.length > cutoff) {
-                realQuery = queryTerms.slice(queryTerms.length - cutoff).join(' ');
-            } else {
-                realQuery = queryTerms.slice(0, cutoff).join(' ');
-            }
-            q = realQuery;
-        }
 
         let results = await this.cachedSearch(variant, {
             provider: searchEngine,
@@ -304,10 +293,14 @@ export class SerpHost extends RPCHost {
 
         if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
+            if (queryTerms.length > cutoff) {
+                queryTerms = containsRTL ? queryTerms.slice(queryTerms.length - cutoff) : queryTerms.slice(0, cutoff);
+            }
 
             for (; tryTimes <= 4; tryTimes++) {
-                const index = containsRTL ? queryTerms.length - tryTimes : tryTimes - 1;
-                const term = queryTerms[index];
+                const step = Math.ceil(queryTerms.length * 0.1) * tryTimes;
+                const terms = containsRTL ? queryTerms.slice(0, queryTerms.length - step) : queryTerms.slice(step);
+                const term = terms.join(' ');
                 if (!term) {
                     break;
                 }

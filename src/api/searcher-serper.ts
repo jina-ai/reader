@@ -522,16 +522,6 @@ export class SearcherHost extends RPCHost {
         let originalQuery = params.q;
         const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
 
-        const queryTerms = originalQuery.split(/\s+/);
-        if (queryTerms.length > cutoff) {
-            this.logger.info(`Query "${originalQuery}" is too long, cutting it down to ${cutoff} words`);
-
-            if (containsRTL) {
-                originalQuery = queryTerms.slice(queryTerms.length - cutoff).join(' ');
-            } else {
-                originalQuery = queryTerms.slice(0, cutoff).join(' ');
-            }
-        }
         params.q = originalQuery;
 
         const response = await this.cachedSearch(params, noCache);
@@ -550,12 +540,25 @@ export class SearcherHost extends RPCHost {
             return { response, query: originalQuery, tryTimes };
         }
 
+
+        let queryTerms = originalQuery.split(/\s+/);
+        if (queryTerms.length > cutoff) {
+            this.logger.info(`Query "${originalQuery}" is too long, cutting it down to ${cutoff} words`);
+
+            if (containsRTL) {
+                queryTerms = queryTerms.slice(queryTerms.length - cutoff);
+            } else {
+                queryTerms = queryTerms.slice(0, cutoff);
+            }
+        }
+
         this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
 
         // fallback 3 times
         for (; tryTimes <= 4; tryTimes++) {
-            const index = containsRTL ? queryTerms.length - tryTimes : tryTimes - 1;
-            const term = queryTerms[index];
+            const step = Math.ceil(queryTerms.length * 0.1) * tryTimes;
+            const terms = containsRTL ? queryTerms.slice(0, queryTerms.length - step) : queryTerms.slice(step);
+            const term = terms.join(' ');
             if (!term) {
                 break;
             }
@@ -729,6 +732,9 @@ export class SearcherHost extends RPCHost {
         try {
             let r;
             const variant = query.variant;
+            // query.autocorrect = false;
+            const start = Date.now();
+
             Reflect.deleteProperty(query, 'variant');
             switch (variant) {
                 case 'images': {
@@ -745,6 +751,8 @@ export class SearcherHost extends RPCHost {
                     break;
                 }
             }
+
+            console.log(`\n\nSearch took ${Date.now() - start}ms\n\n`);
 
             const nowDate = new Date();
             const record = SerperSearchResult.from({
