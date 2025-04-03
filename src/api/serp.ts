@@ -296,7 +296,7 @@ export class SerpHost extends RPCHost {
             let terms: string[] = [];
             while (tryTimes < n) {
                 const delta = Math.ceil(queryTerms.length / n) * tryTimes;
-                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - delta) : queryTerms.slice(delta);
+                terms = containsRTL ? queryTerms.slice(delta) : queryTerms.slice(0, queryTerms.length - delta);
                 const query = terms.join(' ');
                 if (!query) {
                     break;
