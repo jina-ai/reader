@@ -321,6 +321,7 @@ export class SerpHost extends RPCHost {
             if (terms.length < lastResort.length && queryTerms.length > 2) {
                 const term = lastResort.join(' ');
                 realQuery = term;
+                this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
                 results = await this.cachedSearch(variant, {
                     provider: searchEngine,
                     q: realQuery,

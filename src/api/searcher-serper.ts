@@ -552,6 +552,7 @@ export class SearcherHost extends RPCHost {
 
         if (terms.length < lastResort.length && queryTerms.length > 2) {
             const term = lastResort.join(' ');
+            this.logger.info(`Retrying search with fallback query: "${term}"`);
             const fallbackParams = { ...params, q: term };
             const searchResult = await this.simpleSearch(fallbackParams, noCache);
 
