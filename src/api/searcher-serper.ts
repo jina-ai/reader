@@ -519,7 +519,7 @@ export class SearcherHost extends RPCHost {
         // fallback n times
         const n = 4;
 
-        while (tryTimes <= n) {
+        while (tryTimes < n) {
             const delta = Math.ceil(queryTerms.length / n) * tryTimes;
             terms = containsRTL ? queryTerms.slice(0, queryTerms.length - delta) : queryTerms.slice(delta);
             const query = terms.join(' ');
