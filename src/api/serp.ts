@@ -295,9 +295,10 @@ export class SerpHost extends RPCHost {
             let tryTimes = 1;
 
             let terms: string[] = [];
+            const step = Math.ceil(queryTerms.length * 0.25);
             for (; tryTimes <= 4; tryTimes++) {
-                const step = Math.ceil(queryTerms.length * 0.25) * tryTimes;
-                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - step) : queryTerms.slice(step);
+                const index = step * tryTimes;
+                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - index) : queryTerms.slice(index);
                 const term = terms.join(' ');
                 if (!term) {
                     break;
@@ -319,6 +320,8 @@ export class SerpHost extends RPCHost {
             }
 
             if (terms.length < lastResort.length && queryTerms.length > 2) {
+                tryTimes++;
+
                 const term = lastResort.join(' ');
                 realQuery = term;
                 this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
