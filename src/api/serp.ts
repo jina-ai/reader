@@ -137,7 +137,7 @@ export class SerpHost extends RPCHost {
         @Param('location') location?: string,
         @Param('page') page?: number,
         @Param('fallback', { default: true }) fallback?: boolean,
-        @Param('cutoff', { type: Number, default: 20 }) cutoff: number,
+        @Param('cutoff', { type: Number, default: 20 }) cutoff?: number,
     ) {
         const authToken = auth.bearerToken;
         let highFreqKey: RateLimitCache | undefined;
@@ -293,7 +293,7 @@ export class SerpHost extends RPCHost {
 
         if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
-            if (queryTerms.length > cutoff) {
+            if (cutoff && queryTerms.length > cutoff) {
                 queryTerms = containsRTL ? queryTerms.slice(queryTerms.length - cutoff) : queryTerms.slice(0, cutoff);
             }
 
