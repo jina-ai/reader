@@ -289,7 +289,8 @@ export class SerpHost extends RPCHost {
         if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
             const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
-            const terms = q.split(/\s+/g).filter((x) => !!x);
+            let terms = q.split(/\s+/g).filter((x) => !!x);
+            terms = containsRTL ? terms.slice(10) : terms.slice(0, 10); // don't try to fallback on more than 10 terms
             while (terms.length > 1) {
                 containsRTL ? terms.shift() : terms.pop(); // reduce the query by one term at a time
                 realQuery = terms.join(' ').trim();
