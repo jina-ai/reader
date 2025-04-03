@@ -275,6 +275,8 @@ export class SerpHost extends RPCHost {
         }
 
         let realQuery = q;
+        let queryTerms = q.split(/\s+/g).filter((x) => !!x);
+
         let results = await this.cachedSearch(variant, {
             provider: searchEngine,
             q,
@@ -289,14 +291,21 @@ export class SerpHost extends RPCHost {
         if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
             const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
-            let terms = q.split(/\s+/g).filter((x) => !!x);
-            terms = containsRTL ? terms.slice(10) : terms.slice(0, 10); // don't try to fallback on more than 10 terms
-            while (terms.length > 1) {
-                containsRTL ? terms.shift() : terms.pop(); // reduce the query by one term at a time
-                realQuery = terms.join(' ').trim();
-                if (!realQuery) {
+            const lastResort = (containsRTL ? queryTerms.slice(queryTerms.length - 2) : queryTerms.slice(0, 2)).join(' ');
+            const n = 4;
+            let terms: string[] = [];
+            while (tryTimes <= n) {
+                const delta = Math.ceil(queryTerms.length / n) * tryTimes;
+                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - delta) : queryTerms.slice(delta);
+                const query = terms.join(' ');
+                if (!query) {
                     break;
                 }
+                if (realQuery === query) {
+                    continue;
+                }
+                tryTimes += 1;
+                realQuery = query;
                 this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
                 results = await this.cachedSearch(variant, {
                     provider: searchEngine,
@@ -306,11 +315,25 @@ export class SerpHost extends RPCHost {
                     hl,
                     location,
                 }, crawlerOptions);
-                tryTimes += 1;
                 if (results?.length) {
                     break;
                 }
             }
+
+            if (!results?.length && realQuery.length > lastResort.length) {
+                realQuery = lastResort;
+                this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
+                tryTimes += 1;
+                results = await this.cachedSearch(variant, {
+                    provider: searchEngine,
+                    q: realQuery,
+                    num,
+                    gl,
+                    hl,
+                    location,
+                }, crawlerOptions);
+            }
+
             chargeAmountScaler *= tryTimes;
         }
 

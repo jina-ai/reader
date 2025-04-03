@@ -286,29 +286,12 @@ export class SearcherHost extends RPCHost {
             page,
         };
 
-        const { response: r, query: successQuery, tryTimes } = await this.searchWithFallback(
+        const { results, query: successQuery, tryTimes } = await this.searchWithFallback(
             searchParams, fallback, crawlerOptions.noCache
         );
         chargeAmountScaler *= tryTimes;
 
         fallbackQuery = successQuery !== searchQuery ? successQuery : undefined;
-
-        let results;
-        switch (variant) {
-            case 'images': {
-                results = (r as SerperImageSearchResponse).images;
-                break;
-            }
-            case 'news': {
-                results = (r as SerperNewsSearchResponse).news;
-                break;
-            }
-            case 'web':
-            default: {
-                results = (r as SerperWebSearchResponse).organic;
-                break;
-            }
-        }
 
         if (!results.length) {
             throw new AssertionFailureError(`No search results available for query ${searchQuery}`);
@@ -323,7 +306,7 @@ export class SearcherHost extends RPCHost {
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const trimmedResults = results.filter((x) => Boolean(x.link)).slice(0, targetResultCount).map((x) => this.mapToFinalResults(x));
         trimmedResults.toString = function () {
-            let r =  this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
+            let r = this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
             if (fallbackQuery) {
                 r = `Fallback query: ${fallbackQuery}\n\n${r}`;
             }
@@ -515,52 +498,72 @@ export class SearcherHost extends RPCHost {
         params: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; },
         useFallback: boolean = false,
         noCache: boolean = false
-    ): Promise<{ response: SerperSearchResponse; query: string; tryTimes: number }> {
+    ) {
         // Try original query first
         const originalQuery = params.q;
-        const response = await this.cachedSearch(params, noCache);
+        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
 
         // Extract results based on variant
-        let results: any[] = [];
         let tryTimes = 1;
+        const results = await this.doSearch(params, noCache);
+        if (results.length && !useFallback) {
+            return { results, query: params.q, tryTimes };
+        }
+
+        let queryTerms = originalQuery.split(/\s+/);
+        const lastResort = containsRTL ? queryTerms.slice(queryTerms.length - 2) : queryTerms.slice(0, 2);
+
+        this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
+
+        let terms: string[] = [];
+        // fallback n times
+        const n = 4;
+
+        while (tryTimes <= n) {
+            const delta = Math.ceil(queryTerms.length / n) * tryTimes;
+            terms = containsRTL ? queryTerms.slice(0, queryTerms.length - delta) : queryTerms.slice(delta);
+            const query = terms.join(' ');
+            if (!query) {
+                break;
+            }
+            tryTimes += 1;
+            this.logger.info(`Retrying search with fallback query: "${query}"`);
+            const fallbackParams = { ...params, q: query };
+            const fallbackResults = await this.doSearch(fallbackParams, noCache);
+            if (fallbackResults.length > 0) {
+                return { results: fallbackResults, query: fallbackParams.q, tryTimes };
+            }
+        }
+
+        if (terms.length > lastResort.length) {
+            const query = lastResort.join(' ');
+            this.logger.info(`Retrying search with fallback query: "${query}"`);
+            const fallbackParams = { ...params, q: query };
+            tryTimes += 1;
+            const fallbackResults = await this.doSearch(fallbackParams, noCache);
+
+            if (fallbackResults.length > 0) {
+                return { results: fallbackResults, query, tryTimes };
+            }
+        }
+
+        return { results, query: originalQuery, tryTimes };
+    }
+
+    async doSearch(
+        params: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; },
+        noCache: boolean = false,
+    ) {
+        const response = await this.cachedSearch(params, noCache);
+
+        let results = [];
         switch (params.variant) {
             case 'images': results = (response as SerperImageSearchResponse).images; break;
             case 'news': results = (response as SerperNewsSearchResponse).news; break;
             case 'web': default: results = (response as SerperWebSearchResponse).organic; break;
         }
 
-        // Return early if we got results or fallback is disabled
-        if (results.length > 0 || !useFallback) {
-            return { response, query: originalQuery, tryTimes };
-        }
-
-        // Try with progressively shorter queries
-        const terms = originalQuery.trim().split(/\s+/);
-
-        this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
-        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
-
-        while (terms.length > 1) {
-            containsRTL ? terms.shift() : terms.pop(); // Remove last term
-            const shortenedQuery = terms.join(' ');
-
-            const fallbackParams = { ...params, q: shortenedQuery };
-            const fallbackResponse = await this.cachedSearch(fallbackParams, noCache);
-
-            let fallbackResults: any[] = [];
-            switch (params.variant) {
-                case 'images': fallbackResults = (fallbackResponse as SerperImageSearchResponse).images; break;
-                case 'news': fallbackResults = (fallbackResponse as SerperNewsSearchResponse).news; break;
-                case 'web': default: fallbackResults = (fallbackResponse as SerperWebSearchResponse).organic; break;
-            }
-
-            tryTimes++;
-            if (fallbackResults.length > 0) {
-                return { response: fallbackResponse, query: shortenedQuery, tryTimes };
-            }
-        }
-
-        return { response, query: originalQuery, tryTimes };
+        return results;
     }
 
     async *fetchSearchResults(
@@ -651,7 +654,7 @@ export class SearcherHost extends RPCHost {
             metadata.fallback = fallbackQuery;
         }
 
-        assignMeta(formatted,  metadata);
+        assignMeta(formatted, metadata);
 
         return final;
     }
