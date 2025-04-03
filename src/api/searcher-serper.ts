@@ -519,10 +519,8 @@ export class SearcherHost extends RPCHost {
         noCache: boolean = false
     ): Promise<{ response: SerperSearchResponse; query: string; tryTimes: number }> {
         // Try original query first
-        let originalQuery = params.q;
+        const originalQuery = params.q;
         const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
-
-        params.q = originalQuery;
 
         const response = await this.cachedSearch(params, noCache);
 
@@ -732,9 +730,6 @@ export class SearcherHost extends RPCHost {
         try {
             let r;
             const variant = query.variant;
-            // query.autocorrect = false;
-            const start = Date.now();
-
             Reflect.deleteProperty(query, 'variant');
             switch (variant) {
                 case 'images': {
@@ -751,8 +746,6 @@ export class SearcherHost extends RPCHost {
                     break;
                 }
             }
-
-            console.log(`\n\nSearch took ${Date.now() - start}ms\n\n`);
 
             const nowDate = new Date();
             const record = SerperSearchResult.from({
