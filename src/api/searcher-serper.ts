@@ -541,8 +541,6 @@ export class SearcherHost extends RPCHost {
 
         let queryTerms = originalQuery.split(/\s+/);
         if (queryTerms.length > cutoff) {
-            this.logger.info(`Query "${originalQuery}" is too long, cutting it down to ${cutoff} words`);
-
             if (containsRTL) {
                 queryTerms = queryTerms.slice(queryTerms.length - cutoff);
             } else {
