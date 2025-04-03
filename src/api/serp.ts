@@ -137,7 +137,6 @@ export class SerpHost extends RPCHost {
         @Param('location') location?: string,
         @Param('page') page?: number,
         @Param('fallback', { default: true }) fallback?: boolean,
-        @Param('cutoff', { type: Number, default: 20 }) cutoff?: number,
     ) {
         const authToken = auth.bearerToken;
         let highFreqKey: RateLimitCache | undefined;
@@ -278,6 +277,7 @@ export class SerpHost extends RPCHost {
         let realQuery = q;
         let queryTerms = q.split(/\s+/g).filter((x) => !!x);
         const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
+        const lastResort = containsRTL ? queryTerms.slice(queryTerms.length - 2) : queryTerms.slice(0, 2);
 
 
         let results = await this.cachedSearch(variant, {
@@ -293,13 +293,11 @@ export class SerpHost extends RPCHost {
 
         if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
-            if (cutoff && queryTerms.length > cutoff) {
-                queryTerms = containsRTL ? queryTerms.slice(queryTerms.length - cutoff) : queryTerms.slice(0, cutoff);
-            }
 
+            let terms: string[] = [];
             for (; tryTimes <= 4; tryTimes++) {
-                const step = Math.ceil(queryTerms.length * 0.1) * tryTimes;
-                const terms = containsRTL ? queryTerms.slice(0, queryTerms.length - step) : queryTerms.slice(step);
+                const step = Math.ceil(queryTerms.length * 0.25) * tryTimes;
+                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - step) : queryTerms.slice(step);
                 const term = terms.join(' ');
                 if (!term) {
                     break;
@@ -318,6 +316,19 @@ export class SerpHost extends RPCHost {
                 if (results?.length) {
                     break;
                 }
+            }
+
+            if (terms.length < lastResort.length && queryTerms.length > 2) {
+                const term = lastResort.join(' ');
+                realQuery = term;
+                results = await this.cachedSearch(variant, {
+                    provider: searchEngine,
+                    q: realQuery,
+                    num,
+                    gl,
+                    hl,
+                    location,
+                }, crawlerOptions);
             }
 
             chargeAmountScaler *= tryTimes;
