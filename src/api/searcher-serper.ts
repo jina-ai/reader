@@ -114,6 +114,7 @@ export class SearcherHost extends RPCHost {
         @Param('page') page?: number,
         @Param('fallback', { type: Boolean, default: true }) fallback?: boolean,
         @Param('q') q?: string,
+        @Param('cutoff', { type: Number, default: 20 }) cutoff?: number,
     ) {
         // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
         // Since we used 'count' as 'num' previously, we need to keep 'count' for old users.
@@ -287,7 +288,7 @@ export class SearcherHost extends RPCHost {
         };
 
         const { response: r, query: successQuery, tryTimes } = await this.searchWithFallback(
-            searchParams, fallback, crawlerOptions.noCache
+            searchParams, fallback, cutoff, crawlerOptions.noCache
         );
         chargeAmountScaler *= tryTimes;
 
@@ -514,10 +515,25 @@ export class SearcherHost extends RPCHost {
     async searchWithFallback(
         params: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; },
         useFallback: boolean = false,
+        cutoff: number = 20,
         noCache: boolean = false
     ): Promise<{ response: SerperSearchResponse; query: string; tryTimes: number }> {
         // Try original query first
-        const originalQuery = params.q;
+        let originalQuery = params.q;
+        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
+
+        const queryTerms = originalQuery.split(/\s+/);
+        if (queryTerms.length > cutoff) {
+            this.logger.info(`Query "${originalQuery}" is too long, cutting it down to ${cutoff} words`);
+
+            if (containsRTL) {
+                originalQuery = queryTerms.slice(queryTerms.length - cutoff).join(' ');
+            } else {
+                originalQuery = queryTerms.slice(0, cutoff).join(' ');
+            }
+        }
+        params.q = originalQuery;
+
         const response = await this.cachedSearch(params, noCache);
 
         // Extract results based on variant
@@ -534,17 +550,18 @@ export class SearcherHost extends RPCHost {
             return { response, query: originalQuery, tryTimes };
         }
 
-        // Try with progressively shorter queries
-        const terms = originalQuery.trim().split(/\s+/);
-
         this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
-        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
 
-        while (terms.length > 1) {
-            containsRTL ? terms.shift() : terms.pop(); // Remove last term
-            const shortenedQuery = terms.join(' ');
+        // fallback 3 times
+        for (; tryTimes <= 4; tryTimes++) {
+            const index = containsRTL ? queryTerms.length - tryTimes : tryTimes - 1;
+            const term = queryTerms[index];
+            if (!term) {
+                break;
+            }
 
-            const fallbackParams = { ...params, q: shortenedQuery };
+            this.logger.info(`Retrying search with fallback query: "${term}"`);
+            const fallbackParams = { ...params, q: term };
             const fallbackResponse = await this.cachedSearch(fallbackParams, noCache);
 
             let fallbackResults: any[] = [];
@@ -554,9 +571,8 @@ export class SearcherHost extends RPCHost {
                 case 'web': default: fallbackResults = (fallbackResponse as SerperWebSearchResponse).organic; break;
             }
 
-            tryTimes++;
             if (fallbackResults.length > 0) {
-                return { response: fallbackResponse, query: shortenedQuery, tryTimes };
+                return { response: fallbackResponse, query: term, tryTimes };
             }
         }
 
