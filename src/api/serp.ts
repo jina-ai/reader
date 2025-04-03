@@ -321,7 +321,7 @@ export class SerpHost extends RPCHost {
 
         await Promise.all(finalResults.map((x: any) => this.assignGeneralMixin(x)));
 
-        this.assignChargeAmount(finalResults, chargeAmountScaler);
+        chargeAmount = this.assignChargeAmount(finalResults, chargeAmountScaler);
         assignMeta(finalResults, {
             query: realQuery,
             fallback: realQuery === q ? undefined : realQuery,
