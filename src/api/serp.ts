@@ -313,13 +313,12 @@ export class SerpHost extends RPCHost {
                     hl,
                     location,
                 }, crawlerOptions);
-
                 if (results?.length) {
                     break;
                 }
             }
 
-            if (terms.length < lastResort.length && queryTerms.length > 2) {
+            if (terms.length < lastResort.length && queryTerms.length > 2 && results?.length) {
                 tryTimes++;
 
                 const term = lastResort.join(' ');
