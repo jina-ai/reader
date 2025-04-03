@@ -506,7 +506,7 @@ export class SearcherHost extends RPCHost {
         // Extract results based on variant
         let tryTimes = 1;
         const results = await this.doSearch(params, noCache);
-        if (results.length && !useFallback) {
+        if (results.length || !useFallback) {
             return { results, query: params.q, tryTimes };
         }
 
