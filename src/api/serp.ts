@@ -258,7 +258,7 @@ export class SerpHost extends RPCHost {
         let chargeAmount = 0;
         rpcReflect.finally(async () => {
             if (chargeAmount) {
-                auth.reportUsage(chargeAmount, `reader-serp`).catch((err) => {
+                auth.reportUsage(chargeAmount, `reader-search`).catch((err) => {
                     this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                 });
                 const apiRoll = await apiRollPromise;
