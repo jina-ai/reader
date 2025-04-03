@@ -276,9 +276,6 @@ export class SerpHost extends RPCHost {
 
         let realQuery = q;
         let queryTerms = q.split(/\s+/g).filter((x) => !!x);
-        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
-        const lastResort = containsRTL ? queryTerms.slice(queryTerms.length - 2) : queryTerms.slice(0, 2);
-
 
         let results = await this.cachedSearch(variant, {
             provider: searchEngine,
@@ -293,17 +290,22 @@ export class SerpHost extends RPCHost {
 
         if (fallback && !results?.length && (!page || page === 1)) {
             let tryTimes = 1;
-
+            const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(q);
+            const lastResort = (containsRTL ? queryTerms.slice(queryTerms.length - 2) : queryTerms.slice(0, 2)).join(' ');
+            const n = 4;
             let terms: string[] = [];
-            const step = Math.ceil(queryTerms.length * 0.25);
-            for (; tryTimes <= 4; tryTimes++) {
-                const index = step * tryTimes;
-                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - index) : queryTerms.slice(index);
-                const term = terms.join(' ');
-                if (!term) {
+            while (tryTimes <= n) {
+                const delta = Math.ceil(queryTerms.length / n) * tryTimes;
+                terms = containsRTL ? queryTerms.slice(0, queryTerms.length - delta) : queryTerms.slice(delta);
+                const query = terms.join(' ');
+                if (!query) {
                     break;
                 }
-                realQuery = term;
+                if (realQuery === query) {
+                    continue;
+                }
+                tryTimes += 1;
+                realQuery = query;
                 this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
                 results = await this.cachedSearch(variant, {
                     provider: searchEngine,
@@ -318,12 +320,10 @@ export class SerpHost extends RPCHost {
                 }
             }
 
-            if (terms.length < lastResort.length && queryTerms.length > 2 && results?.length) {
-                tryTimes++;
-
-                const term = lastResort.join(' ');
-                realQuery = term;
+            if (!results?.length && realQuery.length > lastResort.length) {
+                realQuery = lastResort;
                 this.logger.info(`Retrying search with fallback query: "${realQuery}"`);
+                tryTimes += 1;
                 results = await this.cachedSearch(variant, {
                     provider: searchEngine,
                     q: realQuery,

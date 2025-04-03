@@ -306,7 +306,7 @@ export class SearcherHost extends RPCHost {
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const trimmedResults = results.filter((x) => Boolean(x.link)).slice(0, targetResultCount).map((x) => this.mapToFinalResults(x));
         trimmedResults.toString = function () {
-            let r =  this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
+            let r = this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
             if (fallbackQuery) {
                 r = `Fallback query: ${fallbackQuery}\n\n${r}`;
             }
@@ -516,35 +516,34 @@ export class SearcherHost extends RPCHost {
         this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
 
         let terms: string[] = [];
-        // fallback 3 times
-        const step = Math.ceil(queryTerms.length * 0.25);
+        // fallback n times
+        const n = 4;
 
-        for (; tryTimes <= 4; tryTimes++) {
-            const index = step * tryTimes;
-            terms = containsRTL ? queryTerms.slice(0, queryTerms.length - index) : queryTerms.slice(index);
-            const term = terms.join(' ');
-            if (!term) {
+        while (tryTimes <= n) {
+            const delta = Math.ceil(queryTerms.length / n) * tryTimes;
+            terms = containsRTL ? queryTerms.slice(0, queryTerms.length - delta) : queryTerms.slice(delta);
+            const query = terms.join(' ');
+            if (!query) {
                 break;
             }
-
-            this.logger.info(`Retrying search with fallback query: "${term}"`);
-            const fallbackParams = { ...params, q: term };
+            tryTimes += 1;
+            this.logger.info(`Retrying search with fallback query: "${query}"`);
+            const fallbackParams = { ...params, q: query };
             const fallbackResults = await this.doSearch(fallbackParams, noCache);
             if (fallbackResults.length > 0) {
                 return { results: fallbackResults, query: fallbackParams.q, tryTimes };
             }
         }
 
-        if (terms.length < lastResort.length && queryTerms.length > 2) {
-            tryTimes++;
-
-            const term = lastResort.join(' ');
-            this.logger.info(`Retrying search with fallback query: "${term}"`);
-            const fallbackParams = { ...params, q: term };
+        if (terms.length > lastResort.length) {
+            const query = lastResort.join(' ');
+            this.logger.info(`Retrying search with fallback query: "${query}"`);
+            const fallbackParams = { ...params, q: query };
+            tryTimes += 1;
             const fallbackResults = await this.doSearch(fallbackParams, noCache);
 
             if (fallbackResults.length > 0) {
-                return { results: fallbackResults, query: term, tryTimes };
+                return { results: fallbackResults, query, tryTimes };
             }
         }
 
@@ -655,7 +654,7 @@ export class SearcherHost extends RPCHost {
             metadata.fallback = fallbackQuery;
         }
 
-        assignMeta(formatted,  metadata);
+        assignMeta(formatted, metadata);
 
         return final;
     }
