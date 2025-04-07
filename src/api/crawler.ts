@@ -891,9 +891,6 @@ export class CrawlerHost extends RPCHost {
             }
         } else if (crawlOpts?.allocProxy && crawlOpts.allocProxy !== 'none' && !crawlOpts.proxyUrl) {
             const proxyUrl = await this.proxyProvider.alloc(this.figureOutBestProxyCountry(crawlOpts));
-            if (proxyUrl.protocol === 'socks5h:') {
-                proxyUrl.protocol = 'socks5:';
-            }
             crawlOpts.proxyUrl = proxyUrl.href;
         }
 
@@ -1242,7 +1239,6 @@ export class CrawlerHost extends RPCHost {
         };
     }
 
-    retryDet = new WeakSet<ExtraScrappingOptions>();
     @retryWith((err) => {
         if (err instanceof ServiceBadApproachError) {
             return false;
@@ -1263,12 +1259,7 @@ export class CrawlerHost extends RPCHost {
         }
 
         const proxy = await this.proxyProvider.alloc(this.figureOutBestProxyCountry(opts));
-        if (opts) {
-            if (this.retryDet.has(opts) && proxy.protocol === 'socks5h:') {
-                proxy.protocol = 'socks5:';
-            }
-            this.retryDet.add(opts);
-        }
+        this.logger.debug(`Proxy allocated`, { proxy: proxy.href });
         const r = await this.curlControl.sideLoad(url, {
             ...opts,
             proxyUrl: proxy.href,

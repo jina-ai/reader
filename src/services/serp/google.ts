@@ -16,7 +16,7 @@ import { ProxyProvider } from '../../shared/services/proxy-provider';
 
 @singleton()
 export class GoogleSERP extends AsyncService {
-
+    logger = this.globalLogger.child({ service: this.constructor.name });
     googleDomain = process.env.OVERRIDE_GOOGLE_DOMAIN || 'www.google.com';
 
     constructor(
@@ -36,7 +36,6 @@ export class GoogleSERP extends AsyncService {
         this.emit('ready');
     }
 
-    retryDet = new WeakSet<ScrappingOptions>();
     @retryWith((err) => {
         if (err instanceof ServiceBadApproachError) {
             return false;
@@ -59,12 +58,7 @@ export class GoogleSERP extends AsyncService {
         const proxy = await this.proxyProvider.alloc(
             process.env.PREFERRED_PROXY_COUNTRY || 'auto'
         );
-        if (opts) {
-            if (this.retryDet.has(opts) && proxy.protocol === 'socks5h:') {
-                proxy.protocol = 'socks5:';
-            }
-            this.retryDet.add(opts);
-        }
+        this.logger.debug(`Proxy allocated`, { proxy: proxy.href });
         const r = await this.curlControl.sideLoad(url, {
             ...opts,
             proxyUrl: proxy.href,

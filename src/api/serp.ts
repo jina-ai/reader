@@ -136,7 +136,7 @@ export class SerpHost extends RPCHost {
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
-        @Param('fallback', { default: true }) fallback?: boolean,
+        @Param('fallback') fallback?: boolean,
     ) {
         const authToken = auth.bearerToken;
         let highFreqKey: RateLimitCache | undefined;
