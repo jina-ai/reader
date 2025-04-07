@@ -41,7 +41,7 @@ import {
 } from '../services/errors';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { ProxyProvider } from '../shared/services/proxy-provider';
+import { ProxyProviderService } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { RobotsTxtService } from '../services/robots-text';
@@ -87,7 +87,7 @@ export class CrawlerHost extends RPCHost {
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
         protected cfBrowserRendering: CFBrowserRendering,
-        protected proxyProvider: ProxyProvider,
+        protected proxyProvider: ProxyProviderService,
         protected lmControl: LmControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,

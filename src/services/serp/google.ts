@@ -12,7 +12,7 @@ import { ApplicationError } from 'civkit/civ-rpc';
 import { ServiceBadApproachError, ServiceBadAttemptError } from '../errors';
 import { parseJSONText } from 'civkit/vectorize';
 import { retryWith } from 'civkit/decorators';
-import { ProxyProvider } from '../../shared/services/proxy-provider';
+import { ProxyProviderService } from '../../shared/services/proxy-provider';
 
 @singleton()
 export class GoogleSERP extends AsyncService {
@@ -24,7 +24,7 @@ export class GoogleSERP extends AsyncService {
         protected puppeteerControl: SERPSpecializedPuppeteerControl,
         protected jsDomControl: JSDomControl,
         protected curlControl: CurlControl,
-        protected proxyProvider: ProxyProvider,
+        protected proxyProvider: ProxyProviderService,
     ) {
         const filteredDeps = isMainThread ? arguments : _.without(arguments, puppeteerControl);
         super(...filteredDeps);
