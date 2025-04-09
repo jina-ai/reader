@@ -8,7 +8,8 @@
     "serve": "npm run build && npm run start",
     "debug": "npm run build && npm run dev",
     "start": "node ./build/stand-alone/crawl.js",
-    "dry-run": "NODE_ENV=dry-run node ./build/stand-alone/search.js"
+    "dry-run": "NODE_ENV=dry-run node ./build/stand-alone/search.js",
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest --config ./test/jest.config.js"
   },
   "engines": {
     "node": ">=18"
@@ -63,6 +64,7 @@
     "@types/bcrypt": "^5.0.0",
     "@types/busboy": "^1.5.4",
     "@types/cors": "^2.8.17",
+    "@types/jest": "^29.5.14",
     "@types/koa": "^2.15.0",
     "@types/koa-compress": "^4.0.6",
     "@types/node": "^20.14.13",
@@ -76,6 +78,7 @@
     "firebase-functions-test": "^3.0.0",
     "pino-pretty": "^13.0.0",
     "replicate": "^0.16.1",
+    "ts-jest": "^29.3.1",
     "typescript": "^5.5.4"
   },
   "private": true,
