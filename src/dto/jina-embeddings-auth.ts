@@ -146,7 +146,10 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
         }
 
         try {
-            const r = await this.jinaEmbeddingsDashboard.validateToken(this.bearerToken);
+            // TODO: go back using validateToken after performance issue fixed
+            const r = ((account?.wallet?.total_balance || 0) > 0) ?
+                await this.jinaEmbeddingsDashboard.authorization(this.bearerToken) :
+                await this.jinaEmbeddingsDashboard.validateToken(this.bearerToken);
             const brief = r.data;
             const draftAccount = JinaEmbeddingsTokenAccount.from({
                 ...account, ...brief, _id: this.bearerToken,
