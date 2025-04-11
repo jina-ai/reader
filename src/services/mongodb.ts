@@ -36,6 +36,7 @@ export class MongoDB extends AbstractMongoDB {
             this.options = {
                 minPoolSize: 2,
                 maxPoolSize: 10,
+                maxIdleTimeMS: 1000 * 60,
             };
         }
         if (!this.url) {

@@ -1,0 +1,50 @@
+services:
+  mongo:
+    build:
+      context: ./.docker/mongo
+    restart: always
+    ports:
+      - 27017:27017
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: localdev
+      MONGO_INITDB_ROOT_PASSWORD: localdev123
+      MONGO_INITDB_DATABASE: dev
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      default:
+        aliases:
+          - mongo-replset-1.dev.jina.ai
+          - mongo.dev.jina.ai
+
+  minio:
+    image: minio/minio
+    hostname: minio
+    ports:
+      - 9001:9001
+      - 9000:9000
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio-data:/data/minio
+    command: server /data/minio --console-address ":9001"
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'curl',
+          '-f',
+          'http://localhost:9001/minio/health/live'
+        ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      default:
+        aliases:
+          - minio.dev.jina.ai
+
+volumes:
+  minio-data:
+  mongo-data:
