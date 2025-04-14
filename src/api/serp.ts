@@ -69,7 +69,6 @@ export class SerpHost extends RPCHost {
             usage2: 'https://s.jina.ai/YOUR_SEARCH_QUERY',
             usage3: `${ctx.origin}/?q=YOUR_SEARCH_QUERY`,
             homepage: 'https://jina.ai/reader',
-            sourceCode: 'https://github.com/jina-ai/reader',
         });
 
         if (auth && auth.user) {

@@ -18,16 +18,7 @@ import envConfig from '../shared/services/secrets';
 import { JinaEmbeddingsDashboardHTTP } from '../shared/3rd-party/jina-embeddings';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 
-import { LRUCache } from 'lru-cache';
-
 const authDtoLogger = logger.child({ service: 'JinaAuthDTO' });
-
-const invalidTokenLRU = new LRUCache({
-    max: 256,
-    ttl: 60 * 60 * 1000,
-    updateAgeOnGet: false,
-    updateAgeOnHas: false,
-});
 
 
 const THE_VERY_SAME_JINA_EMBEDDINGS_CLIENT = new JinaEmbeddingsDashboardHTTP(envConfig.JINA_EMBEDDINGS_DASHBOARD_API_KEY);
@@ -91,12 +82,6 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
             });
         }
 
-        if (invalidTokenLRU.get(this.bearerToken)) {
-            throw new AuthenticationFailedError({
-                message: 'Invalid API key, please get a new one from https://jina.ai'
-            });
-        }
-
         let firestoreDegradation = false;
         let account;
         try {
@@ -146,7 +131,10 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
         }
 
         try {
-            const r = await this.jinaEmbeddingsDashboard.validateToken(this.bearerToken);
+            // TODO: go back using validateToken after performance issue fixed
+            const r = ((account?.wallet?.total_balance || 0) > 0) ?
+                await this.jinaEmbeddingsDashboard.authorization(this.bearerToken) :
+                await this.jinaEmbeddingsDashboard.validateToken(this.bearerToken);
             const brief = r.data;
             const draftAccount = JinaEmbeddingsTokenAccount.from({
                 ...account, ...brief, _id: this.bearerToken,
@@ -162,7 +150,6 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
             authDtoLogger.warn(`Failed to get user brief: ${err}`, { err: marshalErrorLike(err) });
 
             if (err?.status === 401) {
-                invalidTokenLRU.set(this.bearerToken, true);
                 throw new AuthenticationFailedError({
                     message: 'Invalid API key, please get a new one from https://jina.ai'
                 });

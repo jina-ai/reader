@@ -14,7 +14,7 @@ import { cleanAttribute } from '../utils/misc';
 import _ from 'lodash';
 import { STATUS_CODES } from 'http';
 import type { CrawlerOptions } from '../dto/crawler-options';
-import { readFile } from 'fs/promises';
+import { readFile } from '../utils/encoding';
 import { pathToFileURL } from 'url';
 import { countGPTToken } from '../shared/utils/openai';
 
@@ -804,7 +804,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             overrideContentType = undefined;
         }
 
-        const contentType = (overrideContentType || await file.mimeType).toLowerCase();
+        const contentType: string = (overrideContentType || await file.mimeType).toLowerCase();
         const fileName = overrideFileName || `${url.origin}${url.pathname}`;
         const snapshot: PageSnapshot = {
             title: '',
@@ -821,11 +821,16 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
             return snapshot;
         }
         try {
+            const encoding: string | undefined = contentType.includes('charset=') ? contentType.split('charset=')[1]?.trim().toLowerCase() : 'utf-8';
             if (contentType.startsWith('text/html')) {
                 if ((await file.size) > 1024 * 1024 * 32) {
                     throw new AssertionFailureError(`Failed to access ${url}: file too large`);
                 }
-                snapshot.html = await readFile(await file.filePath, { encoding: 'utf-8' });
+                snapshot.html = await readFile(await file.filePath, encoding);
+                const innerCharset = snapshot.html.slice(0, 1024).match(/<meta[^>]+text\/html;\s*?charset=([^>"]+)\"/i)?.[1]?.toLowerCase();
+                if (innerCharset && innerCharset !== encoding) {
+                    snapshot.html = await readFile(await file.filePath, innerCharset);
+                }
 
                 return snapshot;
             }
@@ -833,7 +838,7 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                 if ((await file.size) > 1024 * 1024 * 32) {
                     throw new AssertionFailureError(`Failed to access ${url}: file too large`);
                 }
-                snapshot.text = await readFile(await file.filePath, { encoding: 'utf-8' });
+                snapshot.text = await readFile(await file.filePath, encoding);
                 snapshot.html = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;">${snapshot.text}</pre></body></html>`;
 
                 return snapshot;
