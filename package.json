@@ -41,6 +41,7 @@
     "lru-cache": "^11.0.2",
     "maxmind": "^4.3.18",
     "minio": "^7.1.3",
+    "mongodb": "^6.15.0",
     "node-libcurl": "^4.1.0",
     "openai": "^4.20.0",
     "pdfjs-dist": "^4.10.38",
