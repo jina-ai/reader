@@ -583,7 +583,7 @@ export class PuppeteerControl extends AsyncService {
         });
         this.ua = await this.browser.userAgent();
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
-        this.effectiveUA = this.ua.replace(/Headless/i, '').replace('Mozilla/5.0 (X11; Linux x86_64)', 'Mozilla/5.0 (Linux; Android 10; K)');
+        this.effectiveUA = this.ua.replace(/Headless/i, '').replace('Mozilla/5.0 (X11; Linux x86_64)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
         this.curlControl.impersonateChrome(this.effectiveUA);
 
         await this.newPage('beware_deadlock').then((r) => this.__loadedPage.push(r));
