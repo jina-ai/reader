@@ -41,13 +41,13 @@ import {
 } from '../services/errors';
 
 import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { ProxyProvider } from '../shared/services/proxy-provider';
+import { ProxyProviderService } from '../shared/services/proxy-provider';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { RobotsTxtService } from '../services/robots-text';
 import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
-import { HTTPServiceError } from 'civkit';
+import { HTTPServiceError } from 'civkit/http';
 import { GeoIPService } from '../services/geoip';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
@@ -87,7 +87,7 @@ export class CrawlerHost extends RPCHost {
         protected puppeteerControl: PuppeteerControl,
         protected curlControl: CurlControl,
         protected cfBrowserRendering: CFBrowserRendering,
-        protected proxyProvider: ProxyProvider,
+        protected proxyProvider: ProxyProviderService,
         protected lmControl: LmControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
@@ -1232,6 +1232,7 @@ export class CrawlerHost extends RPCHost {
         };
     }
 
+    proxyIterMap = new WeakMap<ExtraScrappingOptions, ReturnType<ProxyProviderService['iterAlloc']>>();
     @retryWith((err) => {
         if (err instanceof ServiceBadApproachError) {
             return false;
@@ -1250,8 +1251,17 @@ export class CrawlerHost extends RPCHost {
         if (opts?.allocProxy === 'none') {
             return this.curlControl.sideLoad(url, opts);
         }
+        let proxy;
+        if (opts) {
+            let it = this.proxyIterMap.get(opts);
+            if (!it) {
+                it = this.proxyProvider.iterAlloc(this.figureOutBestProxyCountry(opts));
+                this.proxyIterMap.set(opts, it);
+            }
+            proxy = (await it.next()).value;
+        }
 
-        const proxy = await this.proxyProvider.alloc(this.figureOutBestProxyCountry(opts));
+        proxy ??= await this.proxyProvider.alloc(this.figureOutBestProxyCountry(opts));
         this.logger.debug(`Proxy allocated`, { proxy: proxy.href });
         const r = await this.curlControl.sideLoad(url, {
             ...opts,
