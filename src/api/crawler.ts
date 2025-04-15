@@ -1293,8 +1293,6 @@ export class CrawlerHost extends RPCHost {
         if (opts.countryHint) {
             if (this.proxyProvider.supports(opts.countryHint)) {
                 draft ??= opts.countryHint;
-            } else if (opts.countryHint === 'cn') {
-                draft ??= 'hk';
             }
         }
 
