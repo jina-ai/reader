@@ -6,7 +6,7 @@ import { marshalErrorLike } from 'civkit/lang';
 import { objHashMd5B64Of } from 'civkit/hash';
 import _ from 'lodash';
 
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
+import { RateLimitControl, RateLimitDesc, RateLimitTriggeredError } from '../shared/services/rate-limit';
 
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { SerperSearchResult } from '../db/searched';
@@ -19,8 +19,16 @@ import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { InsufficientBalanceError, RateLimitTriggeredError } from '../services/errors';
-import { SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperSearchResponse, SerperWebSearchResponse, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
+import { InsufficientBalanceError } from '../services/errors';
+import {
+    SerperImageSearchResponse,
+    SerperNewsSearchResponse,
+    SerperSearchQueryParams,
+    SerperSearchResponse,
+    SerperWebSearchResponse,
+    WORLD_COUNTRIES,
+    WORLD_LANGUAGES
+} from '../shared/3rd-party/serper-search';
 import { toAsyncGenerator } from '../utils/misc';
 import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { LRUCache } from 'lru-cache';
@@ -218,10 +226,10 @@ export class SearcherHost extends RPCHost {
                     }
                     const now = Date.now();
                     let tgtDate;
-                    if (err.retryAfter) {
-                        tgtDate = new Date(now + err.retryAfter * 1000);
-                    } else if (err.retryAfterDate) {
+                    if (err.retryAfterDate) {
                         tgtDate = err.retryAfterDate;
+                    } else if (err.retryAfter) {
+                        tgtDate = new Date(now + err.retryAfter * 1000);
                     }
 
                     if (tgtDate) {

@@ -7,14 +7,14 @@ import {
 import { marshalErrorLike } from 'civkit/lang';
 import _ from 'lodash';
 
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
+import { RateLimitControl, RateLimitDesc, RateLimitTriggeredError } from '../shared/services/rate-limit';
 
 import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { InsufficientBalanceError, RateLimitTriggeredError } from '../services/errors';
+import { InsufficientBalanceError } from '../services/errors';
 import { WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 import { GoogleSERP } from '../services/serp/google';
 import { WebSearchEntry } from '../services/serp/compat';
@@ -172,10 +172,11 @@ export class SerpHost extends RPCHost {
             const now = new Date();
             const blockedTimeRemaining = (highFreqKey.blockedUntil.valueOf() - now.valueOf());
             if (blockedTimeRemaining > 0) {
-                throw RateLimitTriggeredError.from({
-                    message: `Per UID rate limit exceeded (async)`,
-                    retryAfter: Math.ceil(blockedTimeRemaining / 1000),
-                });
+                this.logger.warn(`Rate limit triggered for ${uid}, this request should have been blocked`);
+                // throw RateLimitTriggeredError.from({
+                //     message: `Per UID rate limit exceeded (async)`,
+                //     retryAfter: Math.ceil(blockedTimeRemaining / 1000),
+                // });
             }
         }
 
@@ -229,10 +230,10 @@ export class SerpHost extends RPCHost {
                     }
                     const now = Date.now();
                     let tgtDate;
-                    if (err.retryAfter) {
-                        tgtDate = new Date(now + err.retryAfter * 1000);
-                    } else if (err.retryAfterDate) {
+                    if (err.retryAfterDate) {
                         tgtDate = err.retryAfterDate;
+                    } else if (err.retryAfter) {
+                        tgtDate = new Date(now + err.retryAfter * 1000);
                     }
 
                     if (tgtDate) {
