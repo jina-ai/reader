@@ -480,25 +480,30 @@ export class SerpHost extends RPCHost {
             let lastError;
             outerLoop:
             for (const client of this.iterProviders(provider)) {
+                const t0 = Date.now();
                 try {
                     switch (variant) {
                         case 'images': {
                             r = await Reflect.apply(client.imageSearch, client, [query, scrappingOptions]);
-                            break outerLoop;
+                            break;
                         }
                         case 'news': {
                             r = await Reflect.apply(client.newsSearch, client, [query, scrappingOptions]);
-                            break outerLoop;
+                            break;
                         }
                         case 'web':
                         default: {
                             r = await Reflect.apply(client.webSearch, client, [query, scrappingOptions]);
-                            break outerLoop;
+                            break;
                         }
                     }
+                    const dt = Date.now() - t0;
+                    this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
+                    break outerLoop;
                 } catch (err) {
                     lastError = err;
-                    this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err });
+                    const dt = Date.now() - t0;
+                    this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err, variant, searchDt: dt, });
                 }
             }
 
