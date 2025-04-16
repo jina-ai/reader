@@ -25,6 +25,7 @@ import { SERPResult } from '../db/searched';
 import { SerperBingSearchService, SerperGoogleSearchService } from '../services/serp/serper';
 import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { LRUCache } from 'lru-cache';
+import { API_CALL_STATUS } from '../shared/db/api-roll';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
@@ -261,8 +262,19 @@ export class SerpHost extends RPCHost {
                 auth.reportUsage(chargeAmount, `reader-search`).catch((err) => {
                     this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                 });
-                const apiRoll = await apiRollPromise;
-                apiRoll.chargeAmount = chargeAmount;
+                try {
+                    const apiRoll = await apiRollPromise;
+                    apiRoll.chargeAmount = chargeAmount;
+                } catch (err) {
+                    await this.rateLimitControl.record({
+                        uid,
+                        tags: [rpcReflect.name.toUpperCase()],
+                        status: API_CALL_STATUS.SUCCESS,
+                        chargeAmount,
+                    }).save().catch((err) => {
+                        this.logger.warn(`Failed to save rate limit record`, { err: marshalErrorLike(err) });
+                    });
+                }
             }
         });
 
