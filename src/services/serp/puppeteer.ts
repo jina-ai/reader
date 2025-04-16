@@ -233,6 +233,7 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
     livePages = new Set<Page>();
     lastPageCratedAt: number = 0;
     ua: string = '';
+    effectiveUA: string = '';
 
     protected _REPORT_FUNCTION_NAME = 'bingo';
 
@@ -299,7 +300,8 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
         });
         this.ua = await this.browser.userAgent();
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
-        this.curlControl.impersonateChrome(this.ua.replace(/Headless/i, ''));
+        this.effectiveUA = this.ua.replace(/Headless/i, '').replace('Mozilla/5.0 (X11; Linux x86_64)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+        this.curlControl.impersonateChrome(this.effectiveUA);
 
         await this.newPage('beware_deadlock').then((r) => this.__loadedPage.push(r));
 
@@ -322,7 +324,7 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
         }
         const preparations = [];
 
-        preparations.push(page.setUserAgent(this.ua.replace(/Headless/i, '')));
+        preparations.push(page.setUserAgent(this.effectiveUA));
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
         preparations.push(page.setBypassCSP(true));

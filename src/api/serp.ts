@@ -7,14 +7,14 @@ import {
 import { marshalErrorLike } from 'civkit/lang';
 import _ from 'lodash';
 
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
+import { RateLimitControl, RateLimitDesc, RateLimitTriggeredError } from '../shared/services/rate-limit';
 
 import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { InsufficientBalanceError, RateLimitTriggeredError } from '../services/errors';
+import { InsufficientBalanceError } from '../services/errors';
 import { WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 import { GoogleSERP } from '../services/serp/google';
 import { WebSearchEntry } from '../services/serp/compat';
@@ -25,6 +25,7 @@ import { SERPResult } from '../db/searched';
 import { SerperBingSearchService, SerperGoogleSearchService } from '../services/serp/serper';
 import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { LRUCache } from 'lru-cache';
+import { API_CALL_STATUS } from '../shared/db/api-roll';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
@@ -172,10 +173,11 @@ export class SerpHost extends RPCHost {
             const now = new Date();
             const blockedTimeRemaining = (highFreqKey.blockedUntil.valueOf() - now.valueOf());
             if (blockedTimeRemaining > 0) {
-                throw RateLimitTriggeredError.from({
-                    message: `Per UID rate limit exceeded (async)`,
-                    retryAfter: Math.ceil(blockedTimeRemaining / 1000),
-                });
+                this.logger.warn(`Rate limit triggered for ${uid}, this request should have been blocked`);
+                // throw RateLimitTriggeredError.from({
+                //     message: `Per UID rate limit exceeded (async)`,
+                //     retryAfter: Math.ceil(blockedTimeRemaining / 1000),
+                // });
             }
         }
 
@@ -229,10 +231,10 @@ export class SerpHost extends RPCHost {
                     }
                     const now = Date.now();
                     let tgtDate;
-                    if (err.retryAfter) {
-                        tgtDate = new Date(now + err.retryAfter * 1000);
-                    } else if (err.retryAfterDate) {
+                    if (err.retryAfterDate) {
                         tgtDate = err.retryAfterDate;
+                    } else if (err.retryAfter) {
+                        tgtDate = new Date(now + err.retryAfter * 1000);
                     }
 
                     if (tgtDate) {
@@ -260,8 +262,19 @@ export class SerpHost extends RPCHost {
                 auth.reportUsage(chargeAmount, `reader-search`).catch((err) => {
                     this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
                 });
-                const apiRoll = await apiRollPromise;
-                apiRoll.chargeAmount = chargeAmount;
+                try {
+                    const apiRoll = await apiRollPromise;
+                    apiRoll.chargeAmount = chargeAmount;
+                } catch (err) {
+                    await this.rateLimitControl.record({
+                        uid,
+                        tags: [rpcReflect.name.toUpperCase()],
+                        status: API_CALL_STATUS.SUCCESS,
+                        chargeAmount,
+                    }).save().catch((err) => {
+                        this.logger.warn(`Failed to save rate limit record`, { err: marshalErrorLike(err) });
+                    });
+                }
             }
         });
 
@@ -467,25 +480,30 @@ export class SerpHost extends RPCHost {
             let lastError;
             outerLoop:
             for (const client of this.iterProviders(provider)) {
+                const t0 = Date.now();
                 try {
                     switch (variant) {
                         case 'images': {
                             r = await Reflect.apply(client.imageSearch, client, [query, scrappingOptions]);
-                            break outerLoop;
+                            break;
                         }
                         case 'news': {
                             r = await Reflect.apply(client.newsSearch, client, [query, scrappingOptions]);
-                            break outerLoop;
+                            break;
                         }
                         case 'web':
                         default: {
                             r = await Reflect.apply(client.webSearch, client, [query, scrappingOptions]);
-                            break outerLoop;
+                            break;
                         }
                     }
+                    const dt = Date.now() - t0;
+                    this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
+                    break outerLoop;
                 } catch (err) {
                     lastError = err;
-                    this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err });
+                    const dt = Date.now() - t0;
+                    this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err, variant, searchDt: dt, });
                 }
             }
 

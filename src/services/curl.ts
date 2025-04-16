@@ -61,10 +61,23 @@ export class CurlControl extends AsyncService {
     }
 
     curlImpersonateHeader(curl: Curl, headers?: object) {
+        let uaPlatform = this.platform;
+        if (this.ua.includes('Windows')) {
+            uaPlatform = 'Windows';
+        } else if (this.ua.includes('Android')) {
+            uaPlatform = 'Android';
+        } else if (this.ua.includes('iPhone') || this.ua.includes('iPad') || this.ua.includes('iPod')) {
+            uaPlatform = 'iOS';
+        } else if (this.ua.includes('CrOS')) {
+            uaPlatform = 'Chrome OS';
+        } else if (this.ua.includes('Macintosh')) {
+            uaPlatform = 'macOS';
+        }
+
         const mixinHeaders: Record<string, string> = {
-            'sch-ch-ua': `Not A(Brand";v="8", "Chromium";v="${this.chromeVersion}", "Google Chrome";v="${this.chromeVersion}"`,
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': this.platform,
+            'Sec-Ch-Ua': `Not A(Brand";v="8", "Chromium";v="${this.chromeVersion}", "Google Chrome";v="${this.chromeVersion}"`,
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': `"${uaPlatform}"`,
             'Upgrade-Insecure-Requests': '1',
             'User-Agent': this.ua,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',

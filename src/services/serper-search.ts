@@ -56,6 +56,7 @@ export class SerperSearchService extends AsyncService {
         let maxTries = 3;
 
         while (maxTries--) {
+            const t0 = Date.now();
             try {
                 this.logger.debug(`Doing external search`, query);
                 let r;
@@ -101,11 +102,14 @@ export class SerperSearchService extends AsyncService {
                         break;
                     }
                 }
+                const dt = Date.now() - t0;
                 this.blackHoleDetector.itWorked();
+                this.logger.debug(`External search took ${dt}ms`, { searchDt: dt, variant });
 
                 return r.parsed;
             } catch (err: any) {
-                this.logger.error(`${variant} search failed: ${err?.message}`, { err: marshalErrorLike(err) });
+                const dt = Date.now() - t0;
+                this.logger.error(`${variant} search failed: ${err?.message}`, { searchDt: dt, err: marshalErrorLike(err) });
                 if (err?.status === 429) {
                     await delay(500 + 1000 * Math.random());
                     continue;
