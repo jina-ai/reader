@@ -116,6 +116,10 @@ export class CrawlerHost extends RPCHost {
             if (snapshot.isIntermediate) {
                 return;
             }
+            if (!snapshot.lastMutationIdle) {
+                // Never reached mutationIdle, presumably too short timeout
+                return;
+            }
             if (options.locale) {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
@@ -313,7 +317,6 @@ export class CrawlerHost extends RPCHost {
                 throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
         }
-
         const crawlOpts = await this.configure(crawlerOptions);
         if (crawlerOptions.robotsTxt) {
             await this.robotsTxtService.assertAccessAllowed(targetUrl, crawlerOptions.robotsTxt);
@@ -461,7 +464,6 @@ export class CrawlerHost extends RPCHost {
             }
             throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
-
         const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
         chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
         if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
@@ -798,6 +800,8 @@ export class CrawlerHost extends RPCHost {
         }
 
         if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && !this.knownUrlThatSideLoadingWouldCrashTheBrowser(urlToCrawl)) {
+            const sideLoadSnapshotPermitted = crawlerOpts?.browserIsNotRequired() &&
+                [RESPOND_TIMING.HTML, RESPOND_TIMING.VISIBLE_CONTENT].includes(crawlerOpts.presumedRespondTiming);
             try {
                 const altOpts = { ...crawlOpts };
                 let sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
@@ -832,7 +836,7 @@ export class CrawlerHost extends RPCHost {
                 let analyzed = await this.jsdomControl.analyzeHTMLTextLite(draftSnapshot.html);
                 draftSnapshot.title ??= analyzed.title;
                 draftSnapshot.isIntermediate = true;
-                if (crawlerOpts?.browserIsNotRequired()) {
+                if (sideLoadSnapshotPermitted) {
                     yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
                 }
                 let fallbackProxyIsUsed = false;
@@ -858,7 +862,7 @@ export class CrawlerHost extends RPCHost {
                     analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
                     if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
                         proxySnapshot.isIntermediate = true;
-                        if (crawlerOpts?.browserIsNotRequired()) {
+                        if (sideLoadSnapshotPermitted) {
                             yield this.jsdomControl.narrowSnapshot(proxySnapshot, crawlOpts);
                         }
                         sideLoaded = proxyLoaded;

@@ -655,8 +655,11 @@ export class CrawlerOptions extends AutoCastable {
         if (this.respondWith.includes('lm')) {
             return false;
         }
+        if (this.withIframe) {
+            return false;
+        }
 
-        return false;
+        return !snapshot.isIntermediate;
     }
 
     isCacheQueryApplicable() {

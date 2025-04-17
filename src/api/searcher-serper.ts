@@ -318,11 +318,6 @@ export class SearcherHost extends RPCHost {
             throw new AssertionFailureError(`No search results available for query ${searchQuery}`);
         }
 
-        if (crawlOpts.timeoutMs && crawlOpts.timeoutMs < 30_000) {
-            delete crawlOpts.timeoutMs;
-        }
-
-
         let lastScrapped: any[] | undefined;
         const targetResultCount = crawlWithoutContent ? count : count + 2;
         const trimmedResults = results.filter((x) => Boolean(x.link)).slice(0, targetResultCount).map((x) => this.mapToFinalResults(x));
