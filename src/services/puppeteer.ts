@@ -1096,7 +1096,7 @@ export class PuppeteerControl extends AsyncService {
         nextSnapshotDeferred.promise.finally(() => {
             this.off('crippled', crippleListener);
         });
-        let successfullyDone = false;
+        let successfullyDone;
         const hdl = (s: any) => {
             if (snapshot === s) {
                 return;
@@ -1145,9 +1145,12 @@ export class PuppeteerControl extends AsyncService {
         let waitForPromise: Promise<any> | undefined;
         let finalizationPromise: Promise<any> | undefined;
         const doFinalization = async () => {
-            if (!waitForPromise) {
-                successfullyDone = true;
+            if (waitForPromise) {
+                // SuccessfullyDone is meant for the finish of the page.
+                // It doesn't matter if you are expecting something and it didn't show up.
+                await waitForPromise.catch(() => void 0);
             }
+            successfullyDone ??= true;
             try {
                 const pSubFrameSnapshots = this.snapshotChildFrames(page);
                 snapshot = await page.evaluate('giveSnapshot(true)') as PageSnapshot;
@@ -1222,13 +1225,14 @@ export class PuppeteerControl extends AsyncService {
                     page.waitForSelector(options.waitForSelector!, { timeout: thisTimeout }))
                     .then(() => {
                         successfullyDone = true;
-                        finalizationPromise = doFinalization();
                     })
                     .catch((err) => {
+                        waitForPromise = undefined;
                         this.logger.warn(`Page ${sn}: Failed to wait for selector ${options.waitForSelector}`, { err });
                     });
                 return p as any;
             });
+
         }
 
         try {
