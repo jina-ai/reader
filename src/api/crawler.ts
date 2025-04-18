@@ -240,6 +240,7 @@ export class CrawlerHost extends RPCHost {
         const uid = await auth.solveUID();
         let chargeAmount = 0;
         const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
+        const tierPolicy = await this.saasAssertTierPolicy(crawlerOptions, auth);
 
         // Use koa ctx.URL, a standard URL object to avoid node.js framework prop naming confusion
         const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(`${ctx.URL.pathname}${ctx.URL.search}`), crawlerOptions);
@@ -298,15 +299,13 @@ export class CrawlerHost extends RPCHost {
                 if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
                     return;
                 }
-                if (chargeAmount) {
-                    apiRoll._ref?.set({
-                        chargeAmount,
-                    }, { merge: true }).catch((err) => this.logger.warn(`Failed to log charge amount in apiRoll`, { err }));
-                }
+                apiRoll.chargeAmount = chargeAmount;
             });
         }
 
         if (!uid) {
+            // Enforce no proxy is allocated for anonymous users due to abuse.
+            crawlerOptions.proxy = 'none';
             const blockade = (await DomainBlockade.fromFirestoreQuery(
                 DomainBlockade.COLLECTION
                     .where('domain', '==', targetUrl.hostname.toLowerCase())
@@ -338,10 +337,7 @@ export class CrawlerHost extends RPCHost {
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                    chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
-                    if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                        throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
-                    }
+                    chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
                     sseStream.write({
                         event: 'data',
                         data: formatted,
@@ -379,11 +375,7 @@ export class CrawlerHost extends RPCHost {
                     }
 
                     const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                    chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
-
-                    if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                        throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
-                    }
+                    chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
 
                     if (scrapped?.pdfs?.length && !chargeAmount) {
                         continue;
@@ -405,10 +397,7 @@ export class CrawlerHost extends RPCHost {
             }
 
             const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
-            chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
-            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
-            }
+            chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
 
             return formatted;
         }
@@ -434,10 +423,7 @@ export class CrawlerHost extends RPCHost {
                 }
 
                 const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
-                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                    throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
-                }
+                chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
 
                 if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
                     return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
@@ -465,10 +451,7 @@ export class CrawlerHost extends RPCHost {
             throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
         const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
-        chargeAmount = this.assignChargeAmount(formatted, crawlerOptions);
-        if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-            throw new BudgetExceededError(`Token budget (${crawlerOptions.tokenBudget}) exceeded, intended charge amount ${chargeAmount}.`);
-        }
+        chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
 
         if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
 
@@ -840,7 +823,8 @@ export class CrawlerHost extends RPCHost {
                     yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
                 }
                 let fallbackProxyIsUsed = false;
-                if (((!crawlOpts?.allocProxy || crawlOpts.allocProxy === 'none') && !crawlOpts?.proxyUrl) &&
+                if (
+                    ((!crawlOpts?.allocProxy || crawlOpts.allocProxy !== 'none') && !crawlOpts?.proxyUrl) &&
                     (analyzed.tokens < 42 || sideLoaded.status !== 200)
                 ) {
                     const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
@@ -911,18 +895,14 @@ export class CrawlerHost extends RPCHost {
         }
     }
 
-    assignChargeAmount(formatted: FormattedPage, crawlerOptions?: CrawlerOptions) {
+    assignChargeAmount(formatted: FormattedPage, saasTierPolicy?: Parameters<typeof this.saasApplyTierPolicy>[0]) {
         if (!formatted) {
             return 0;
         }
 
         let amount = 0;
         if (formatted.content) {
-            const x1 = estimateToken(formatted.content);
-            if (crawlerOptions?.respondWith?.toLowerCase().includes('lm')) {
-                amount += x1 * 2;
-            }
-            amount += x1;
+            amount = estimateToken(formatted.content);
         } else if (formatted.description) {
             amount += estimateToken(formatted.description);
         }
@@ -937,6 +917,10 @@ export class CrawlerHost extends RPCHost {
         if (formatted.screenshotUrl || formatted.screenshot) {
             // OpenAI image token count for 1024x1024 image
             amount += 765;
+        }
+
+        if (saasTierPolicy) {
+            amount = this.saasApplyTierPolicy(saasTierPolicy, amount);
         }
 
         Object.assign(formatted, { usage: { tokens: amount } });
@@ -1311,5 +1295,55 @@ export class CrawlerHost extends RPCHost {
         }
 
         return false;
+    }
+
+    async saasAssertTierPolicy(opts: CrawlerOptions, auth: JinaEmbeddingsAuthDTO) {
+        let chargeScalar = 1;
+        let minimalCharge = 0;
+
+        if (opts.injectPageScript || opts.injectFrameScript) {
+            await auth.assertTier(0, 'Script injection');
+            minimalCharge = 4_000;
+        }
+
+        if (opts.withGeneratedAlt) {
+            await auth.assertTier(0, 'Alt text generation');
+            minimalCharge = 4_000;
+        }
+
+        if (opts.withIframe) {
+            await auth.assertTier(0, 'Iframe');
+        }
+
+        if (opts.engine === ENGINE_TYPE.CF_BROWSER_RENDERING) {
+            await auth.assertTier(0, 'Cloudflare browser rendering');
+            minimalCharge = 4_000;
+        }
+
+        if (opts.respondWith.includes('lm') || opts.engine?.includes('lm')) {
+            await auth.assertTier(0, 'Language model');
+            minimalCharge = 4_000;
+            chargeScalar = 3;
+        }
+
+        if (opts.proxy && opts.proxy !== 'none') {
+            await auth.assertTier(['auto', 'any'].includes(opts.proxy) ? 0 : 2, 'Proxy allocation');
+            chargeScalar = 5;
+        }
+
+        return {
+            budget: opts.tokenBudget || 0,
+            chargeScalar,
+            minimalCharge,
+        };
+    }
+
+    saasApplyTierPolicy(policy: Awaited<ReturnType<typeof this.saasAssertTierPolicy>>, chargeAmount: number) {
+        const effectiveChargeAmount = policy.chargeScalar * Math.max(chargeAmount, policy.minimalCharge);
+        if (policy.budget && policy.budget < effectiveChargeAmount) {
+            throw new BudgetExceededError(`Token budget (${policy.budget}) exceeded, intended charge amount ${effectiveChargeAmount}`);
+        }
+
+        return effectiveChargeAmount;
     }
 }
