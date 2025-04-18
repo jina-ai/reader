@@ -1301,13 +1301,13 @@ export class CrawlerHost extends RPCHost {
         let chargeScalar = 1;
         let minimalCharge = 0;
 
-        if (opts.injectPageScript || opts.injectFrameScript) {
-            await auth.assertTier(0, 'Script injection');
-            minimalCharge = 4_000;
-        }
-
         if (opts.withGeneratedAlt) {
             await auth.assertTier(0, 'Alt text generation');
+            minimalCharge = 765;
+        }
+
+        if (opts.injectPageScript || opts.injectFrameScript) {
+            await auth.assertTier(0, 'Script injection');
             minimalCharge = 4_000;
         }
 
