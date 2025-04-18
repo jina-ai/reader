@@ -19,6 +19,7 @@ import { AsyncLocalContext } from '../services/async-context';
 import finalizer, { Finalizer } from '../services/finalizer';
 import { SerpHost } from '../api/serp';
 import koaCompress from 'koa-compress';
+import { getAuditionMiddleware } from '../shared/utils/audition';
 
 @singleton()
 export class SERPStandAloneServer extends KoaServer {
@@ -107,6 +108,7 @@ export class SERPStandAloneServer extends KoaServer {
     }
 
     registerRoutes(): void {
+        this.koaApp.use(getAuditionMiddleware());
         this.koaApp.use(koaCompress({
             filter(type) {
                 if (type.startsWith('text/')) {
