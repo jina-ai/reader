@@ -1,43 +1,11 @@
-import { singleton } from 'tsyringe';
-import { Also, AutoCastable, Prop } from 'civkit/civ-rpc';
+import { container, singleton } from 'tsyringe';
+import { Also, ApplicationError, AutoCastable, Prop, ResourcePolicyDenyError, RPCReflection } from 'civkit/civ-rpc';
 import { ObjectId } from 'mongodb';
 import { MongoCollection } from '../services/mongodb';
 import { getTraceId } from 'civkit/async-context';
+import { RateLimitTriggeredError } from '../services/errors';
+import type { RateLimitDesc } from './jina-embeddings-token-account';
 
-export class RateLimitDesc extends AutoCastable {
-    @Prop({
-        default: 1000
-    })
-    _id!: ObjectId;
-
-    @Prop({
-        default: 1000
-    })
-    occurrence!: number;
-
-    @Prop({
-        default: 3600
-    })
-    periodSeconds!: number;
-
-    @Prop()
-    notBefore?: Date;
-
-    @Prop()
-    notAfter?: Date;
-
-    isEffective() {
-        const now = new Date();
-        if (this.notBefore && this.notBefore > now) {
-            return false;
-        }
-        if (this.notAfter && this.notAfter < now) {
-            return false;
-        }
-
-        return true;
-    }
-}
 
 export enum API_CALL_STATUS {
     SUCCESS = 'success',
@@ -105,8 +73,9 @@ export class APICallLog extends AutoCastable {
 
 
 @singleton()
-export class RateLimitControl extends MongoCollection<APICallLog> {
-    override collectionName = 'apiCallLogs'
+export class RateLimitCollection extends MongoCollection<APICallLog> {
+    override collectionName = 'apiCallLogs';
+    override typeclass = APICallLog;
 
     override async init() {
         await this.dependencyReady();
@@ -114,58 +83,44 @@ export class RateLimitControl extends MongoCollection<APICallLog> {
         this.emit('ready');
     }
 
-    async queryByUid(uid: string, pointInTime: Date, ...tags: string[]) {
-        let q = APICall.COLLECTION
-            .orderBy('createdAt', 'asc')
-            .where('createdAt', '>=', pointInTime)
-            .where('status', 'in', [API_CALL_STATUS.SUCCESS, API_CALL_STATUS.PENDING])
-            .where('uid', '==', uid);
-        if (tags.length) {
-            q = q.where('tags', 'array-contains-any', tags);
-        }
-
-        return APICall.fromFirestoreQuery(q);
-    }
-
-    async queryByIp(ip: string, pointInTime: Date, ...tags: string[]) {
-        let q = APICall.COLLECTION
-            .orderBy('createdAt', 'asc')
-            .where('createdAt', '>=', pointInTime)
-            .where('status', 'in', [API_CALL_STATUS.SUCCESS, API_CALL_STATUS.PENDING])
-            .where('ip', '==', ip);
-        if (tags.length) {
-            q = q.where('tags', 'array-contains-any', tags);
-        }
-
-        return APICall.fromFirestoreQuery(q);
-    }
-
     async assertUidPeriodicLimit(uid: string, pointInTime: Date, limit: number, ...tags: string[]) {
         if (limit <= 0) {
             throw new ResourcePolicyDenyError(`This UID(${uid}) is not allowed to call this endpoint (rate limit quota is 0).`);
         }
 
-        let q = APICall.COLLECTION
-            .orderBy('createdAt', 'asc')
-            .where('createdAt', '>=', pointInTime)
-            .where('status', 'in', [API_CALL_STATUS.SUCCESS, API_CALL_STATUS.PENDING])
-            .where('uid', '==', uid);
+        const query: any = {
+            createdAt: {
+                $gte: pointInTime,
+            },
+            status: {
+                $in: [API_CALL_STATUS.SUCCESS, API_CALL_STATUS.PENDING],
+            },
+            uid,
+        };
         if (tags.length) {
-            q = q.where('tags', 'array-contains-any', tags);
+            query.tags = {
+                $in: tags,
+            };
         }
+
         try {
-            const count = (await q.count().get()).data().count;
+            const count = await this.collection.countDocuments(query);
 
             if (count >= limit) {
-                const r = await APICall.fromFirestoreQuery(q.limit(1));
-                const [r1] = r;
+                const r = await this.findOne(query, { sort: { createdAt: 1 } });
+                if (!r) {
+                    throw RateLimitTriggeredError.from({
+                        message: `Per UID rate limit exceeded (${tags.join(',') || 'called'} ${limit} times since ${pointInTime})`,
+                    });
+                }
 
-                const dtMs = Math.abs(r1.createdAt?.valueOf() - pointInTime.valueOf());
+                const dtMs = Math.abs(r?.createdAt?.valueOf() - pointInTime.valueOf());
                 const dtSec = Math.ceil(dtMs / 1000);
 
                 throw RateLimitTriggeredError.from({
                     message: `Per UID rate limit exceeded (${tags.join(',') || 'called'} ${limit} times since ${pointInTime})`,
                     retryAfter: dtSec,
+                    retryAfterDate: new Date(Date.now() + dtMs),
                 });
             }
 
@@ -181,28 +136,40 @@ export class RateLimitControl extends MongoCollection<APICallLog> {
     }
 
     async assertIPPeriodicLimit(ip: string, pointInTime: Date, limit: number, ...tags: string[]) {
-        let q = APICall.COLLECTION
-            .orderBy('createdAt', 'asc')
-            .where('createdAt', '>=', pointInTime)
-            .where('status', 'in', [API_CALL_STATUS.SUCCESS, API_CALL_STATUS.PENDING])
-            .where('ip', '==', ip);
+        const query: any = {
+            createdAt: {
+                $gte: pointInTime,
+            },
+            status: {
+                $in: [API_CALL_STATUS.SUCCESS, API_CALL_STATUS.PENDING],
+            },
+            ip,
+        };
         if (tags.length) {
-            q = q.where('tags', 'array-contains-any', tags);
+            query.tags = {
+                $in: tags,
+            };
         }
 
         try {
-            const count = (await q.count().get()).data().count;
+            const count = await this.collection.countDocuments(query);
 
             if (count >= limit) {
-                const r = await APICall.fromFirestoreQuery(q.limit(1));
-                const [r1] = r;
+                const r = await this.collection.findOne(query, { sort: { createdAt: 1 } });
 
-                const dtMs = Math.abs(r1.createdAt?.valueOf() - pointInTime.valueOf());
+                if (!r) {
+                    throw RateLimitTriggeredError.from({
+                        message: `Per IP rate limit exceeded (${tags.join(',') || 'called'} ${limit} times since ${pointInTime})`,
+                    });
+                }
+
+                const dtMs = Math.abs(r.createdAt?.valueOf() - pointInTime.valueOf());
                 const dtSec = Math.ceil(dtMs / 1000);
 
                 throw RateLimitTriggeredError.from({
                     message: `Per IP rate limit exceeded (${tags.join(',') || 'called'} ${limit} times since ${pointInTime})`,
                     retryAfter: dtSec,
+                    retryAfterDate: new Date(Date.now() + dtMs),
                 });
             }
 
@@ -217,17 +184,13 @@ export class RateLimitControl extends MongoCollection<APICallLog> {
         return 0;
     }
 
-    record(partialRecord: Partial<APICall>) {
+    record(partialRecord: Partial<APICallLog>) {
         if (partialRecord.uid) {
-            const record = APICall.from(partialRecord);
-            const newId = APICall.COLLECTION.doc().id;
-            record._id = newId;
+            const record = APICallLog.from(partialRecord);
 
             return record;
         }
-        const record = APICall.from(partialRecord);
-        const newId = APICall.COLLECTION.doc().id;
-        record._id = newId;
+        const record = APICallLog.from(partialRecord);
 
         return record;
     }
@@ -244,16 +207,17 @@ export class RateLimitControl extends MongoCollection<APICallLog> {
             tags,
         });
 
-        r.save().catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
+        this.insertOne(r).catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
+
         rpcReflect.then(() => {
             r.status = API_CALL_STATUS.SUCCESS;
-            r.save()
+            this.updateOne({ _id: r._id }, { $set: { status: API_CALL_STATUS.SUCCESS } })
                 .catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
         });
         rpcReflect.catch((err) => {
             r.status = API_CALL_STATUS.ERROR;
             r.error = err.toString();
-            r.save()
+            this.updateOne({ _id: r._id }, { $set: { status: API_CALL_STATUS.ERROR, error: err.toString() } })
                 .catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
         });
 
@@ -274,17 +238,16 @@ export class RateLimitControl extends MongoCollection<APICallLog> {
             ip,
             tags,
         });
-
-        r.save().catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
+        this.collection.insertOne(r).catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
         rpcReflect.then(() => {
             r.status = API_CALL_STATUS.SUCCESS;
-            r.save()
+            this.collection.updateOne({ _id: r._id }, { $set: { status: API_CALL_STATUS.SUCCESS } })
                 .catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
         });
         rpcReflect.catch((err) => {
             r.status = API_CALL_STATUS.ERROR;
             r.error = err.toString();
-            r.save()
+            this.collection.updateOne({ _id: r._id }, { $set: { status: API_CALL_STATUS.ERROR, error: err.toString() } })
                 .catch((err) => this.logger.warn(`Failed to save rate limit record`, { err }));
         });
 
@@ -292,6 +255,6 @@ export class RateLimitControl extends MongoCollection<APICallLog> {
     }
 }
 
-const instance = container.resolve(RateLimitControl);
+const instance = container.resolve(RateLimitCollection);
 
 export default instance;

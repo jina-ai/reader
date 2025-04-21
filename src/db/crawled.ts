@@ -1,15 +1,18 @@
-import { Also, parseJSONText, Prop } from 'civkit';
-import { FirestoreRecord } from '../shared/lib/firestore';
+import { singleton, container } from 'tsyringe';
+import { Also, AutoCastable, Prop } from 'civkit/civ-rpc';
 import _ from 'lodash';
 import type { PageSnapshot } from '../services/puppeteer';
+import { MongoCollection } from '../services/mongodb';
+import { ObjectId } from 'mongodb';
 
 @Also({
     dictOf: Object
 })
-export class Crawled extends FirestoreRecord {
-    static override collectionName = 'crawled';
-
-    override _id!: string;
+export class Crawled extends AutoCastable {
+    @Prop({
+        defaultFactory: () => new ObjectId()
+    })
+    _id!: ObjectId;
 
     @Prop({
         required: true
@@ -42,31 +45,15 @@ export class Crawled extends FirestoreRecord {
     @Prop()
     expireAt!: Date;
 
-    static patchedFields = [
-        'snapshot'
-    ];
-
-    static override from(input: any) {
-        for (const field of this.patchedFields) {
-            if (typeof input[field] === 'string') {
-                input[field] = parseJSONText(input[field]);
-            }
-        }
-
-        return super.from(input) as Crawled;
-    }
-
-    override degradeForFireStore() {
-        const copy: any = { ...this };
-
-        for (const field of (this.constructor as typeof Crawled).patchedFields) {
-            if (typeof copy[field] === 'object') {
-                copy[field] = JSON.stringify(copy[field]) as any;
-            }
-        }
-
-        return copy;
-    }
-
     [k: string]: any;
 }
+
+@singleton()
+export class PageCacheCollection extends MongoCollection<Crawled> {
+    override collectionName = 'pageCaches';
+    override typeclass = Crawled;
+}
+
+const instance = container.resolve(PageCacheCollection);
+
+export default instance;

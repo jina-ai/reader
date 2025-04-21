@@ -1,14 +1,18 @@
-import { Also, Prop } from 'civkit';
-import { FirestoreRecord } from '../shared/lib/firestore';
+import { singleton, container } from 'tsyringe';
+import { Also, AutoCastable, Prop } from 'civkit/civ-rpc';
 import _ from 'lodash';
+import { ObjectId } from 'mongodb';
+import { MongoCollection } from '../services/mongodb';
 
 @Also({
     dictOf: Object
 })
-export class ImgAlt extends FirestoreRecord {
-    static override collectionName = 'imgAlts';
+export class ImgAlt extends AutoCastable {
 
-    override _id!: string;
+    @Prop({
+        defaultFactory: () => new ObjectId()
+    })
+    _id!: ObjectId;
 
     @Prop({
         required: true
@@ -40,3 +44,14 @@ export class ImgAlt extends FirestoreRecord {
 
     [k: string]: any;
 }
+
+
+@singleton()
+export class ImageAltCollection extends MongoCollection<ImgAlt> {
+    override collectionName = 'imageAlts';
+    override typeclass = ImgAlt;
+}
+
+const instance = container.resolve(ImageAltCollection);
+
+export default instance;

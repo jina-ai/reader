@@ -1,13 +1,16 @@
-import { Also, Prop } from 'civkit';
-import { FirestoreRecord } from '../shared/lib/firestore';
+import { singleton, container } from 'tsyringe';
+import { Also, AutoCastable, Prop } from 'civkit/civ-rpc';
+import { ObjectId } from 'mongodb';
+import { MongoCollection } from '../services/mongodb';
 
 @Also({
     dictOf: Object
 })
-export class DomainBlockade extends FirestoreRecord {
-    static override collectionName = 'domainBlockades';
-
-    override _id!: string;
+export class DomainBlockade extends AutoCastable {
+    @Prop({
+        defaultFactory: () => new ObjectId()
+    })
+    _id!: string;
 
     @Prop({
         required: true
@@ -28,3 +31,14 @@ export class DomainBlockade extends FirestoreRecord {
 
     [k: string]: any;
 }
+
+
+@singleton()
+export class DomainBlockadeCollection extends MongoCollection<DomainBlockade> {
+    override collectionName = 'domainBlockades';
+    override typeclass = DomainBlockade;
+}
+
+const instance = container.resolve(DomainBlockadeCollection);
+
+export default instance;

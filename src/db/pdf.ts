@@ -1,14 +1,18 @@
-import { Also, Prop, parseJSONText } from 'civkit';
-import { FirestoreRecord } from '../shared/lib/firestore';
+import { singleton, container } from 'tsyringe';
+import { Also, AutoCastable, Prop } from 'civkit/civ-rpc';
 import _ from 'lodash';
+import { ObjectId } from 'mongodb';
+import { MongoCollection } from '../services/mongodb';
 
 @Also({
     dictOf: Object
 })
-export class PDFContent extends FirestoreRecord {
-    static override collectionName = 'pdfs';
+export class PDFContent extends AutoCastable {
 
-    override _id!: string;
+    @Prop({
+        defaultFactory: () => new ObjectId()
+    })
+    _id!: ObjectId;
 
     @Prop({
         required: true
@@ -35,31 +39,16 @@ export class PDFContent extends FirestoreRecord {
     @Prop()
     expireAt?: Date;
 
-    static patchedFields = [
-        'meta'
-    ];
-
-    static override from(input: any) {
-        for (const field of this.patchedFields) {
-            if (typeof input[field] === 'string') {
-                input[field] = parseJSONText(input[field]);
-            }
-        }
-
-        return super.from(input) as PDFContent;
-    }
-
-    override degradeForFireStore() {
-        const copy: any = { ...this };
-
-        for (const field of (this.constructor as typeof PDFContent).patchedFields) {
-            if (typeof copy[field] === 'object') {
-                copy[field] = JSON.stringify(copy[field]) as any;
-            }
-        }
-
-        return copy;
-    }
-
     [k: string]: any;
 }
+
+
+@singleton()
+export class PDFContentCollection extends MongoCollection<PDFContent> {
+    override collectionName = 'pdfs';
+    override typeclass = PDFContent;
+}
+
+const instance = container.resolve(PDFContentCollection);
+
+export default instance;

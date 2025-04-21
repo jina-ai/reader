@@ -1,14 +1,17 @@
-import { Also, parseJSONText, Prop } from 'civkit';
-import { FirestoreRecord } from '../shared/lib/firestore';
+import { singleton, container } from 'tsyringe';
+import { Also, Prop, AutoCastable } from 'civkit/civ-rpc';
 import _ from 'lodash';
+import { ObjectId } from 'mongodb';
+import { MongoCollection } from '../services/mongodb';
 
 @Also({
     dictOf: Object
 })
-export class SearchResult extends FirestoreRecord {
-    static override collectionName = 'searchResults';
-
-    override _id!: string;
+export class SearchResult extends AutoCastable {
+    @Prop({
+        defaultFactory: () => new ObjectId()
+    })
+    _id!: string;
 
     @Prop({
         required: true
@@ -30,39 +33,20 @@ export class SearchResult extends FirestoreRecord {
     expireAt?: Date;
 
     [k: string]: any;
-
-    static patchedFields = [
-        'query',
-        'response',
-    ];
-
-    static override from(input: any) {
-        for (const field of this.patchedFields) {
-            if (typeof input[field] === 'string') {
-                input[field] = parseJSONText(input[field]);
-            }
-        }
-
-        return super.from(input) as SearchResult;
-    }
-
-    override degradeForFireStore() {
-        const copy: any = { ...this };
-
-        for (const field of (this.constructor as typeof SearchResult).patchedFields) {
-            if (typeof copy[field] === 'object') {
-                copy[field] = JSON.stringify(copy[field]) as any;
-            }
-        }
-
-        return copy;
-    }
 }
 
-export class SerperSearchResult extends SearchResult {
-    static override collectionName = 'serperSearchResults';
+@singleton()
+export class SerperResultsCollection extends MongoCollection<SearchResult> {
+    override collectionName = 'serperSearchResults';
+    override typeclass = SearchResult;
 }
 
-export class SERPResult extends SearchResult {
-    static override collectionName = 'SERPResults';
+@singleton()
+export class SERPResultsCollection extends MongoCollection<SearchResult> {
+    override collectionName = 'SERPResults';
+    override typeclass = SearchResult;
 }
+
+const instance = container.resolve(SERPResultsCollection);
+
+export default instance;
