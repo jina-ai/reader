@@ -17,6 +17,7 @@ import { AsyncLocalContext } from '../services/async-context';
 import envConfig from '../shared/services/secrets';
 import { JinaEmbeddingsDashboardHTTP } from '../shared/3rd-party/jina-embeddings';
 import { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
+import { TierFeatureConstraintError } from '../services/errors';
 
 const authDtoLogger = logger.child({ service: 'JinaAuthDTO' });
 
@@ -234,6 +235,30 @@ export class JinaEmbeddingsAuthDTO extends AutoCastable {
         await this.getBrief();
 
         return this.user!;
+    }
+
+    async assertTier(n: number, feature?: string) {
+        let user;
+        try {
+            user = await this.assertUser();
+        } catch (err) {
+            if (err instanceof AuthenticationRequiredError) {
+                throw new AuthenticationRequiredError({
+                    message: `Authentication is required to use this feature${feature ? ` (${feature})` : ''}. Please provide a valid API key.`
+                });
+            }
+
+            throw err;
+        }
+
+        const tier = parseInt(user.metadata?.speed_level);
+        if (isNaN(tier) || tier < n) {
+            throw new TierFeatureConstraintError({
+                message: `Your current plan does not support this feature${feature ? ` (${feature})` : ''}. Please upgrade your plan.`
+            });
+        }
+
+        return true;
     }
 
     getRateLimits(...tags: string[]) {

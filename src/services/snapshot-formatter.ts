@@ -827,7 +827,10 @@ ${suffixMixins.length ? `\n${suffixMixins.join('\n\n')}\n` : ''}`;
                     throw new AssertionFailureError(`Failed to access ${url}: file too large`);
                 }
                 snapshot.html = await readFile(await file.filePath, encoding);
-                const innerCharset = snapshot.html.slice(0, 1024).match(/<meta[^>]+text\/html;\s*?charset=([^>"]+)\"/i)?.[1]?.toLowerCase();
+                let innerCharset;
+                const peek = snapshot.html.slice(0, 1024);
+                innerCharset ??= peek.match(/<meta[^>]+text\/html;\s*?charset=([^>"]+)/i)?.[1]?.toLowerCase();
+                innerCharset ??= peek.match(/<meta[^>]+charset="([^>"]+)\"/i)?.[1]?.toLowerCase();
                 if (innerCharset && innerCharset !== encoding) {
                     snapshot.html = await readFile(await file.filePath, innerCharset);
                 }

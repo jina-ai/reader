@@ -27,7 +27,7 @@ export class EmailUnverifiedError extends ApplicationError { }
 export class InsufficientCreditsError extends ApplicationError { }
 
 @StatusCode(40202)
-export class FreeFeatureLimitError extends ApplicationError { }
+export class TierFeatureConstraintError extends ApplicationError { }
 
 @StatusCode(40203)
 export class InsufficientBalanceError extends ApplicationError { }

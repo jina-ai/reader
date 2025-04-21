@@ -133,7 +133,7 @@ export class SerpHost extends RPCHost {
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
-        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
+        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) _hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
         @Param('fallback') fallback?: boolean,
@@ -294,7 +294,7 @@ export class SerpHost extends RPCHost {
             q,
             num,
             gl,
-            hl,
+            // hl,
             location,
             page,
         }, crawlerOptions);
@@ -324,7 +324,7 @@ export class SerpHost extends RPCHost {
                     q: realQuery,
                     num,
                     gl,
-                    hl,
+                    // hl,
                     location,
                 }, crawlerOptions);
                 if (results?.length) {
@@ -341,7 +341,7 @@ export class SerpHost extends RPCHost {
                     q: realQuery,
                     num,
                     gl,
-                    hl,
+                    // hl,
                     location,
                 }, crawlerOptions);
             }
