@@ -1,4 +1,3 @@
-
 import { singleton } from 'tsyringe';
 import { GlobalLogger } from '../logger';
 import { SecretExposer } from '../../shared/services/secrets';

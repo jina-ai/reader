@@ -49,6 +49,8 @@ import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
 import { HTTPServiceError } from 'civkit/http';
 import { GeoIPService } from '../services/geoip';
+import { PDFContent, PDFContentCollection } from '../db/pdf';
+import { ExtractedPDF, PDFExtractor } from '../services/pdf-extract';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -98,6 +100,8 @@ export class CrawlerHost extends RPCHost {
         protected tempFileManager: TempFileManager,
         protected geoIpService: GeoIPService,
         protected miscService: MiscService,
+        protected pdfContentCollection: PDFContentCollection,
+        protected pdfExtractor: PDFExtractor,
     ) {
         super(...arguments);
 
@@ -1112,35 +1116,135 @@ export class CrawlerHost extends RPCHost {
         return this.formatSnapshotWithPDFSideLoad(respondWith, snapshot, presumedURL, urlValidMs, scrappingOptions);
     }
 
+    async cachedPDFExtract(url: string, cacheTolerance: number = 1000 * 3600 * 24, alternativeUrl?: string): Promise<ExtractedPDF | undefined> {
+        if (!url) {
+            return undefined;
+        }
+        let nameUrl = alternativeUrl || url;
+        const digest = md5Hasher.hash(nameUrl);
+
+        if (url.startsWith('data:')) {
+            nameUrl = `blob://pdf:${digest}`;
+        }
+
+        const cache: PDFContent | undefined = nameUrl.startsWith('blob:') ? undefined :
+            (await this.pdfContentCollection.findOne({ urlDigest: digest }, { sort: { createdAt: -1 } }));
+
+        if (cache) {
+            const age = Date.now() - cache?.createdAt.valueOf();
+            const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
+            this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for PDF ${nameUrl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
+                data: url, url: nameUrl, digest, age, stale, cacheTolerance
+            });
+
+            if (!stale) {
+                if (cache.content && cache.text) {
+                    return {
+                        meta: cache.meta,
+                        content: cache.content,
+                        text: cache.text
+                    };
+                }
+
+                try {
+                    const r = await this.firebaseObjectStorage.downloadFile(`pdfs/${cache._id}`);
+                    let cached = JSON.parse(r.toString('utf-8'));
+
+                    return {
+                        meta: cached.meta,
+                        content: cached.content,
+                        text: cached.text
+                    };
+                } catch (err) {
+                    this.logger.warn(`Unable to load cached content for ${nameUrl}`, { err });
+
+                    return undefined;
+                }
+            }
+        }
+
+        let extracted;
+
+        try {
+            extracted = await this.pdfExtractor.extract(url);
+        } catch (err: any) {
+            this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err, url, nameUrl });
+            throw new AssertionFailureError(`Unable to process ${nameUrl} as pdf: ${err?.message}`);
+        }
+
+        if (!this.threadLocal.ctx.DNT && !nameUrl.startsWith('blob:')) {
+            const doc = PDFContent.from({
+                src: nameUrl,
+                meta: extracted?.meta || {},
+                urlDigest: digest,
+                createdAt: new Date(),
+                expireAt: new Date(Date.now() + this.cacheRetentionMs)
+            });
+            await this.firebaseObjectStorage.saveFile(`pdfs/${doc._id}`,
+                Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
+            this.pdfContentCollection.save(
+                doc
+            ).catch((r) => {
+                this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
+            });
+        }
+
+        return extracted;
+    }
+
     async formatSnapshotWithPDFSideLoad(mode: string, snapshot: PageSnapshot, nominalUrl?: URL, urlValidMs?: number, scrappingOptions?: ScrappingOptions) {
         const snapshotCopy = _.cloneDeep(snapshot);
 
         if (snapshotCopy.pdfs?.length) {
+            // in case of Google Web Cache content
             const pdfUrl = snapshotCopy.pdfs[0];
+            let filePdfUrl = pdfUrl;
             if (pdfUrl.startsWith('http')) {
-                const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
-                if (sideLoaded?.status === 200 && sideLoaded.body) {
-                    snapshotCopy.pdfs[0] = pathToFileURL(await sideLoaded?.body.filePath).href;
-                    return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
-                }
-
-                const r = await this.curlControl.sideLoad(new URL(pdfUrl), scrappingOptions).catch((err) => {
-                    if (err instanceof ServiceBadAttemptError) {
-                        return Promise.reject(new AssertionFailureError(`Failed to load PDF(${pdfUrl}): ${err.message}`));
+                do {
+                    const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
+                    if (sideLoaded?.status === 200 && sideLoaded.body) {
+                        filePdfUrl = pathToFileURL(await sideLoaded?.body.filePath).href;
+                        break;
                     }
 
-                    return Promise.reject(err);
-                });
-                if (r.status !== 200) {
-                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded status ${r.status}`);
-                }
-                if (!r.contentType.includes('application/pdf')) {
-                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded with wrong content type ${r.contentType}`);
-                }
-                if (!r.file) {
-                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server did not return a body`);
-                }
-                snapshotCopy.pdfs[0] = pathToFileURL(await r.file.filePath).href;
+                    const r = await this.curlControl.sideLoad(new URL(pdfUrl), scrappingOptions).catch((err) => {
+                        if (err instanceof ServiceBadAttemptError) {
+                            return Promise.reject(new AssertionFailureError(`Failed to load PDF(${pdfUrl}): ${err.message}`));
+                        }
+
+                        return Promise.reject(err);
+                    });
+                    if (r.status !== 200) {
+                        throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded status ${r.status}`);
+                    }
+                    if (!r.contentType.includes('application/pdf')) {
+                        throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded with wrong content type ${r.contentType}`);
+                    }
+                    if (!r.file) {
+                        throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server did not return a body`);
+                    }
+                    filePdfUrl = pathToFileURL(await r.file.filePath).href;
+                } while (false);
+            }
+            const pdf = await this.cachedPDFExtract(filePdfUrl,
+                this.threadLocal.get('cacheTolerance'),
+                pdfUrl
+            );
+            if (pdf) {
+                snapshot.title = pdf.meta?.Title;
+                snapshot.text = pdf.text || snapshot.text;
+                snapshot.parsed = {
+                    content: pdf.content,
+                    textContent: pdf.content,
+                    length: pdf.content?.length,
+                    byline: pdf.meta?.Author,
+                    lang: pdf.meta?.Language || undefined,
+                    title: pdf.meta?.Title,
+                    publishedTime: this.pdfExtractor.parsePdfDate(pdf.meta?.ModDate || pdf.meta?.CreationDate)?.toISOString(),
+                };
+
+                snapshotCopy.traits ??= [];
+                snapshotCopy.traits.push('pdf');
             }
         }
 

@@ -84,7 +84,6 @@ export class SnapshotFormatter extends AsyncService {
         protected globalLogger: GlobalLogger,
         protected jsdomControl: JSDomControl,
         protected altTextService: AltTextService,
-        protected pdfExtractor: PDFExtractor,
         protected threadLocal: AsyncContext,
         protected firebaseObjectStorage: FirebaseStorageBucketControl,
     ) {
@@ -151,29 +150,6 @@ export class SnapshotFormatter extends AsyncService {
             Object.defineProperty(f, 'textRepresentation', { value: snapshot.html, enumerable: false, configurable: true });
         }
 
-        let pdfMode = false;
-        // in case of Google Web Cache content
-        if (snapshot.pdfs?.length && (!snapshot.title || snapshot.title.startsWith('cache:'))) {
-            const pdf = await this.pdfExtractor.cachedExtract(snapshot.pdfs[0],
-                this.threadLocal.get('cacheTolerance'),
-                snapshot.pdfs[0].startsWith('http') ? undefined : snapshot.href,
-            );
-            if (pdf) {
-                pdfMode = true;
-                snapshot.title = pdf.meta?.Title;
-                snapshot.text = pdf.text || snapshot.text;
-                snapshot.parsed = {
-                    content: pdf.content,
-                    textContent: pdf.content,
-                    length: pdf.content?.length,
-                    byline: pdf.meta?.Author,
-                    lang: pdf.meta?.Language || undefined,
-                    title: pdf.meta?.Title,
-                    publishedTime: this.pdfExtractor.parsePdfDate(pdf.meta?.ModDate || pdf.meta?.CreationDate)?.toISOString(),
-                };
-            }
-        }
-
         if (mode.includes('text')) {
             modeOK = true;
             Object.assign(f, {
@@ -213,7 +189,7 @@ export class SnapshotFormatter extends AsyncService {
         const uid = this.threadLocal.get('uid');
 
         do {
-            if (pdfMode) {
+            if (snapshot.traits?.includes('pdf')) {
                 contentText = (snapshot.parsed?.content || snapshot.text || '').trim();
                 break;
             }

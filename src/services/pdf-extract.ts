@@ -45,6 +45,13 @@ function isRotatedByAtLeast35Degrees(transform?: [number, number, number, number
     return rotationAngle1 >= 35 || rotationAngle2 >= 35;
 }
 
+
+export interface ExtractedPDF {
+    meta?: Record<string, any>;
+    content: string;
+    text: string;
+}
+
 @singleton()
 export class PDFExtractor extends AsyncService {
 
@@ -270,85 +277,10 @@ export class PDFExtractor extends AsyncService {
             mdChunks[0] = mdChunks[0].trimStart();
         }
 
-        return { meta: meta.info as Record<string, any>, content: mdChunks.join(''), text: rawChunks.join('') };
+        return { meta: meta.info as Record<string, any>, content: mdChunks.join(''), text: rawChunks.join('') } as ExtractedPDF;
     }
 
-    async cachedExtract(url: string, cacheTolerance: number = 1000 * 3600 * 24, alternativeUrl?: string) {
-        if (!url) {
-            return undefined;
-        }
-        let nameUrl = alternativeUrl || url;
-        const digest = md5Hasher.hash(nameUrl);
 
-        if (this.isDataUrl(url)) {
-            nameUrl = `blob://pdf:${digest}`;
-        }
-
-        const cache: PDFContent | undefined = nameUrl.startsWith('blob:') ? undefined :
-            (await PDFContent.fromFirestoreQuery(PDFContent.COLLECTION.where('urlDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
-
-        if (cache) {
-            const age = Date.now() - cache?.createdAt.valueOf();
-            const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
-            this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for PDF ${nameUrl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
-                data: url, url: nameUrl, digest, age, stale, cacheTolerance
-            });
-
-            if (!stale) {
-                if (cache.content && cache.text) {
-                    return {
-                        meta: cache.meta,
-                        content: cache.content,
-                        text: cache.text
-                    };
-                }
-
-                try {
-                    const r = await this.firebaseObjectStorage.downloadFile(`pdfs/${cache._id}`);
-                    let cached = JSON.parse(r.toString('utf-8'));
-
-                    return {
-                        meta: cached.meta,
-                        content: cached.content,
-                        text: cached.text
-                    };
-                } catch (err) {
-                    this.logger.warn(`Unable to load cached content for ${nameUrl}`, { err });
-
-                    return undefined;
-                }
-            }
-        }
-
-        let extracted;
-
-        try {
-            extracted = await this.extract(url);
-        } catch (err: any) {
-            this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err, url, nameUrl });
-            throw new AssertionFailureError(`Unable to process ${nameUrl} as pdf: ${err?.message}`);
-        }
-
-        if (!this.asyncLocalContext.ctx.DNT && !nameUrl.startsWith('blob:')) {
-            const theID = randomUUID();
-            await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
-                Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
-            PDFContent.save(
-                PDFContent.from({
-                    _id: theID,
-                    src: nameUrl,
-                    meta: extracted?.meta || {},
-                    urlDigest: digest,
-                    createdAt: new Date(),
-                    expireAt: new Date(Date.now() + this.cacheRetentionMs)
-                }).degradeForFireStore()
-            ).catch((r) => {
-                this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
-            });
-        }
-
-        return extracted;
-    }
 
     parsePdfDate(pdfDate: string | undefined) {
         if (!pdfDate) {

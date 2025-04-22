@@ -72,6 +72,7 @@ export interface PageSnapshot {
     lastMutationIdle?: number;
     lastContentResourceLoaded?: number;
     lastMediaResourceLoaded?: number;
+    traits?: string[];
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
