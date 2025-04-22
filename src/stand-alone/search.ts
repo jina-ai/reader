@@ -4,7 +4,7 @@ import { container, singleton } from 'tsyringe';
 import { KoaServer } from 'civkit/civ-rpc/koa';
 import http2 from 'http2';
 import http from 'http';
-import { SearcherHost } from '../api/searcher-serper';
+import { SearcherHost } from '../api/searcher';
 import { FsWalk, WalkOutEntity } from 'civkit/fswalk';
 import path from 'path';
 import fs from 'fs';
