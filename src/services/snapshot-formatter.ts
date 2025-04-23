@@ -9,7 +9,6 @@ import { AsyncContext } from '../shared/services/async-context';
 import { Threaded } from '../services/threaded';
 import { JSDomControl } from './jsdom';
 import { AltTextService } from './alt-text';
-import { PDFExtractor } from './pdf-extract';
 import { cleanAttribute } from '../utils/misc';
 import _ from 'lodash';
 import { STATUS_CODES } from 'http';

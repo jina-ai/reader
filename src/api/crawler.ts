@@ -18,8 +18,8 @@ import { FancyFile } from 'civkit/fancy-file';
 
 import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE, RESPOND_TIMING } from '../dto/crawler-options';
 
-import { Crawled } from '../db/crawled';
-import { DomainBlockade } from '../db/domain-blockade';
+import { Crawled, PageCacheCollection } from '../db/crawled';
+import { DomainBlockade, DomainBlockadeCollection } from '../db/domain-blockade';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
@@ -102,6 +102,8 @@ export class CrawlerHost extends RPCHost {
         protected miscService: MiscService,
         protected pdfContentCollection: PDFContentCollection,
         protected pdfExtractor: PDFExtractor,
+        protected domainBlockadeCollection: DomainBlockadeCollection,
+        protected pageCacheCollection: PageCacheCollection,
     ) {
         super(...arguments);
 
@@ -145,7 +147,7 @@ export class CrawlerHost extends RPCHost {
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
             this.logger.warn(`Abuse detected on ${abuseEvent.url}, blocking ${abuseEvent.url.hostname}`, { reason: abuseEvent.reason, sn: abuseEvent.sn });
 
-            await DomainBlockade.save(DomainBlockade.from({
+            await this.domainBlockadeCollection.save(DomainBlockade.from({
                 domain: abuseEvent.url.hostname.toLowerCase(),
                 triggerReason: `${abuseEvent.reason}`,
                 triggerUrl: abuseEvent.url.toString(),
@@ -310,12 +312,14 @@ export class CrawlerHost extends RPCHost {
         if (!uid) {
             // Enforce no proxy is allocated for anonymous users due to abuse.
             crawlerOptions.proxy = 'none';
-            const blockade = (await DomainBlockade.fromFirestoreQuery(
-                DomainBlockade.COLLECTION
-                    .where('domain', '==', targetUrl.hostname.toLowerCase())
-                    .where('expireAt', '>=', new Date())
-                    .limit(1)
-            ))[0];
+            const blockade = await this.domainBlockadeCollection.findOne({
+                domain: targetUrl.hostname.toLowerCase(),
+                expireAt: { $gte: new Date() }
+            }).catch((err) => {
+                this.logger.warn(`Failed to query domain blockade for ${targetUrl.hostname}`, { err: marshalErrorLike(err) });
+                return undefined;
+            });
+
             if (blockade) {
                 throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
@@ -522,19 +526,10 @@ export class CrawlerHost extends RPCHost {
     async *queryCache(urlToCrawl: URL, cacheTolerance: number) {
         const digest = this.getUrlDigest(urlToCrawl);
 
-        const cache = (
-            await
-                (Crawled.fromFirestoreQuery(
-                    Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)
-                ).catch((err) => {
-                    this.logger.warn(`Failed to query cache, unknown issue`, { err });
-                    // https://github.com/grpc/grpc-node/issues/2647
-                    // https://github.com/googleapis/nodejs-firestore/issues/1023
-                    // https://github.com/googleapis/nodejs-firestore/issues/1023
-
-                    return undefined;
-                }))
-        )?.[0];
+        const cache = await this.pageCacheCollection.findOne({ urlPathDigest: digest }, { sort: { createdAt: -1 } }).catch((err) => {
+            this.logger.warn(`Failed to query cache, unknown issue`, { err });
+            return undefined;
+        });
 
         yield cache;
 
@@ -593,7 +588,6 @@ export class CrawlerHost extends RPCHost {
         const nowDate = new Date();
 
         const cache = Crawled.from({
-            _id: randomUUID(),
             url: urlToCrawl.toString(),
             createdAt: nowDate,
             expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs),
@@ -637,7 +631,7 @@ export class CrawlerHost extends RPCHost {
             cache.pageshotAvailable = true;
         }
         await savingOfSnapshot;
-        const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
+        const r = await this.pageCacheCollection.save(cache).catch((err) => {
             this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err: marshalErrorLike(err) });
 
             return undefined;

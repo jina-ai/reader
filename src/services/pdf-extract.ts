@@ -1,12 +1,10 @@
 import { singleton } from 'tsyringe';
 import _ from 'lodash';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
-import { AssertionFailureError, AsyncService, HashManager } from 'civkit';
+import { AsyncService } from 'civkit/async-service';
 import { GlobalLogger } from './logger';
-import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
 import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
-import { randomUUID } from 'crypto';
 import type { PDFDocumentLoadingTask } from 'pdfjs-dist';
 import path from 'path';
 import { AsyncLocalContext } from './async-context';
@@ -17,8 +15,6 @@ dayjs.extend(timezone);
 
 const pPdfjs = import('pdfjs-dist/legacy/build/pdf.mjs');
 const nodeCmapUrl = path.resolve(require.resolve('pdfjs-dist'), '../../cmaps') + '/';
-
-const md5Hasher = new HashManager('md5', 'hex');
 
 function stdDev(numbers: number[]) {
     const mean = _.mean(numbers);

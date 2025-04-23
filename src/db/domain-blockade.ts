@@ -10,7 +10,7 @@ export class DomainBlockade extends AutoCastable {
     @Prop({
         defaultFactory: () => new ObjectId()
     })
-    _id!: string;
+    _id!: ObjectId;
 
     @Prop({
         required: true

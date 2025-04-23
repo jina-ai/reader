@@ -25,7 +25,7 @@ import { toAsyncGenerator } from '../utils/misc';
 import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { LRUCache } from 'lru-cache';
 import { API_CALL_STATUS } from '../shared/db/api-roll';
-import { SERPResult } from '../db/searched';
+import { SearchResult } from '../db/searched';
 import { SerperSearchQueryParams, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
 import { InternalJinaSerpService } from '../services/serp/internal';
 import { WebSearchEntry } from '../services/serp/compat';
