@@ -26,6 +26,7 @@ import { SerperBingSearchService, SerperGoogleSearchService } from '../services/
 import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { LRUCache } from 'lru-cache';
 import { API_CALL_STATUS } from '../shared/db/api-roll';
+import { InternalJinaSerpService } from '../services/serp/internal';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
@@ -90,6 +91,7 @@ export class SerpHost extends RPCHost {
         protected googleSerp: GoogleSERP,
         protected serperGoogle: SerperGoogleSearchService,
         protected serperBing: SerperBingSearchService,
+        protected internalSerp: InternalJinaSerpService,
     ) {
         super(...arguments);
     }
@@ -430,6 +432,7 @@ export class SerpHost extends RPCHost {
     *iterProviders(preference?: string) {
         if (preference === 'bing') {
             yield this.serperBing;
+            yield this.internalSerp;
             yield this.serperGoogle;
             yield this.googleSerp;
 
@@ -438,14 +441,14 @@ export class SerpHost extends RPCHost {
 
         if (preference === 'google') {
             yield this.googleSerp;
-            yield this.googleSerp;
+            yield this.internalSerp;
             yield this.serperGoogle;
 
             return;
         }
 
+        yield this.internalSerp;
         yield this.serperGoogle;
-        yield this.googleSerp;
         yield this.googleSerp;
     }
 
