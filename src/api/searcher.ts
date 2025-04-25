@@ -693,24 +693,24 @@ export class SearcherHost extends RPCHost {
         }
     }
 
-    *iterProviders(preference?: string) {
+    *iterProviders(preference?: string, variant?: string) {
         if (preference === 'bing') {
             yield this.serperBing;
-            yield this.jinaSerp;
+            yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
             yield this.serperGoogle;
 
             return;
         }
 
         if (preference === 'google') {
-            yield this.jinaSerp;
+            yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
             yield this.serperGoogle;
             yield this.serperGoogle;
 
             return;
         }
 
-        yield this.jinaSerp;
+        yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
         yield this.serperGoogle;
         yield this.serperGoogle;
     }
@@ -743,7 +743,7 @@ export class SearcherHost extends RPCHost {
             let r: any[] | undefined;
             let lastError;
             outerLoop:
-            for (const client of this.iterProviders(provider)) {
+            for (const client of this.iterProviders(provider, variant)) {
                 const t0 = Date.now();
                 try {
                     switch (variant) {
