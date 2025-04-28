@@ -93,7 +93,7 @@ export class SearcherHost extends RPCHost {
                 .catch((err) => {
                     this.logger.warn(`Failed to cache search result in batch`, { err });
                 });
-        }, 1000 * 60 * 10 + Math.round(1000 * Math.random())).unref();
+        }, 1000 * 10 + Math.round(1000 * Math.random())).unref();
     }
 
     override async init() {
