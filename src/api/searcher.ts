@@ -61,6 +61,8 @@ export class SearcherHost extends RPCHost {
         updateAgeOnHas: false,
     });
 
+    batchedCaches: SERPResult[] = [];
+
     constructor(
         protected globalLogger: GlobalLogger,
         protected rateLimitControl: RateLimitControl,
@@ -72,6 +74,26 @@ export class SearcherHost extends RPCHost {
         protected jinaSerp: InternalJinaSerpService,
     ) {
         super(...arguments);
+
+        setInterval(() => {
+            const thisBatch = this.batchedCaches;
+            this.batchedCaches = [];
+            if (!thisBatch.length) {
+                return;
+            }
+            const batch = SERPResult.DB.batch();
+
+            for (const x of thisBatch) {
+                batch.set(SERPResult.COLLECTION.doc(), x.degradeForFireStore());
+            }
+            batch.commit()
+                .then(() => {
+                    this.logger.debug(`Saved ${thisBatch.length} caches by batch`);
+                })
+                .catch((err) => {
+                    this.logger.warn(`Failed to cache search result in batch`, { err });
+                });
+        }, 1000 * 60 * 10 + Math.round(1000 * Math.random())).unref();
     }
 
     override async init() {
@@ -780,9 +802,8 @@ export class SearcherHost extends RPCHost {
                     createdAt: nowDate,
                     expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
                 });
-                SERPResult.save(record.degradeForFireStore()).catch((err) => {
-                    this.logger.warn(`Failed to cache search result`, { err });
-                });
+
+                this.batchedCaches.push(record);
             } else if (lastError) {
                 throw lastError;
             }

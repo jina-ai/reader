@@ -82,6 +82,8 @@ export class CrawlerHost extends RPCHost {
     abuseBlockMs = 1000 * 3600;
     domainProfileRetentionMs = 1000 * 3600 * 24 * 30;
 
+    batchedCaches: Crawled[] = [];
+
     constructor(
         protected globalLogger: GlobalLogger,
         protected puppeteerControl: PuppeteerControl,
@@ -152,6 +154,27 @@ export class CrawlerHost extends RPCHost {
             });
 
         });
+
+        setInterval(() => {
+            const thisBatch = this.batchedCaches;
+            this.batchedCaches = [];
+            if (!thisBatch.length) {
+                return;
+            }
+            const batch = Crawled.DB.batch();
+
+            for (const x of thisBatch) {
+                batch.set(Crawled.COLLECTION.doc(x._id), x.degradeForFireStore(), { merge: true });
+            }
+
+            batch.commit()
+                .then(() => {
+                    this.logger.debug(`Saved ${thisBatch.length} caches by batch`);
+                })
+                .catch((err) => {
+                    this.logger.warn(`Failed to save cache in batch`, { err });
+                });
+        }, 1000 * 10 + Math.round(1000 * Math.random())).unref();
     }
 
     override async init() {
@@ -633,13 +656,14 @@ export class CrawlerHost extends RPCHost {
             cache.pageshotAvailable = true;
         }
         await savingOfSnapshot;
-        const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
-            this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err: marshalErrorLike(err) });
+        this.batchedCaches.push(cache);
+        // const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
+        //     this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err: marshalErrorLike(err) });
 
-            return undefined;
-        });
+        //     return undefined;
+        // });
 
-        return r;
+        return cache;
     }
 
     async *iterSnapshots(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
