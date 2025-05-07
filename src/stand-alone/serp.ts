@@ -45,10 +45,6 @@ export class SERPStandAloneServer extends KoaServer {
             const ar = new AsyncResource('HTTP2ServerRequest');
             ar.runInAsyncScope(fn, this.koaApp, req, res);
         });
-        // HTTP2 p2p may break the load balancing
-        this.httpServer.updateSettings({
-            maxConcurrentStreams: 50,
-        });
         // useResourceBasedDefaultTracker();
 
         return this;

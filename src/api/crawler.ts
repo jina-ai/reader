@@ -340,6 +340,7 @@ export class CrawlerHost extends RPCHost {
             }
         }
         const crawlOpts = await this.configure(crawlerOptions);
+        this.logger.info(`Accepting request from ${uid || ctx.ip}`, { opts: crawlerOptions });
         if (crawlerOptions.robotsTxt) {
             await this.robotsTxtService.assertAccessAllowed(targetUrl, crawlerOptions.robotsTxt);
         }
