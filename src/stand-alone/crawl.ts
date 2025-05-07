@@ -44,6 +44,10 @@ export class CrawlStandAloneServer extends KoaServer {
             const ar = new AsyncResource('HTTP2ServerRequest');
             ar.runInAsyncScope(fn, this.koaApp, req, res);
         });
+        // HTTP2 p2p may break the load balancing
+        this.httpServer.updateSettings({
+            maxConcurrentStreams: 8,
+        });
         // useResourceBasedDefaultTracker();
 
         return this;
