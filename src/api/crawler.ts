@@ -285,11 +285,11 @@ export class CrawlerHost extends RPCHost {
             const rateLimitPolicy = auth.getRateLimits('CRAWL') || [
                 parseInt(user.metadata?.speed_level) >= 2 ?
                     RateLimitDesc.from({
-                        occurrence: 2000,
+                        occurrence: 5000,
                         periodSeconds: 60
                     }) :
                     RateLimitDesc.from({
-                        occurrence: 200,
+                        occurrence: 500,
                         periodSeconds: 60
                     })
             ];
