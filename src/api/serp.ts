@@ -468,7 +468,8 @@ export class SerpHost extends RPCHost {
             return;
         }
 
-        yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
+        // yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
+        yield this.serperGoogle
         yield this.serperGoogle;
         yield this.googleSerp;
     }
