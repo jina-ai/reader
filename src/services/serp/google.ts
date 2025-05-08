@@ -176,6 +176,7 @@ export class GoogleSERP extends AsyncService {
             ...opts,
             allocProxy: opts?.allocProxy || (this.nativeIPHealthy ? 'none' : 'auto'),
             proxyUrl: ctx.proxyUrl,
+            timeoutMs: 3_700
         }).catch((err) => {
             this.contextPool.destroy(ctx);
 
