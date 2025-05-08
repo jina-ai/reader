@@ -27,8 +27,10 @@ import { LRUCache } from 'lru-cache';
 import { API_CALL_STATUS } from '../shared/db/api-roll';
 import { SERPResult } from '../db/searched';
 import { SerperSearchQueryParams, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
-import { InternalJinaSerpService } from '../services/serp/internal';
 import { WebSearchEntry } from '../services/serp/compat';
+import { CommonGoogleSERP } from '../services/serp/common-serp';
+import { GoogleSERP, GoogleSERPOldFashion } from '../services/serp/google';
+import { InternalJinaSerpService } from '../services/serp/internal';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
@@ -72,6 +74,9 @@ export class SearcherHost extends RPCHost {
         protected serperGoogle: SerperGoogleSearchService,
         protected serperBing: SerperBingSearchService,
         protected jinaSerp: InternalJinaSerpService,
+        protected commonGoogleSerp: CommonGoogleSERP,
+        protected googleSERP: GoogleSERP,
+        protected googleSERPOld: GoogleSERPOldFashion,
     ) {
         super(...arguments);
 
@@ -715,26 +720,32 @@ export class SearcherHost extends RPCHost {
         }
     }
 
-    *iterProviders(preference?: string, variant?: string) {
+    *iterProviders(preference?: string, _variant?: string) {
         if (preference === 'bing') {
             yield this.serperBing;
-            yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
+            yield this.googleSERP;
+            yield this.jinaSerp;
             yield this.serperGoogle;
+            yield this.commonGoogleSerp;
 
             return;
         }
 
         if (preference === 'google') {
-            yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
+            yield this.googleSERP;
+            yield this.jinaSerp;
             yield this.serperGoogle;
-            yield this.serperGoogle;
+            yield this.commonGoogleSerp;
+            yield this.googleSERPOld;
 
             return;
         }
 
-        yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
+        yield this.googleSERP;
+        yield this.jinaSerp;
         yield this.serperGoogle;
-        yield this.serperGoogle;
+        yield this.commonGoogleSerp;
+        yield this.googleSERPOld;
     }
 
     async cachedSearch(variant: 'web' | 'news' | 'images', query: Record<string, any>, noCache?: boolean): Promise<WebSearchEntry[]> {
@@ -767,22 +778,27 @@ export class SearcherHost extends RPCHost {
             outerLoop:
             for (const client of this.iterProviders(provider, variant)) {
                 const t0 = Date.now();
-                try {
-                    switch (variant) {
-                        case 'images': {
-                            r = await Reflect.apply(client.imageSearch, client, [query]);
-                            break;
-                        }
-                        case 'news': {
-                            r = await Reflect.apply(client.newsSearch, client, [query]);
-                            break;
-                        }
-                        case 'web':
-                        default: {
-                            r = await Reflect.apply(client.webSearch, client, [query]);
-                            break;
-                        }
+                let func;
+                switch (variant) {
+                    case 'images': {
+                        func = Reflect.get(client, 'imageSearch');
+                        break;
                     }
+                    case 'news': {
+                        func = Reflect.get(client, 'newsSearch');
+                        break;
+                    }
+                    case 'web':
+                    default: {
+                        func = Reflect.get(client, 'webSearch');
+                        break;
+                    }
+                }
+                if (!func) {
+                    continue;
+                }
+                try {
+                    r = await Reflect.apply(func, client, [query]);
                     const dt = Date.now() - t0;
                     this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
                     break outerLoop;
@@ -806,6 +822,8 @@ export class SearcherHost extends RPCHost {
                 this.batchedCaches.push(record);
             } else if (lastError) {
                 throw lastError;
+            } else if (!r) {
+                throw new AssertionFailureError(`No provider can do ${variant} search atm.`);
             }
 
             return r as WebSearchEntry[];

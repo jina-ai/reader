@@ -67,11 +67,5 @@ export class InternalJinaSerpService extends AsyncService {
     async webSearch(query: SerperSearchQueryParams) {
         return this.doSearch('web', query);
     }
-    async imageSearch(query: SerperSearchQueryParams) {
-        return this.doSearch('images', query);
-    }
-    async newsSearch(query: SerperSearchQueryParams) {
-        return this.doSearch('news', query);
-    }
 
 }

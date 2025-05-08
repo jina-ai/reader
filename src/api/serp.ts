@@ -3,6 +3,7 @@ import {
     RPCHost, RPCReflection, assignMeta, RawString,
     ParamValidationError,
     assignTransferProtocolMeta,
+    AssertionFailureError,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import _ from 'lodash';
@@ -16,7 +17,7 @@ import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { InsufficientBalanceError } from '../services/errors';
 import { WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
-import { GoogleSERP } from '../services/serp/google';
+import { GoogleSERP, GoogleSERPOldFashion } from '../services/serp/google';
 import { WebSearchEntry } from '../services/serp/compat';
 import { CrawlerOptions } from '../dto/crawler-options';
 import { ScrappingOptions } from '../services/serp/puppeteer';
@@ -26,6 +27,7 @@ import { SerperBingSearchService, SerperGoogleSearchService } from '../services/
 import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
 import { LRUCache } from 'lru-cache';
 import { API_CALL_STATUS } from '../shared/db/api-roll';
+import { CommonGoogleSERP } from '../services/serp/common-serp';
 import { InternalJinaSerpService } from '../services/serp/internal';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
@@ -91,8 +93,10 @@ export class SerpHost extends RPCHost {
         protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncLocalContext,
         protected googleSerp: GoogleSERP,
+        protected googleSerpOld: GoogleSERPOldFashion,
         protected serperGoogle: SerperGoogleSearchService,
         protected serperBing: SerperBingSearchService,
+        protected commonGoogleSerp: CommonGoogleSERP,
         protected jinaSerp: InternalJinaSerpService,
     ) {
         super(...arguments);
@@ -157,7 +161,7 @@ export class SerpHost extends RPCHost {
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
-        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) _hl?: string,
+        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
         @Param('fallback') fallback?: boolean,
@@ -318,7 +322,7 @@ export class SerpHost extends RPCHost {
             q,
             num,
             gl,
-            // hl,
+            hl,
             location,
             page,
         }, crawlerOptions);
@@ -451,27 +455,32 @@ export class SerpHost extends RPCHost {
         return result;
     }
 
-    *iterProviders(preference?: string, variant?: string) {
+    *iterProviders(preference?: string, _variant?: string) {
         if (preference === 'bing') {
             yield this.serperBing;
-            yield this.serperGoogle;
             yield this.googleSerp;
+            yield this.jinaSerp;
+            yield this.serperGoogle;
+            yield this.commonGoogleSerp;
+            yield this.googleSerpOld;
 
             return;
         }
 
         if (preference === 'google') {
             yield this.googleSerp;
-            yield this.googleSerp;
             yield this.serperGoogle;
+            yield this.commonGoogleSerp;
+            yield this.googleSerpOld;
 
             return;
         }
 
-        // yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
-        yield this.serperGoogle
-        yield this.serperGoogle;
         yield this.googleSerp;
+        yield this.jinaSerp;
+        yield this.serperGoogle;
+        yield this.commonGoogleSerp;
+        yield this.googleSerpOld;
     }
 
     async cachedSearch(variant: 'web' | 'news' | 'images', query: Record<string, any>, opts: CrawlerOptions) {
@@ -506,22 +515,27 @@ export class SerpHost extends RPCHost {
             outerLoop:
             for (const client of this.iterProviders(provider, variant)) {
                 const t0 = Date.now();
-                try {
-                    switch (variant) {
-                        case 'images': {
-                            r = await Reflect.apply(client.imageSearch, client, [query, scrappingOptions]);
-                            break;
-                        }
-                        case 'news': {
-                            r = await Reflect.apply(client.newsSearch, client, [query, scrappingOptions]);
-                            break;
-                        }
-                        case 'web':
-                        default: {
-                            r = await Reflect.apply(client.webSearch, client, [query, scrappingOptions]);
-                            break;
-                        }
+                let func;
+                switch (variant) {
+                    case 'images': {
+                        func = Reflect.get(client, 'imageSearch');
+                        break;
                     }
+                    case 'news': {
+                        func = Reflect.get(client, 'newsSearch');
+                        break;
+                    }
+                    case 'web':
+                    default: {
+                        func = Reflect.get(client, 'webSearch');
+                        break;
+                    }
+                }
+                if (!func) {
+                    continue;
+                }
+                try {
+                    r = await Reflect.apply(func, client, [query, scrappingOptions]);
                     const dt = Date.now() - t0;
                     this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
                     break outerLoop;
@@ -544,6 +558,8 @@ export class SerpHost extends RPCHost {
                 this.batchedCaches.push(record);
             } else if (lastError) {
                 throw lastError;
+            } else if (!r) {
+                throw new AssertionFailureError(`No provider can do ${variant} search atm.`);
             }
 
             return r;

@@ -79,7 +79,7 @@ export interface ExtendedSnapshot extends PageSnapshot {
     imgs: ImgBrief[];
 }
 
-export interface ScrappingOptions {
+export interface ScrappingOptions<T = FancyFile | Blob> {
     proxyUrl?: string;
     cookies?: Cookie[];
     favorScreenshot?: boolean;
@@ -101,7 +101,7 @@ export interface ScrappingOptions {
                 status: number;
                 headers: { [k: string]: string | string[]; };
                 contentType?: string;
-                body?: FancyFile;
+                body?: T;
             };
         };
         proxyOrigin: { [origin: string]: string; };
@@ -912,7 +912,11 @@ export class PuppeteerControl extends AsyncService {
             if (impersonate) {
                 let body;
                 if (impersonate.body) {
-                    body = await readFile(await impersonate.body.filePath);
+                    if (impersonate.body instanceof Blob) {
+                        body = new Uint8Array(await impersonate.body.arrayBuffer());
+                    } else {
+                        body = await readFile(await impersonate.body.filePath);
+                    }
                     if (req.isInterceptResolutionHandled()) {
                         return;
                     }
