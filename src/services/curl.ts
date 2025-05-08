@@ -16,7 +16,7 @@ import { Readable } from 'stream';
 import { AsyncLocalContext } from './async-context';
 import { BlackHoleDetector } from './blackhole-detector';
 
-export interface CURLScrappingOptions extends ScrappingOptions {
+export interface CURLScrappingOptions<T = any> extends ScrappingOptions<T> {
     method?: string;
     body?: string | Buffer;
 }
@@ -75,7 +75,7 @@ export class CurlControl extends AsyncService {
         }
 
         const mixinHeaders: Record<string, string> = {
-            'Sec-Ch-Ua': `Not A(Brand";v="8", "Chromium";v="${this.chromeVersion}", "Google Chrome";v="${this.chromeVersion}"`,
+            'Sec-Ch-Ua': `"Google Chrome";v="${this.chromeVersion}", "Not-A.Brand";v="8", "Chromium";v="${this.chromeVersion}"`,
             'Sec-Ch-Ua-Mobile': '?0',
             'Sec-Ch-Ua-Platform': `"${uaPlatform}"`,
             'Upgrade-Insecure-Requests': '1',
@@ -108,11 +108,11 @@ export class CurlControl extends AsyncService {
         return curl;
     }
 
-    urlToFile1Shot(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
+    urlToStream(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
         return new Promise<{
             statusCode: number,
             statusText?: string,
-            data?: FancyFile,
+            data?: Readable,
             headers: HeaderInfo[],
         }>((resolve, reject) => {
             let contentType = '';
@@ -122,7 +122,7 @@ export class CurlControl extends AsyncService {
             curl.setOpt(Curl.option.FOLLOWLOCATION, false);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts?.timeoutMs || 30_000);
-            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
+            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 1_600);
             curl.setOpt(Curl.option.LOW_SPEED_LIMIT, 32768);
             curl.setOpt(Curl.option.LOW_SPEED_TIME, 5_000);
             if (crawlOpts?.method) {
@@ -193,7 +193,7 @@ export class CurlControl extends AsyncService {
             });
             curl.setOpt(Curl.option.MAXFILESIZE, 4 * 1024 * 1024 * 1024); // 4GB
             let status = -1;
-            let statusText: string|undefined;
+            let statusText: string | undefined;
             let contentEncoding = '';
             curl.once('end', () => {
                 if (curlStream) {
@@ -302,13 +302,10 @@ export class CurlControl extends AsyncService {
                     }
                 }
 
-                const fpath = this.tempFileManager.alloc();
-                const fancyFile = FancyFile.auto(stream, fpath);
-                this.tempFileManager.bindPathTo(fancyFile, fpath);
                 resolve({
                     statusCode: status,
                     statusText,
-                    data: fancyFile,
+                    data: stream,
                     headers: headers as HeaderInfo[],
                 });
             });
@@ -324,7 +321,19 @@ export class CurlControl extends AsyncService {
         let nextHopUrl = urlToCrawl;
         const fakeHeaderInfos: HeaderInfo[] = [];
         do {
-            const r = await this.urlToFile1Shot(nextHopUrl, opts);
+            const s = await this.urlToStream(nextHopUrl, opts);
+            const r = { ...s } as {
+                statusCode: number,
+                statusText?: string,
+                data?: FancyFile,
+                headers: HeaderInfo[],
+            };
+            if (r.data) {
+                const fpath = this.tempFileManager.alloc();
+                const fancyFile = FancyFile.auto(r.data, fpath);
+                this.tempFileManager.bindPathTo(fancyFile, fpath);
+                r.data = fancyFile;
+            }
 
             if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
                 fakeHeaderInfos.push(...r.headers);
@@ -375,7 +384,7 @@ export class CurlControl extends AsyncService {
         const curlResult = await this.urlToFile(targetUrl, crawlOpts);
         this.blackHoleDetector.itWorked();
         let finalURL = targetUrl;
-        const sideLoadOpts: CURLScrappingOptions['sideLoad'] = {
+        const sideLoadOpts: CURLScrappingOptions<FancyFile>['sideLoad'] = {
             impersonate: {},
             proxyOrigin: {},
         };
@@ -401,6 +410,140 @@ export class CurlControl extends AsyncService {
         const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
 
         if (sideLoadOpts.impersonate[finalURL.href] && (await curlResult.data?.size)) {
+            sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
+        }
+
+        // This should keep the file from being garbage collected and deleted until this asyncContext/request is done.
+        this.lifeCycleTrack.set(this.asyncLocalContext.ctx, curlResult.data);
+
+        return {
+            finalURL,
+            sideLoadOpts,
+            chain: curlResult.headers,
+            status: curlResult.statusCode,
+            statusText: curlResult.statusText,
+            headers: lastHeaders,
+            contentType,
+            contentDisposition,
+            fileName,
+            file: curlResult.data
+        };
+    }
+
+    async urlToBlob(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
+        let leftRedirection = 6;
+        let cookieRedirects = 0;
+        let opts = { ...crawlOpts };
+        let nextHopUrl = urlToCrawl;
+        const fakeHeaderInfos: HeaderInfo[] = [];
+        do {
+            const s = await this.urlToStream(nextHopUrl, opts);
+            const r = { ...s } as {
+                statusCode: number,
+                statusText?: string,
+                data?: Blob,
+                headers: HeaderInfo[],
+            };
+
+
+            const headers = r.headers[r.headers.length - 1];
+            if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
+                fakeHeaderInfos.push(...r.headers);
+                const location: string | undefined = headers.Location || headers.location;
+
+                const setCookieHeader = headers['Set-Cookie'] || headers['set-cookie'];
+                if (setCookieHeader) {
+                    const cookieAssignments = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+                    const parsed = cookieAssignments.filter(Boolean).map((x) => parseSetCookieString(x, { decodeValues: true }));
+                    if (parsed.length) {
+                        opts.cookies = [...(opts.cookies || []), ...parsed];
+                    }
+                    if (!location) {
+                        cookieRedirects += 1;
+                    }
+                }
+
+                if (!location && !setCookieHeader) {
+                    // Follow curl behavior
+                    if (s.data) {
+                        const chunks: Buffer[] = [];
+                        s.data.on('data', (chunk) => {
+                            chunks.push(chunk);
+                        });
+                        await new Promise((resolve, reject) => {
+                            s.data!.once('end', resolve);
+                            s.data!.once('error', reject);
+                        });
+                        r.data = new Blob(chunks, { type: headers['Content-Type'] || headers['content-type'] });
+                    }
+                    return {
+                        statusCode: r.statusCode,
+                        data: r.data,
+                        headers: fakeHeaderInfos.concat(r.headers),
+                    };
+                }
+                if (!location && cookieRedirects > 1) {
+                    throw new ServiceBadApproachError(`Failed to access ${urlToCrawl}: Browser required to solve complex cookie preconditions.`);
+                }
+
+                nextHopUrl = new URL(location || '', nextHopUrl);
+                leftRedirection -= 1;
+                continue;
+            }
+
+            if (s.data) {
+                const chunks: Buffer[] = [];
+                s.data.on('data', (chunk) => {
+                    chunks.push(chunk);
+                });
+                await new Promise((resolve, reject) => {
+                    s.data!.once('end', resolve);
+                    s.data!.once('error', reject);
+                });
+                r.data = new Blob(chunks, { type: headers['Content-Type'] || headers['content-type'] });
+            }
+
+            return {
+                statusCode: r.statusCode,
+                statusText: r.statusText,
+                data: r.data,
+                headers: fakeHeaderInfos.concat(r.headers),
+            };
+        } while (leftRedirection > 0);
+
+        throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Too many redirections.`);
+    }
+
+    async sideLoadBlob(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
+        const curlResult = await this.urlToBlob(targetUrl, crawlOpts);
+        this.blackHoleDetector.itWorked();
+        let finalURL = targetUrl;
+        const sideLoadOpts: CURLScrappingOptions<Blob>['sideLoad'] = {
+            impersonate: {},
+            proxyOrigin: {},
+        };
+        for (const headers of curlResult.headers) {
+            sideLoadOpts.impersonate[finalURL.href] = {
+                status: headers.result?.code || -1,
+                headers: _.omit(headers, 'result'),
+                contentType: headers['Content-Type'] || headers['content-type'],
+            };
+            if (crawlOpts?.proxyUrl) {
+                sideLoadOpts.proxyOrigin[finalURL.origin] = crawlOpts.proxyUrl;
+            }
+            if (headers.result?.code && [301, 302, 307, 308].includes(headers.result.code)) {
+                const location = headers.Location || headers.location;
+                if (location) {
+                    finalURL = new URL(location, finalURL);
+                }
+            }
+        }
+        const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
+        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type'])?.toLowerCase() || (curlResult.data?.type) || 'application/octet-stream';
+        const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
+        const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
+
+        if (sideLoadOpts.impersonate[finalURL.href] && (curlResult.data?.size)) {
             sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
         }
 

@@ -2,7 +2,7 @@ import _ from 'lodash';
 import { readFile } from 'fs/promises';
 import { container, singleton } from 'tsyringe';
 
-import type { Browser, CookieParam, GoToOptions, Page, Viewport } from 'puppeteer';
+import type { Browser, BrowserContext, CookieParam, GoToOptions, Page, Viewport } from 'puppeteer';
 import type { Cookie } from 'set-cookie-parser';
 import puppeteer, { TimeoutError } from 'puppeteer';
 
@@ -21,6 +21,7 @@ import { BlackHoleDetector } from '../blackhole-detector';
 
 
 export interface ScrappingOptions {
+    browserContext?: BrowserContext;
     proxyUrl?: string;
     cookies?: Cookie[];
     overrideUserAgent?: string;
@@ -38,7 +39,7 @@ export interface ScrappingOptions {
                 status: number;
                 headers: { [k: string]: string | string[]; };
                 contentType?: string;
-                body?: FancyFile;
+                body?: FancyFile | Blob;
             };
         };
         proxyOrigin: { [origin: string]: string; };
@@ -226,8 +227,6 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
     browser!: Browser;
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    __loadedPage: Page[] = [];
-
     finalizerMap = new WeakMap<Page, ReturnType<typeof setTimeout>>();
     snMap = new WeakMap<Page, number>();
     livePages = new Set<Page>();
@@ -251,7 +250,6 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
         let crippledTimes = 0;
         this.on('crippled', () => {
             crippledTimes += 1;
-            this.__loadedPage.length = 0;
             this.livePages.clear();
             if (crippledTimes > 5) {
                 process.nextTick(() => {
@@ -303,20 +301,16 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
         this.effectiveUA = this.ua.replace(/Headless/i, '').replace('Mozilla/5.0 (X11; Linux x86_64)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
         this.curlControl.impersonateChrome(this.effectiveUA);
 
-        await this.newPage('beware_deadlock').then((r) => this.__loadedPage.push(r));
-
         this.emit('ready');
     }
 
-    async newPage<T>(bewareDeadLock: any = false) {
-        if (!bewareDeadLock) {
-            await this.serviceReady();
-        }
+    async newPage<T>(context?: BrowserContext) {
+        await this.serviceReady();
         const sn = this._sn++;
         let page;
+        context ??= await this.browser.createBrowserContext();
         try {
-            const dedicatedContext = await this.browser.createBrowserContext();
-            page = await dedicatedContext.newPage();
+            page = await context.newPage();
         } catch (err: any) {
             this.logger.warn(`Failed to create page ${sn}`, { err });
             this.browser.process()?.kill('SIGKILL');
@@ -347,23 +341,9 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
         return page;
     }
 
-    async getNextPage() {
-        let thePage: Page | undefined;
-        if (this.__loadedPage.length) {
-            thePage = this.__loadedPage.shift();
-            if (this.__loadedPage.length <= 1) {
-                process.nextTick(() => {
-                    this.newPage()
-                        .then((r) => this.__loadedPage.push(r))
-                        .catch((err) => {
-                            this.logger.warn(`Failed to load new page ahead of time`, { err });
-                        });
-                });
-            }
-        }
-
+    async getNextPage(context?: BrowserContext) {
+        const thePage = await this.newPage(context);
         if (!thePage) {
-            thePage = await this.newPage();
         }
 
         const timer = setTimeout(() => {
@@ -387,14 +367,7 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
         const sn = this.snMap.get(page);
         this.logger.debug(`Closing page ${sn}`);
         await Promise.race([
-            (async () => {
-                const ctx = page.browserContext();
-                try {
-                    await page.close();
-                } finally {
-                    await ctx.close();
-                }
-            })(),
+            page.close(),
             delay(5000)
         ]).catch((err) => {
             this.logger.error(`Failed to destroy page ${sn}`, { err });
@@ -405,7 +378,7 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
     async controlledScrap<T>(parsedUrl: URL, func: (this: void) => Promise<T>, options: ScrappingOptions = {}): Promise<T> {
         // parsedUrl.search = '';
         const url = parsedUrl.toString();
-        const page = await this.getNextPage();
+        const page = await this.getNextPage(options.browserContext);
         this.lifeCycleTrack.set(page, this.asyncLocalContext.ctx);
         page.on('response', (_resp) => {
             this.blackHoleDetector.itWorked();
@@ -452,7 +425,11 @@ export class SERPSpecializedPuppeteerControl extends AsyncService {
             if (impersonate) {
                 let body;
                 if (impersonate.body) {
-                    body = await readFile(await impersonate.body.filePath);
+                    if (impersonate.body instanceof Blob) {
+                        body = new Uint8Array(await impersonate.body.arrayBuffer());
+                    } else {
+                        body = await readFile(await impersonate.body.filePath);
+                    }
                     if (req.isInterceptResolutionHandled()) {
                         return;
                     }

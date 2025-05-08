@@ -49,6 +49,7 @@ import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
 import { HTTPServiceError } from 'civkit/http';
 import { GeoIPService } from '../services/geoip';
+import { writeFile } from 'fs/promises';
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -1145,7 +1146,16 @@ export class CrawlerHost extends RPCHost {
             if (pdfUrl.startsWith('http')) {
                 const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
                 if (sideLoaded?.status === 200 && sideLoaded.body) {
-                    snapshotCopy.pdfs[0] = pathToFileURL(await sideLoaded?.body.filePath).href;
+                    let filePath = '';
+                    if (sideLoaded.body instanceof Blob) {
+                        const tmpPath = this.tempFileManager.alloc();
+                        await writeFile(tmpPath, sideLoaded.body.stream());
+                        this.tempFileManager.bindPathTo(this.threadLocal.ctx, tmpPath);
+                        filePath = tmpPath;
+                    } else {
+                        filePath = await sideLoaded.body.filePath;
+                    }
+                    snapshotCopy.pdfs[0] = pathToFileURL(filePath).href;
                     return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
                 }
 
