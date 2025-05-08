@@ -171,6 +171,7 @@ export class GoogleSERP extends AsyncService {
 
         url.searchParams.set('async', getMagicAsyncParam(query.start, ctx.magicId));
 
+        const t0 = performance.now();
         const sideLoaded = await this.sideLoadWithAllocatedProxy(url, {
             ...opts,
             allocProxy: opts?.allocProxy || (this.nativeIPHealthy ? 'none' : 'auto'),
@@ -180,6 +181,7 @@ export class GoogleSERP extends AsyncService {
 
             return Promise.reject(err);
         });
+        const dt = performance.now() - t0;
 
         if ('proxy' in sideLoaded) {
             ctx.proxyUrl = sideLoaded.proxy.href;
@@ -187,7 +189,11 @@ export class GoogleSERP extends AsyncService {
         }
 
         if (sideLoaded.status === 200) {
-            this.contextPool.release(ctx);
+            if (dt < 1_700) {
+                this.contextPool.release(ctx);
+            } else {
+                this.contextPool.destroy(ctx);
+            }
         } else {
             if (this.nativeIPHealthy && this.asyncLocalContext.ctx.ctxIsNew) {
                 this.nativeIPBlocked();
