@@ -193,6 +193,9 @@ export class GoogleSERP extends AsyncService {
                 this.nativeIPBlocked();
             }
             this.contextPool.destroy(ctx);
+            throw new ServiceBadAttemptError({
+                message: 'Google returned an error page. This may happen due to various reasons, including rate limiting or other issues.',
+            });
         }
 
         if (opts && sideLoaded.sideLoadOpts) {
@@ -217,6 +220,9 @@ export class GoogleSERP extends AsyncService {
         const jsdom = this.jsDomControl.linkedom.parseHTML(html, { location: { href: origHref } });
         try {
             const r = runGetWebSearchResultsScript(createContext(jsdom));
+            if (!Array.isArray(r)) {
+                throw new Error('Failed to parse response as SERP results');
+            }
 
             return r;
         } catch (err) {
