@@ -334,6 +334,10 @@ export class GoogleSERPOldFashion extends GoogleSERP {
 
         const snapshot = await this.puppeteerControl.controlledScrap(url, getWebSearchResults, opts);
 
+        if (!Array.isArray(snapshot)) {
+            throw new ServiceBadAttemptError('Google returned an error page. This may happen due to various reasons, including rate limiting or other issues.');
+        }
+
         return snapshot;
     }
 
