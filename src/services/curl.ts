@@ -122,7 +122,7 @@ export class CurlControl extends AsyncService {
             curl.setOpt(Curl.option.FOLLOWLOCATION, false);
             curl.setOpt(Curl.option.SSL_VERIFYPEER, false);
             curl.setOpt(Curl.option.TIMEOUT_MS, crawlOpts?.timeoutMs || 30_000);
-            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 1_600);
+            curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 3_000);
             curl.setOpt(Curl.option.LOW_SPEED_LIMIT, 32768);
             curl.setOpt(Curl.option.LOW_SPEED_TIME, 5_000);
             if (crawlOpts?.method) {
