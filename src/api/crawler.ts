@@ -260,6 +260,7 @@ export class CrawlerHost extends RPCHost {
         crawlerOptionsHeaderOnly: CrawlerOptionsHeaderOnly,
         crawlerOptionsParamsAllowed: CrawlerOptions,
     ) {
+        this.logger.debug('Incoming headers', { headers: ctx.request.headers });
         const uid = await auth.solveUID();
         let chargeAmount = 0;
         const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
