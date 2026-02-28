@@ -97,6 +97,36 @@ export class SnapshotFormatter extends AsyncService {
     }
 
 
+    truncateToTokenLimit(text: string, maxTokens: number): string {
+        const totalTokens = countGPTToken(text);
+        if (totalTokens <= maxTokens) {
+            return text;
+        }
+
+        // Estimate character-to-token ratio and cut proportionally
+        const ratio = text.length / totalTokens;
+        let cutPoint = Math.floor(maxTokens * ratio);
+
+        // Avoid cutting in the middle of a word
+        while (cutPoint < text.length && text[cutPoint] !== ' ' && text[cutPoint] !== '\n') {
+            cutPoint++;
+        }
+
+        let truncated = text.slice(0, cutPoint);
+
+        // Verify and adjust if we overshot
+        let truncatedTokens = countGPTToken(truncated);
+        while (truncatedTokens > maxTokens && truncated.length > 0) {
+            // Trim by ~10% of remaining overshoot
+            const overshoot = truncatedTokens - maxTokens;
+            const charsToRemove = Math.max(1, Math.floor(overshoot * ratio * 0.5));
+            truncated = truncated.slice(0, truncated.length - charsToRemove);
+            truncatedTokens = countGPTToken(truncated);
+        }
+
+        return truncated.trimEnd();
+    }
+
     @Threaded()
     async formatSnapshot(mode: string | 'markdown' | 'html' | 'text' | 'screenshot' | 'pageshot', snapshot: PageSnapshot & {
         screenshotUrl?: string;
@@ -190,6 +220,19 @@ export class SnapshotFormatter extends AsyncService {
         if (modeOK && (mode.includes('lm') ||
             (!mode.includes('markdown') && !mode.includes('content')))
         ) {
+            const maxOutputTokens = this.threadLocal.get('maxOutputTokens') as number | undefined;
+            if (maxOutputTokens) {
+                if (f.content) {
+                    f.content = this.truncateToTokenLimit(f.content, maxOutputTokens);
+                }
+                if (f.text) {
+                    f.text = this.truncateToTokenLimit(f.text, maxOutputTokens);
+                }
+                if (f.html) {
+                    f.html = this.truncateToTokenLimit(f.html, maxOutputTokens);
+                }
+            }
+
             const dt = Date.now() - t0;
             this.logger.debug(`Formatting took ${dt}ms`, { mode, url: nominalUrl?.toString(), dt });
 
@@ -386,6 +429,11 @@ export class SnapshotFormatter extends AsyncService {
                 contentText = (snapshot.text || '').trimEnd();
             }
         } while (false);
+
+        const maxOutputTokens = this.threadLocal.get('maxOutputTokens') as number | undefined;
+        if (maxOutputTokens && contentText) {
+            contentText = this.truncateToTokenLimit(contentText, maxOutputTokens);
+        }
 
         const formatted: FormattedPage = {
             title: (snapshot.parsed?.title || snapshot.title || '').trim(),

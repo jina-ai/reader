@@ -221,6 +221,11 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Max-Output-Tokens': {
+                    description: 'Limit the output content to approximately this many tokens.\n\nThe content will be truncated to fit within the specified token limit. Useful for workflows that only need a partial extraction.',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Respond-Timing': {
                     description: `Explicitly specify the respond timing. One of the following:\n\n` +
                         `- html: directly return unrendered HTML\n` +
@@ -406,6 +411,13 @@ export class CrawlerOptions extends AutoCastable {
     @Prop()
     tokenBudget?: number;
 
+    @Prop({
+        validate: (v: number) => v > 0,
+        type: Number,
+        nullable: true,
+    })
+    maxOutputTokens?: number;
+
     @Prop()
     viewport?: Viewport;
 
@@ -575,6 +587,14 @@ export class CrawlerOptions extends AutoCastable {
 
         const tokenBudget = ctx?.get('x-token-budget');
         instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;
+
+        const maxOutputTokens = ctx?.get('x-max-output-tokens');
+        if (maxOutputTokens) {
+            const parsed = parseInt(maxOutputTokens);
+            if (!isNaN(parsed) && parsed > 0) {
+                instance.maxOutputTokens ??= parsed;
+            }
+        }
 
         const baseMode = ctx?.get('x-base');
         if (baseMode) {
