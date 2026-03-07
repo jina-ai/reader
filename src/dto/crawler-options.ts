@@ -429,6 +429,9 @@ export class CrawlerOptions extends AutoCastable {
     })
     respondTiming?: RESPOND_TIMING;
 
+    @Prop()
+    freshness?: string;
+
     _hintIps?: string[];
 
     static override from(input: any) {
@@ -587,6 +590,11 @@ export class CrawlerOptions extends AutoCastable {
         const respondTiming = ctx?.get('x-respond-timing');
         if (respondTiming) {
             instance.respondTiming ??= respondTiming as RESPOND_TIMING;
+        }
+
+        const freshness = ctx?.get('x-brave-freshness');
+        if (freshness && /^(pd|pw|pm|py|\d{4}-\d{2}-\d{2}to\d{4}-\d{2}-\d{2})$/.test(freshness)) {
+            instance.freshness ??= freshness;
         }
 
         if (instance.cacheTolerance) {
