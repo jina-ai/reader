@@ -1021,6 +1021,9 @@ export class CrawlerHost extends RPCHost {
         if (opts.markdown) {
             this.threadLocal.set('turndownOpts', opts.markdown);
         }
+        if (opts.freshness) {
+            this.threadLocal.set('x-brave-freshness', opts.freshness);
+        }
 
         const crawlOpts: ExtraScrappingOptions = {
             proxyUrl: opts.proxyUrl,

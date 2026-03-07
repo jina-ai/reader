@@ -33,7 +33,7 @@ export class BraveSearchService extends AsyncService {
         this.braveSearchHTTP = new BraveSearchHTTP(this.secretExposer.BRAVE_SEARCH_API_KEY);
     }
 
-    async webSearch(query: WebSearchQueryParams) {
+    async webSearch(query: WebSearchQueryParams & { freshness?: string }) {
         const ip = this.threadLocal.get('ip');
         const extraHeaders: WebSearchOptionalHeaderOptions = {};
         if (ip) {
@@ -61,9 +61,14 @@ export class BraveSearchService extends AsyncService {
             extraHeaders['User-Agent'] = this.threadLocal.get('userAgent');
         }
 
-        const encoded = { ...query };
+        const encoded: Record<string, any> = { ...query };
         if (encoded.q) {
             encoded.q = (Buffer.from(encoded.q).toString('ascii') === encoded.q) ? encoded.q : encodeURIComponent(encoded.q);
+        }
+
+        const freshness = this.threadLocal.get('x-brave-freshness') || query.freshness;
+        if (freshness) {
+            encoded.freshness = freshness;
         }
 
         let maxTries = 11;
