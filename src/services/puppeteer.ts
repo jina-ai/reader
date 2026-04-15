@@ -1039,18 +1039,22 @@ export class PuppeteerControl extends AsyncService {
             //     'Accept-Language': options.locale
             // });
 
-            await page.evaluateOnNewDocument(() => {
+            // Pass locale as an argument so it is available inside the
+            // serialised browser-context function (the previous closure
+            // referenced `options.locale` which does not exist on the
+            // page and silently evaluated to `undefined`).
+            await page.evaluateOnNewDocument((locale: string) => {
                 Object.defineProperty(navigator, "language", {
                     get: function () {
-                        return options.locale;
+                        return locale;
                     }
                 });
                 Object.defineProperty(navigator, "languages", {
                     get: function () {
-                        return [options.locale];
+                        return [locale];
                     }
                 });
-            });
+            }, options.locale);
         }
 
         if (options.cookies) {
