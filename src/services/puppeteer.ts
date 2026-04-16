@@ -2,6 +2,7 @@ import _ from 'lodash';
 import { isIP } from 'net';
 import { readFile } from 'fs/promises';
 import fs from 'fs';
+import { Blob } from 'buffer';
 import { container, singleton } from 'tsyringe';
 
 import type { Browser, CookieParam, GoToOptions, HTTPRequest, HTTPResponse, Page, Viewport } from 'puppeteer';
@@ -14,12 +15,14 @@ import { AsyncService } from 'civkit/async-service';
 import { FancyFile } from 'civkit/fancy-file';
 import { delay } from 'civkit/timeout';
 
-import { SecurityCompromiseError, ServiceCrashedError, ServiceNodeResourceDrainError } from '../shared/lib/errors';
 import { CurlControl } from './curl';
 import { BlackHoleDetector } from './blackhole-detector';
 import { AsyncLocalContext } from './async-context';
 import { GlobalLogger } from './logger';
 import { minimalStealth } from './minimal-stealth';
+import { SecurityCompromiseError, ServiceCrashedError, ServiceNodeResourceDrainError } from './errors';
+import { randomBytes } from 'crypto';
+import { Finalizer } from './finalizer';
 const tldExtract = require('tld-extract');
 
 const READABILITY_JS = fs.readFileSync(require.resolve('@mozilla/readability/Readability.js'), 'utf-8');
@@ -33,6 +36,7 @@ export interface ImgBrief {
     naturalWidth?: number;
     naturalHeight?: number;
     alt?: string;
+    buff?: Buffer;
 }
 
 export interface ReadabilityParsed {
@@ -48,6 +52,12 @@ export interface ReadabilityParsed {
     publishedTime: string;
 }
 
+export interface BlobDesc {
+    url: string;
+    contentType: string;
+    fileName?: string;
+};
+
 export interface PageSnapshot {
     title: string;
     description?: string;
@@ -61,9 +71,11 @@ export interface PageSnapshot {
     statusText?: string;
     parsed?: Partial<ReadabilityParsed> | null;
     screenshot?: Buffer;
+    screenshotUrl?: string;
     pageshot?: Buffer;
+    pageshotUrl?: string;
     imgs?: ImgBrief[];
-    pdfs?: string[];
+    blobs?: BlobDesc[];
     maxElemDepth?: number;
     elemCount?: number;
     childFrames?: PageSnapshot[];
@@ -72,6 +84,15 @@ export interface PageSnapshot {
     lastMutationIdle?: number;
     lastContentResourceLoaded?: number;
     lastMediaResourceLoaded?: number;
+    traits?: string[];
+
+    lastModified?: string;
+    metadata?: { [k: string]: string; };
+    external?: { [rel: string]: { [href: string]: { [k: string]: string; }; }; };
+    geolocation?: string;
+
+    // @deprecated
+    pdfs?: string[];
 }
 
 export interface ExtendedSnapshot extends PageSnapshot {
@@ -79,7 +100,7 @@ export interface ExtendedSnapshot extends PageSnapshot {
     imgs: ImgBrief[];
 }
 
-export interface ScrappingOptions {
+export interface ScrappingOptions<T = FancyFile | Blob> {
     proxyUrl?: string;
     cookies?: Cookie[];
     favorScreenshot?: boolean;
@@ -101,10 +122,18 @@ export interface ScrappingOptions {
                 status: number;
                 headers: { [k: string]: string | string[]; };
                 contentType?: string;
-                body?: FancyFile;
+                body?: T;
             };
         };
         proxyOrigin: { [origin: string]: string; };
+        hint?: {
+            [url: string]: {
+                method: string;
+                headers: { [k: string]: string | string[]; };
+                cookies?: Cookie[];
+                body?: unknown;
+            };
+        };
     };
 
 }
@@ -242,8 +271,8 @@ function briefImgs(elem) {
     const imageTags = Array.from((elem || document).querySelectorAll('img[src],img[data-src]'));
 
     return imageTags.map((x)=> {
-        let linkPreferredSrc = x.src;
-        if (linkPreferredSrc.startsWith('data:')) {
+        let linkPreferredSrc = x.src || x.dataset.src;
+        if (linkPreferredSrc?.startsWith('data:')) {
             if (typeof x.dataset?.src === 'string' && !x.dataset.src.startsWith('data:')) {
                 linkPreferredSrc = x.dataset.src;
             }
@@ -254,8 +283,8 @@ function briefImgs(elem) {
             loaded: x.complete,
             width: x.width,
             height: x.height,
-            naturalWidth: x.naturalWidth,
-            naturalHeight: x.naturalHeight,
+            naturalWidth: linkPreferredSrc === x.src ? x.naturalWidth : undefined,
+            naturalHeight: linkPreferredSrc === x.src ? x.naturalHeight : undefined,
             alt: x.alt || x.title,
         };
     });
@@ -376,6 +405,27 @@ let lastMutationIdle = 0;
 let initialAnalytics;
 document.addEventListener('mutationIdle', ()=> lastMutationIdle = Date.now());
 
+function detectOverlay() {
+    const elemSet1 = document.elementsFromPoint(0,0);
+    const elem1 = elemSet1[0];
+    const documentGeometry = document.documentElement.getBoundingClientRect();
+    const elemSet2 = document.elementsFromPoint(documentGeometry.width - 1, window.innerHeight - 1);
+    const elem2 = elemSet2[0];
+    if (elem1 === elem2 && elem1 !== document.body && elemSet2.length > 3 && elemSet1.length > 3) {
+        return elem1;
+    }
+
+    const elem3 = document.elementFromPoint(documentGeometry.width / 2, window.innerHeight / 2);
+    let elem = elem3;
+    while (elem && elem !== document.body) {
+        if (window.getComputedStyle(elem).position === 'fixed') {
+            return elem;
+        }
+        elem = elem.parentElement;
+    }
+
+    return null;
+}
 function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
     if (stopActiveSnapshot) {
         window.haltSnapshot = true;
@@ -392,9 +442,56 @@ function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
     const thisElemCount = domAnalysis.elementCount;
     const initialElemCount = initialAnalytics.elementCount;
     Math.abs(thisElemCount - initialElemCount) / (initialElemCount + Number.EPSILON)
+
+    const metadata = {};
+    const lang = document.documentElement.getAttribute('lang');
+    if (lang) {
+        metadata.lang = lang;
+    }
+    document.head.querySelectorAll('meta[content]').forEach((el) => {
+        const name = el.getAttribute('name') || el.getAttribute('property');
+        if (!name) {
+            return;
+        }
+        const val = el.getAttribute('content') || '';
+        const curVal = Reflect.get(metadata, name);
+        if (Array.isArray(curVal)) {
+            curVal.push(val);
+        } else if (curVal) {
+            Reflect.set(metadata, name, [curVal, val]);
+        } else {
+            Reflect.set(metadata, name, val);
+        }
+    });
+    const external = {};
+    document.head.querySelectorAll('link[rel][href]').forEach((el) => {
+        const attributes = {};
+        el.getAttributeNames().forEach((attrName) => {
+            attributes[attrName] = el.getAttribute(attrName) || '';
+        });
+        const rels = attributes['rel']?.split(/\\s+/g).filter(Boolean) || [];
+        if (!rels?.length) {
+            return;
+        }
+        let href = attributes['href'] || '';
+        if (href) {
+            href = new URL(href, document.baseURI).href;
+        }
+        delete attributes.rel;
+        delete attributes.href;
+
+        for (const rel of rels) {
+            external[rel] ??= {};
+            external[rel][href] ??= {};
+            Object.assign(external[rel][href], attributes);
+        }
+    });
+    delete external['stylesheet'];
+    delete external['shortcut'];
+
     const r = {
         title: document.title,
-        description: document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? '',
+        description: document.head?.querySelector('meta[name$="description"][content],meta[property$="description"][content]')?.getAttribute('content') ?? '',
         href: document.location.href,
         html: document.documentElement?.outerHTML,
         htmlSignificantlyModifiedByJs: Boolean(Math.abs(thisElemCount - initialElemCount) / (initialElemCount + Number.EPSILON) > 0.05),
@@ -405,6 +502,8 @@ function giveSnapshot(stopActiveSnapshot, overrideDomAnalysis) {
         maxElemDepth: domAnalysis.maxDepth,
         elemCount: domAnalysis.elementCount,
         lastMutationIdle,
+        metadata,
+        external
     };
     if (document.baseURI !== r.href) {
         r.rebase = document.baseURI;
@@ -433,6 +532,7 @@ function waitForSelector(selectorText) {
     });
   });
 }
+window.detectOverlay = detectOverlay;
 window.getMaxDepthAndElemCountUsingTreeWalker = getMaxDepthAndElemCountUsingTreeWalker;
 window.waitForSelector = waitForSelector;
 window.giveSnapshot = giveSnapshot;
@@ -441,7 +541,7 @@ window.briefImgs = briefImgs;
 `;
 
 const documentResourceTypes = new Set([
-    'document', 'script', 'xhr', 'fetch', 'prefetch', 'eventsource', 'websocket', 'preflight'
+    'document', 'script', 'xhr', 'fetch', 'prefetch', 'eventsource', 'websocket',
 ]);
 const mediaResourceTypes = new Set([
     'stylesheet', 'image', 'font', 'media'
@@ -454,6 +554,9 @@ class PageReqCtrlKit {
     lastResourceLoadedAt: number = 0;
     lastContentResourceLoadedAt: number = 0;
     lastMediaResourceLoadedAt: number = 0;
+    t0?: number;
+    totalRequests: number = 0;
+    totalDocumentalRequests: number = 0;
 
     constructor(
         public concurrency: number,
@@ -464,6 +567,7 @@ class PageReqCtrlKit {
     }
 
     onNewRequest(req: HTTPRequest) {
+        this.t0 ??= Date.now();
         this.reqSet.add(req);
         if (this.reqSet.size <= this.concurrency) {
             return Promise.resolve();
@@ -480,6 +584,7 @@ class PageReqCtrlKit {
         deferred?.resolve();
         const now = Date.now();
         this.lastResourceLoadedAt = now;
+        this.totalRequests += 1;
         // Beware req being undefined
         // https://pptr.dev/api/puppeteer.pageevent#:~:text=For%20certain%20requests%2C%20might%20contain%20undefined.
         const typ = req?.resourceType();
@@ -488,6 +593,7 @@ class PageReqCtrlKit {
         }
         if (documentResourceTypes.has(typ)) {
             this.lastContentResourceLoadedAt = now;
+            this.totalDocumentalRequests += 1;
         }
         if (mediaResourceTypes.has(typ)) {
             this.lastMediaResourceLoadedAt = now;
@@ -499,7 +605,7 @@ class PageReqCtrlKit {
 export class PuppeteerControl extends AsyncService {
 
     _sn = 0;
-    browser!: Browser;
+    browser?: Browser;
     logger = this.globalLogger.child({ service: this.constructor.name });
 
     __loadedPage: Page[] = [];
@@ -507,12 +613,11 @@ export class PuppeteerControl extends AsyncService {
     finalizerMap = new WeakMap<Page, ReturnType<typeof setTimeout>>();
     snMap = new WeakMap<Page, number>();
     livePages = new Set<Page>();
-    pagePhase = new WeakMap<Page, 'idle' | 'active' | 'background'>();
-    lastPageCratedAt: number = 0;
+    lastPageCreatedAt: number = 0;
     ua: string = '';
     effectiveUA: string = '';
 
-    concurrentRequestsPerPage: number = 32;
+    concurrentRequestsPerPage: number = 100;
     pageReqCtrl = new WeakMap<Page, PageReqCtrlKit>();
 
     lastReqSentAt: number = 0;
@@ -520,6 +625,16 @@ export class PuppeteerControl extends AsyncService {
     circuitBreakerHosts: Set<string> = new Set();
 
     lifeCycleTrack = new WeakMap();
+
+    acceptedBlobMimetypes = new Set([
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.ms-powerpoint',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/pdf',
+    ]);
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -567,7 +682,7 @@ export class PuppeteerControl extends AsyncService {
                 '--disable-blink-features=AutomationControlled'
             ]
         }).catch((err: any) => {
-            this.logger.error(`Unknown firebase issue, just die fast.`, { err });
+            this.logger.error(`Failed to launch browser. This is fatal.`, { err });
             process.nextTick(() => {
                 this.emit('error', err);
                 // process.exit(1);
@@ -579,16 +694,32 @@ export class PuppeteerControl extends AsyncService {
             if (this.browser) {
                 this.emit('crippled');
             }
-            process.nextTick(() => this.serviceReady());
+            if (this.__status === 'crippled') {
+                process.nextTick(() => this.serviceReady());
+            }
         });
         this.ua = await this.browser.userAgent();
         this.logger.info(`Browser launched: ${this.browser.process()?.pid}, ${this.ua}`);
-        this.effectiveUA = this.ua.replace(/Headless/i, '').replace('Mozilla/5.0 (X11; Linux x86_64)', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
+        this.effectiveUA = this.ua.replace(/Headless/i, '').replace('Mozilla/5.0 (X11; Linux x86_64)', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)');
         this.curlControl.impersonateChrome(this.effectiveUA);
 
         await this.newPage('beware_deadlock').then((r) => this.__loadedPage.push(r));
 
         this.emit('ready');
+    }
+
+    @Finalizer()
+    override async standDown() {
+        const browser = this.browser;
+        delete this.browser;
+        if (browser) {
+            if (browser.connected) {
+                await browser.close().catch(() => undefined);
+            } else {
+                browser.process()?.kill('SIGKILL');
+            }
+        }
+        super.standDown();
     }
 
     protected getRpsControlKit(page: Page) {
@@ -608,29 +739,54 @@ export class PuppeteerControl extends AsyncService {
         const sn = this._sn++;
         let page;
         try {
-            const dedicatedContext = await this.browser.createBrowserContext();
+            const dedicatedContext = await this.browser!.createBrowserContext();
             page = await dedicatedContext.newPage();
         } catch (err: any) {
             this.logger.warn(`Failed to create page ${sn}`, { err });
-            this.browser.process()?.kill('SIGKILL');
+            this.browser!.process()?.kill('SIGKILL');
             throw new ServiceNodeResourceDrainError(`This specific worker node failed to open a new page, try again.`);
         }
         const preparations = [];
 
-        preparations.push(page.setUserAgent(this.effectiveUA));
         // preparations.push(page.setUserAgent(`Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)`));
         // preparations.push(page.setUserAgent(`Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.0; +https://openai.com/gptbot)`));
+        preparations.push(page.setUserAgent(this.effectiveUA));
         preparations.push(page.setBypassCSP(true));
-        preparations.push(page.setViewport({ width: 1024, height: 1024 }));
-        preparations.push(page.exposeFunction('reportSnapshot', (snapshot: PageSnapshot) => {
-            if (snapshot.href === 'about:blank') {
-                return;
-            }
-            page.emit('snapshot', snapshot);
-        }));
-        preparations.push(page.exposeFunction('setViewport', (viewport: Viewport | null) => {
-            page.setViewport(viewport).catch(() => undefined);
-        }));
+        preparations.push(page.setViewport({ width: 1280, height: 1280 }));
+        // preparations.push(page.exposeFunction('reportSnapshot', (snapshot: PageSnapshot) => {
+        //     if (snapshot.href === 'about:blank') {
+        //         return;
+        //     }
+        //     page.emit('snapshot', snapshot);
+        // }));
+        // preparations.push(page.exposeFunction('setViewport', (viewport: Viewport | null) => {
+        //     page.setViewport(viewport).catch(() => undefined);
+        // }));
+        const pageKey = randomBytes(8).toString('base64url');
+        const sideChanelScript = `
+(function () {
+    function magicRPC() {
+        fetch('https://reader.internal', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            mode: 'no-cors',
+            body: JSON.stringify(Array.from(arguments))
+        });
+    }
+
+    function rpcFactory(name) {
+        return function () {
+            magicRPC('${pageKey}', name, ...arguments);
+        };
+    }
+
+    window.reportSnapshot = rpcFactory('reportSnapshot');
+    window.setViewport = rpcFactory('setViewport');
+})();
+`;
+        preparations.push(page.evaluateOnNewDocument(sideChanelScript));
         preparations.push(page.evaluateOnNewDocument(SCRIPT_TO_INJECT_INTO_FRAME));
         preparations.push(page.setRequestInterception(true));
 
@@ -639,20 +795,42 @@ export class PuppeteerControl extends AsyncService {
         await page.goto('about:blank', { waitUntil: 'domcontentloaded' });
 
         const domainSet = new Set<string>();
-        let reqCounter = 0;
-        let t0: number | undefined;
         let halt = false;
 
         page.on('request', async (req) => {
-            reqCounter++;
+            const requestUrl = req.url();
+            if (requestUrl.startsWith('https://reader.internal') && req.frame() === page.mainFrame()) {
+                do {
+                    const txt = await req.fetchPostData() || '[]';
+                    const [key, cmd, ...args] = JSON.parse(txt) as [string, string, ...unknown[]];
+                    if (key !== pageKey) {
+                        break;
+                    }
+
+                    switch (cmd) {
+                        case 'reportSnapshot': {
+                            Reflect.apply(page.emit, page, ['snapshot', ...args]);
+                            break;
+                        }
+                        case 'setViewport': {
+                            Reflect.apply(page.setViewport, page, args);
+                            break;
+                        }
+                    }
+                } while (false);
+                req.respond({
+                    status: 200,
+                    contentType: 'text/plain',
+                    body: 'it-works'
+                });
+                return;
+            }
             if (halt) {
                 return req.abort('blockedbyclient', 1000);
             }
-            const requestUrl = req.url();
-            if (!requestUrl.startsWith('http:') && !requestUrl.startsWith('https:') && !requestUrl.startsWith('chrome-extension:') && requestUrl !== 'about:blank') {
+            if (!requestUrl.startsWith('http:') && !requestUrl.startsWith('https:') && !requestUrl.startsWith('chrome-extension:') && !requestUrl.startsWith('chrome:') && requestUrl !== 'about:blank') {
                 return req.abort('blockedbyclient', 1000);
             }
-            t0 ??= Date.now();
 
             const parsedUrl = new URL(requestUrl);
             if (isIP(parsedUrl.hostname)) {
@@ -680,35 +858,22 @@ export class PuppeteerControl extends AsyncService {
                 return req.abort('blockedbyclient', 1000);
             }
 
-            const dt = Math.ceil((Date.now() - t0) / 1000);
-            const rps = reqCounter / dt;
-            // console.log(`rps: ${rps}`);
-            const pagePhase = this.pagePhase.get(page);
-            if (pagePhase === 'background') {
-                if (rps > 10 || reqCounter > 1000) {
-                    halt = true;
-
-                    return req.abort('blockedbyclient', 1000);
-                }
-            }
-            if (reqCounter > 1000) {
-                if (rps > 60 || reqCounter > 2000) {
+            if (requestUrl.startsWith('http')) {
+                const kit = this.getRpsControlKit(page);
+                if (kit.totalRequests > 3300 || kit.totalDocumentalRequests > 1000) {
                     page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many requests` });
                     halt = true;
 
                     return req.abort('blockedbyclient', 1000);
                 }
-            }
 
-            if (domainSet.size > 200) {
-                page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many domains` });
-                halt = true;
+                if (domainSet.size > 200) {
+                    page.emit('abuse', { url: requestUrl, page, sn, reason: `DDoS attack suspected: Too many domains` });
+                    halt = true;
 
-                return req.abort('blockedbyclient', 1000);
-            }
+                    return req.abort('blockedbyclient', 1000);
+                }
 
-            if (requestUrl.startsWith('http')) {
-                const kit = this.getRpsControlKit(page);
                 await kit.onNewRequest(req);
             }
 
@@ -723,6 +888,9 @@ export class PuppeteerControl extends AsyncService {
             return req.continue(continueArgs[0], continueArgs[1]);
         });
         const reqFinishHandler = (req: HTTPRequest) => {
+            if (req?.url().startsWith('https://reader.internal')) {
+                return;
+            }
             const kit = this.getRpsControlKit(page);
             kit.onFinishRequest(req);
         };
@@ -764,15 +932,16 @@ export class PuppeteerControl extends AsyncService {
             const r = giveSnapshot(false, lastAnalytics);
             window.reportSnapshot(r);
         };
+        const handler = ()=> setTimeout(handlePageLoad);
         document.addEventListener('readystatechange', ()=> {
             if (document.readyState === 'interactive') {
                 handlePageLoad();
             }
         });
-        document.addEventListener('load', handlePageLoad);
-        window.addEventListener('load', handlePageLoad);
-        document.addEventListener('DOMContentLoaded', handlePageLoad);
-        document.addEventListener('mutationIdle', handlePageLoad);
+        document.addEventListener('load', handler);
+        window.addEventListener('load', handler);
+        document.addEventListener('DOMContentLoaded', handler);
+        document.addEventListener('mutationIdle', handler);
     }
     document.addEventListener('DOMContentLoaded', ()=> window.simulateScroll(), { once: true });
 })();
@@ -780,9 +949,8 @@ export class PuppeteerControl extends AsyncService {
 
         this.snMap.set(page, sn);
         this.logger.debug(`Page ${sn} created.`);
-        this.lastPageCratedAt = Date.now();
+        this.lastPageCreatedAt = Date.now();
         this.livePages.add(page);
-        this.pagePhase.set(page, 'idle');
 
         return page;
     }
@@ -840,7 +1008,6 @@ export class PuppeteerControl extends AsyncService {
             this.logger.error(`Failed to destroy page ${sn}`, { err });
         });
         this.livePages.delete(page);
-        this.pagePhase.delete(page);
     }
 
     async *scrap(parsedUrl: URL, options: ScrappingOptions = {}): AsyncGenerator<PageSnapshot | undefined> {
@@ -849,12 +1016,15 @@ export class PuppeteerControl extends AsyncService {
         let snapshot: PageSnapshot | undefined;
         let screenshot: Buffer | undefined;
         let pageshot: Buffer | undefined;
-        const pdfUrls: string[] = [];
+        const blobs: BlobDesc[] = [];
         let navigationResponse: HTTPResponse | undefined;
+        let pageScriptEvaluations: Promise<unknown>[] = [];
+        let frameScriptEvaluations: Promise<unknown>[] = [];
+        const preparations: Promise<unknown>[] = [];
         const page = await this.getNextPage();
         this.lifeCycleTrack.set(page, this.asyncLocalContext.ctx);
-        this.pagePhase.set(page, 'active');
-        page.on('response', (resp) => {
+
+        page.on('response', async (resp) => {
             this.blackHoleDetector.itWorked();
             const req = resp.request();
             if (req.frame() === page.mainFrame() && req.isNavigationRequest()) {
@@ -863,11 +1033,72 @@ export class PuppeteerControl extends AsyncService {
             if (!resp.ok()) {
                 return;
             }
-            const headers = resp.headers();
+            if (!['GET', 'POST'].includes(req.method())) {
+                return;
+            }
             const url = resp.url();
+            if (!url.startsWith('http')) {
+                return;
+            }
+            const headers = resp.headers();
             const contentType = headers['content-type'];
-            if (contentType?.toLowerCase().includes('application/pdf')) {
-                pdfUrls.push(url);
+            const contentTypeLower = contentType?.toLowerCase().split(';')[0].trim() || '';
+            const fileName = headers['content-disposition']?.match(/filename="([^"]+)"/i)?.[1];
+
+            let keep = false;
+            if (contentTypeLower.includes('image/')) {
+                keep = true;
+                if (navigationResponse === resp) {
+                    blobs.push({ url, fileName, contentType: contentTypeLower });
+                }
+            } else if (
+                navigationResponse === resp &&
+                this.acceptedBlobMimetypes.has(contentTypeLower)
+            ) {
+                keep = true;
+                blobs.push({ url, fileName, contentType: contentTypeLower });
+            }
+            if (keep) {
+                const body = await resp.buffer().then((buf) => {
+                    if (buf[0] === 0x3c && buf.byteLength < 4096) {
+                        const txt = buf.toString('utf-8');
+                        if (txt.trim().endsWith('>')) {
+                            return undefined;
+                        }
+                    }
+                    return new Blob([Uint8Array.from(buf)]);
+                }).catch(() => undefined);
+                options.sideLoad ??= {
+                    impersonate: {},
+                    proxyOrigin: {},
+                    hint: {},
+                } as any;
+                if (body && resp.status() === 200) {
+                    options.sideLoad!.impersonate ??= {};
+                    const r = options.sideLoad!.impersonate!;
+                    if (!(url in r)) {
+                        r[url] = {
+                            status: resp.status(),
+                            headers: headers,
+                            contentType: contentType,
+                            body,
+                        };
+                    }
+                } else {
+                    options.sideLoad!.hint ??= {};
+                    const r = options.sideLoad!.hint!;
+                    r[url] = {
+                        method: req.method(),
+                        headers: req.headers(),
+                        body: req.postData(),
+                        cookies: (await page.cookies(url, navigationResponse?.url() || url)).map((x) => {
+                            return {
+                                ...x,
+                                expires: x.expires ? new Date(x.expires > 0 ? x.expires * 1000 : 0) : undefined,
+                            };
+                        }),
+                    };
+                }
             }
         });
         page.on('request', async (req) => {
@@ -912,7 +1143,11 @@ export class PuppeteerControl extends AsyncService {
             if (impersonate) {
                 let body;
                 if (impersonate.body) {
-                    body = await readFile(await impersonate.body.filePath);
+                    if (impersonate.body instanceof Blob) {
+                        body = new Uint8Array(await impersonate.body.arrayBuffer());
+                    } else {
+                        body = await readFile(await impersonate.body.filePath);
+                    }
                     if (req.isInterceptResolutionHandled()) {
                         return;
                     }
@@ -1006,8 +1241,6 @@ export class PuppeteerControl extends AsyncService {
 
             return req.continue(continueArgs[0], continueArgs[1]);
         });
-        let pageScriptEvaluations: Promise<unknown>[] = [];
-        let frameScriptEvaluations: Promise<unknown>[] = [];
         if (options.injectPageScripts?.length) {
             page.on('framenavigated', (frame) => {
                 if (frame !== page.mainFrame()) {
@@ -1039,55 +1272,63 @@ export class PuppeteerControl extends AsyncService {
             //     'Accept-Language': options.locale
             // });
 
-            await page.evaluateOnNewDocument(() => {
-                Object.defineProperty(navigator, "language", {
-                    get: function () {
-                        return options.locale;
-                    }
-                });
-                Object.defineProperty(navigator, "languages", {
-                    get: function () {
-                        return [options.locale];
-                    }
-                });
-            });
+            preparations.push(
+                page.evaluateOnNewDocument(() => {
+                    Object.defineProperty(navigator, "language", {
+                        get: function () {
+                            return options.locale;
+                        }
+                    });
+                    Object.defineProperty(navigator, "languages", {
+                        get: function () {
+                            return [options.locale];
+                        }
+                    });
+                })
+            );
         }
 
         if (options.cookies) {
-            const mapped = options.cookies.map((x) => {
-                const draft: CookieParam = {
-                    name: x.name,
-                    value: encodeURIComponent(x.value),
-                    secure: x.secure,
-                    domain: x.domain,
-                    path: x.path,
-                    expires: x.expires ? Math.floor(x.expires.valueOf() / 1000) : undefined,
-                    sameSite: x.sameSite as any,
-                };
-                if (!draft.expires && x.maxAge) {
-                    draft.expires = Math.floor(Date.now() / 1000) + x.maxAge;
-                }
-                if (!draft.domain) {
-                    draft.url = parsedUrl.toString();
-                }
+            preparations.push((async () => {
+                const mapped = options.cookies!.map((x) => {
+                    const draft: CookieParam = {
+                        name: x.name,
+                        value: encodeURIComponent(x.value),
+                        secure: x.secure,
+                        domain: x.domain,
+                        path: x.path,
+                        expires: x.expires ? Math.floor(x.expires.valueOf() / 1000) : undefined,
+                        sameSite: x.sameSite as any,
+                    };
+                    if (!draft.expires && x.maxAge) {
+                        draft.expires = Math.floor(Date.now() / 1000) + x.maxAge;
+                    }
+                    if (!draft.domain) {
+                        draft.url = parsedUrl.toString();
+                    }
 
-                return draft;
-            });
-            try {
-                await page.setCookie(...mapped);
-            } catch (err: any) {
-                this.logger.warn(`Page ${sn}: Failed to set cookies`, { err });
-                throw new ParamValidationError({
-                    path: 'cookies',
-                    message: `Failed to set cookies: ${err?.message}`
+                    return draft;
                 });
-            }
+                try {
+                    await page.setCookie(...mapped);
+                } catch (err: any) {
+                    this.logger.warn(`Page ${sn}: Failed to set cookies`, { err });
+                    throw new ParamValidationError({
+                        path: 'cookies',
+                        message: `Failed to set cookies: ${err?.message}`
+                    });
+                }
+            })());
         }
         if (options.overrideUserAgent) {
-            await page.setUserAgent(options.overrideUserAgent);
+            preparations.push(
+                page.setUserAgent(options.overrideUserAgent)
+            );
         }
         if (options.viewport) {
-            await page.setViewport(options.viewport);
+            preparations.push(
+                page.setViewport(options.viewport)
+            );
         }
 
         let nextSnapshotDeferred = Defer();
@@ -1132,7 +1373,7 @@ export class PuppeteerControl extends AsyncService {
             );
         });
 
-        const timeout = options.timeoutMs || 30_000;
+        const timeout = options.timeoutMs || 15_000;
         const goToOptions: GoToOptions = {
             waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
             timeout,
@@ -1173,70 +1414,73 @@ export class PuppeteerControl extends AsyncService {
                     ...snapshot,
                     status: navigationResponse?.status(),
                     statusText: navigationResponse?.statusText(),
-                    pdfs: _.uniq(pdfUrls), screenshot, pageshot,
+                    blobs, screenshot, pageshot,
+                    lastModified: navigationResponse?.headers()['last-modified'],
                 },
-                { ...options, url: parsedUrl }
+                options,
+                parsedUrl,
             );
         };
         const delayPromise = delay(timeout);
-        const gotoPromise = page.goto(url, goToOptions)
-            .catch((err) => {
-                if (err instanceof TimeoutError) {
-                    this.logger.warn(`Page ${sn}: Browsing of ${url} timed out`, { err });
+        let gotoPromise: Promise<any> | undefined;
+        try {
+            await Promise.all(preparations);
+            gotoPromise = page.goto(url, goToOptions)
+                .catch((err) => {
+                    if (err instanceof TimeoutError) {
+                        this.logger.warn(`Page ${sn}: Browsing of ${url} timed out`, { err });
+                        return new AssertionFailureError({
+                            message: `Failed to goto ${url}: ${err}`,
+                            cause: err,
+                        });
+                    }
+                    if (err?.message?.startsWith('net::ERR_ABORTED')) {
+                        if (blobs.length) {
+                            // Not throw for pdf mode.
+                            return;
+                        }
+                    }
+
+                    this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err });
                     return new AssertionFailureError({
                         message: `Failed to goto ${url}: ${err}`,
                         cause: err,
                     });
-                }
-                if (err?.message?.startsWith('net::ERR_ABORTED')) {
-                    if (pdfUrls.length) {
-                        // Not throw for pdf mode.
-                        return;
+                }).then(async (stuff) => {
+                    // This check is necessary because without snapshot, the condition of the page is unclear
+                    // Calling evaluate directly may stall the process.
+                    if (!snapshot) {
+                        if (stuff instanceof Error) {
+                            throw stuff;
+                        }
                     }
-                }
-
-                this.logger.warn(`Page ${sn}: Browsing of ${url} failed`, { err });
-                return new AssertionFailureError({
-                    message: `Failed to goto ${url}: ${err}`,
-                    cause: err,
+                    await Promise.race([Promise.allSettled([...pageScriptEvaluations, ...frameScriptEvaluations]), delayPromise])
+                        .catch(() => void 0);
+                    return stuff;
                 });
-            }).then(async (stuff) => {
-                // This check is necessary because without snapshot, the condition of the page is unclear
-                // Calling evaluate directly may stall the process.
-                if (!snapshot) {
-                    if (stuff instanceof Error) {
-                        throw stuff;
-                    }
-                }
-                await Promise.race([Promise.allSettled([...pageScriptEvaluations, ...frameScriptEvaluations]), delayPromise])
-                    .catch(() => void 0);
-                return stuff;
-            });
-        if (options.waitForSelector) {
-            const t0 = Date.now();
-            waitForPromise = nextSnapshotDeferred.promise.then(() => {
-                const t1 = Date.now();
-                const elapsed = t1 - t0;
-                const remaining = timeout - elapsed;
-                const thisTimeout = remaining > 100 ? remaining : 100;
-                const p = (Array.isArray(options.waitForSelector) ?
-                    Promise.all(options.waitForSelector.map((x) => page.waitForSelector(x, { timeout: thisTimeout }))) :
-                    page.waitForSelector(options.waitForSelector!, { timeout: thisTimeout }))
-                    .then(() => {
-                        successfullyDone = true;
-                    })
-                    .catch((err) => {
-                        waitForPromise = undefined;
-                        this.logger.warn(`Page ${sn}: Failed to wait for selector ${options.waitForSelector}`, { err });
-                    });
-                return p as any;
-            });
-            finalizationPromise = Promise.allSettled([waitForPromise, gotoPromise]).then(doFinalization);
-        } else {
-            finalizationPromise = gotoPromise.then(doFinalization);
-        }
-
-        try {
+            if (options.waitForSelector) {
+                const t0 = Date.now();
+                waitForPromise = nextSnapshotDeferred.promise.then(() => {
+                    const t1 = Date.now();
+                    const elapsed = t1 - t0;
+                    const remaining = timeout - elapsed;
+                    const thisTimeout = remaining > 100 ? remaining : 100;
+                    const p = (Array.isArray(options.waitForSelector) ?
+                        Promise.all(options.waitForSelector.map((x) => page.waitForSelector(x, { timeout: thisTimeout }))) :
+                        page.waitForSelector(options.waitForSelector!, { timeout: thisTimeout }))
+                        .then(() => {
+                            successfullyDone = true;
+                        })
+                        .catch((err) => {
+                            waitForPromise = undefined;
+                            this.logger.warn(`Page ${sn}: Failed to wait for selector ${options.waitForSelector}`, { err });
+                        });
+                    return p as any;
+                });
+                finalizationPromise = waitForPromise.catch(() => gotoPromise).then(doFinalization);
+            } else {
+                finalizationPromise = gotoPromise.then(doFinalization);
+            }
             let lastHTML = snapshot?.html;
             while (true) {
                 const ckpt = [nextSnapshotDeferred.promise, waitForPromise ?? gotoPromise];
@@ -1248,13 +1492,17 @@ export class PuppeteerControl extends AsyncService {
                 await Promise.race(ckpt).catch((err) => error = err);
                 if (successfullyDone && !error) {
                     if (!snapshot && !screenshot) {
+                        await finalizationPromise;
+                    }
+                    if (!snapshot && !screenshot) {
                         throw new AssertionFailureError(`Could not extract any meaningful content from the page`);
                     }
                     yield {
+                        publishedTime: navigationResponse?.headers()['last-modified'],
                         ...snapshot,
                         status: navigationResponse?.status(),
                         statusText: navigationResponse?.statusText(),
-                        pdfs: _.uniq(pdfUrls), screenshot, pageshot
+                        blobs, screenshot, pageshot
                     } as PageSnapshot;
                     break;
                 }
@@ -1268,8 +1516,9 @@ export class PuppeteerControl extends AsyncService {
                         ...snapshot,
                         status: navigationResponse?.status(),
                         statusText: navigationResponse?.statusText(),
-                        pdfs: _.uniq(pdfUrls), screenshot, pageshot,
+                        blobs, screenshot, pageshot,
                         isIntermediate: true,
+                        lastModified: navigationResponse?.headers()['last-modified'],
                     } as PageSnapshot;
                 }
                 if (error) {
@@ -1284,10 +1533,10 @@ export class PuppeteerControl extends AsyncService {
                 ...snapshot,
                 status: navigationResponse?.status(),
                 statusText: navigationResponse?.statusText(),
-                pdfs: _.uniq(pdfUrls), screenshot, pageshot
+                lastModified: navigationResponse?.headers()['last-modified'],
+                blobs, screenshot, pageshot
             } as PageSnapshot;
         } finally {
-            this.pagePhase.set(page, 'background');
             Promise.allSettled([gotoPromise, waitForPromise, finalizationPromise]).finally(() => {
                 page.off('snapshot', hdl);
                 this.ditchPage(page);
@@ -1296,7 +1545,7 @@ export class PuppeteerControl extends AsyncService {
         }
     }
 
-    protected async takeScreenShot(page: Page, opts?: Parameters<typeof page.screenshot>[0]): Promise<Buffer | undefined> {
+    protected async takeScreenShot(page: Page, opts?: Parameters<typeof Page.prototype.screenshot>[0]): Promise<Buffer | undefined> {
         const r = await page.screenshot(opts).catch((err) => {
             this.logger.warn(`Failed to take screenshot`, { err });
         });

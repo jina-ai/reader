@@ -1,12 +1,17 @@
-import { AsyncService, AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, delay, marshalErrorLike } from 'civkit';
+import { AutoCastable, DownstreamServiceFailureError, Prop, RPC_CALL_ENVIRONMENT, } from 'civkit/civ-rpc';
 import { singleton } from 'tsyringe';
 import { GlobalLogger } from './logger';
-import { SecretExposer } from '../shared/services/secrets';
 import { AsyncLocalContext } from './async-context';
-import { SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse } from '../shared/3rd-party/serper-search';
+import {
+    SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse,
+    SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse
+} from '../3rd-party/serper-search';
 import { BlackHoleDetector } from './blackhole-detector';
 import { Context } from './registry';
-import { ServiceBadAttemptError } from '../shared';
+import { ServiceBadAttemptError } from './errors';
+import { AsyncService } from 'civkit/async-service';
+import { EnvConfig } from './envconfig';
+import { delay } from 'civkit/timeout';
 
 @singleton()
 export class SerperSearchService extends AsyncService {
@@ -18,7 +23,7 @@ export class SerperSearchService extends AsyncService {
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected secretExposer: SecretExposer,
+        protected envConfig: EnvConfig,
         protected threadLocal: AsyncLocalContext,
         protected blackHoleDetector: BlackHoleDetector,
     ) {
@@ -29,8 +34,8 @@ export class SerperSearchService extends AsyncService {
         await this.dependencyReady();
         this.emit('ready');
 
-        this.serperGoogleSearchHTTP = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
-        this.serperBingSearchHTTP = new SerperBingHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.serperGoogleSearchHTTP = new SerperGoogleHTTP(this.envConfig.SERPER_SEARCH_API_KEY);
+        this.serperBingSearchHTTP = new SerperBingHTTP(this.envConfig.SERPER_SEARCH_API_KEY);
     }
 
     *iterClient() {
@@ -109,7 +114,7 @@ export class SerperSearchService extends AsyncService {
                 return r.parsed;
             } catch (err: any) {
                 const dt = Date.now() - t0;
-                this.logger.error(`${variant} search failed: ${err?.message}`, { searchDt: dt, err: marshalErrorLike(err) });
+                this.logger.error(`${variant} search failed: ${err?.message}`, { searchDt: dt, err });
                 if (err?.status === 429) {
                     await delay(500 + 1000 * Math.random());
                     continue;
@@ -180,10 +185,10 @@ export class GoogleSearchExplicitOperatorsDto extends AutoCastable {
                 }
             }
         }
-        const opPart = chunks.length > 1 ? chunks.map((x) => `(${x})`).join(' AND ') : chunks;
+        const opPart = chunks.length > 1 ? [chunks.map((x) => `(${x})`).join(' AND ')] : chunks;
 
         if (opPart.length) {
-            return [searchTerm, opPart].join(' ');
+            return [searchTerm, ...opPart].join(' ');
         }
 
         return searchTerm;

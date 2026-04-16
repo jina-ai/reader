@@ -1,4 +1,4 @@
-import { marshalErrorLike } from 'civkit';
+import { marshalErrorLike } from 'civkit/lang';
 import { AbstractPseudoTransfer, SYM_PSEUDO_TRANSFERABLE } from 'civkit/pseudo-transfer';
 import { container, singleton } from 'tsyringe';
 

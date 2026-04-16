@@ -1,4 +1,5 @@
-import { TPM, parseJSONText } from 'civkit';
+import { TPM } from 'civkit/civ-rpc';
+import { parseJSONText } from 'civkit/vectorize';
 import { Transform, TransformCallback, TransformOptions } from 'stream';
 
 export class InputServerEventStream extends Transform {

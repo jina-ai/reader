@@ -1,10 +1,12 @@
 import { container, singleton } from 'tsyringe';
 import fsp from 'fs/promises';
 import { CityResponse, Reader } from 'maxmind';
-import { AsyncService, AutoCastable, Prop, runOnce } from 'civkit';
+import { AutoCastable, Prop } from 'civkit/civ-rpc';
 import { GlobalLogger } from './logger';
 import path from 'path';
 import { Threaded } from './threaded';
+import { AsyncService } from 'civkit/async-service';
+import { runOnce } from 'civkit/decorators';
 
 export enum GEOIP_SUPPORTED_LANGUAGES {
     EN = 'en',

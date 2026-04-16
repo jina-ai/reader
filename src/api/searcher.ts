@@ -1,12 +1,12 @@
 import { singleton } from 'tsyringe';
 import {
     assignTransferProtocolMeta, RPCHost, RPCReflection, AssertionFailureError, assignMeta, RawString,
+    DownstreamServiceFailureError,
+    AuthenticationRequiredError,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import { objHashMd5B64Of } from 'civkit/hash';
 import _ from 'lodash';
-
-import { RateLimitControl, RateLimitDesc, RateLimitTriggeredError } from '../shared/services/rate-limit';
 
 import { CrawlerHost, ExtraScrappingOptions } from './crawler';
 import { CrawlerOptions, RESPOND_TIMING } from '../dto/crawler-options';
@@ -16,19 +16,27 @@ import { GoogleSearchExplicitOperatorsDto } from '../services/serper-search';
 import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
-import { OutputServerEventStream } from '../lib/transform-server-event-stream';
-import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { InsufficientBalanceError } from '../services/errors';
+import { InputServerEventStream, OutputServerEventStream } from '../lib/transform-server-event-stream';
 
 import { SerperBingSearchService, SerperGoogleSearchService } from '../services/serp/serper';
-import { toAsyncGenerator } from '../utils/misc';
-import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
-import { LRUCache } from 'lru-cache';
-import { API_CALL_STATUS } from '../shared/db/api-roll';
-import { SERPResult } from '../db/searched';
-import { SerperSearchQueryParams, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
-import { InternalJinaSerpService } from '../services/serp/internal';
+import { consumeAsyncGenerator, delayGenerator, finalYield, raceAsyncGenerators, timeoutGenerator, toAsyncGenerator } from '../utils/misc';
+import { SerperSearchQueryParams, WORLD_COUNTRIES, WORLD_LANGUAGES } from '../3rd-party/serper-search';
 import { WebSearchEntry } from '../services/serp/compat';
+import { CommonGoogleSERP } from '../services/serp/common-serp';
+import { GoogleSERP, GoogleSERPOldFashion } from '../services/serp/google';
+import { EnvConfig } from '../services/envconfig';
+import { Readable } from 'stream';
+import { once } from 'events';
+import { Defer } from 'civkit/defer';
+import { BingSERP } from '../services/serp/bing';
+import { bcp47ToIso639_3 } from '../utils/languages';
+import { parseSearchQuery } from '../utils/search-query';
+import { JSDomControl } from '../services/jsdom';
+import { delay } from 'civkit/timeout';
+import { BaseAuthDTO } from '../dto/base-auth';
+import { SERPResult } from '../db/models';
+import { StorageLayer } from '../db/noop-storage';
+import { AUTH_DTO_CLS } from '../config';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
 
@@ -36,11 +44,6 @@ interface FormattedPage extends RealFormattedPage {
     favicon?: string;
     date?: string;
 }
-
-type RateLimitCache = {
-    blockedUntil?: Date;
-    user?: JinaEmbeddingsTokenAccount;
-};
 
 @singleton()
 export class SearcherHost extends RPCHost {
@@ -50,50 +53,26 @@ export class SearcherHost extends RPCHost {
     cacheValidMs = 1000 * 3600;
     pageCacheToleranceMs = 1000 * 3600 * 24;
 
-    reasonableDelayMs = 15_000;
+    reasonableDelayMs = 25_000;
 
-    targetResultCount = 5;
-
-    highFreqKeyCache = new LRUCache<string, RateLimitCache>({
-        max: 256,
-        ttl: 60 * 60 * 1000,
-        updateAgeOnGet: false,
-        updateAgeOnHas: false,
-    });
-
-    batchedCaches: SERPResult[] = [];
+    targetResultCount = 6;
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected rateLimitControl: RateLimitControl,
+        protected envConfig: EnvConfig,
         protected threadLocal: AsyncLocalContext,
         protected crawler: CrawlerHost,
         protected snapshotFormatter: SnapshotFormatter,
+        protected jsdomControl: JSDomControl,
         protected serperGoogle: SerperGoogleSearchService,
         protected serperBing: SerperBingSearchService,
-        protected jinaSerp: InternalJinaSerpService,
+        protected commonGoogleSerp: CommonGoogleSERP,
+        protected googleSERP: GoogleSERP,
+        protected googleSERPOld: GoogleSERPOldFashion,
+        protected bingSERP: BingSERP,
+        protected storageLayer: StorageLayer,
     ) {
         super(...arguments);
-
-        setInterval(() => {
-            const thisBatch = this.batchedCaches;
-            this.batchedCaches = [];
-            if (!thisBatch.length) {
-                return;
-            }
-            const batch = SERPResult.DB.batch();
-
-            for (const x of thisBatch) {
-                batch.set(SERPResult.COLLECTION.doc(), x.degradeForFireStore());
-            }
-            batch.commit()
-                .then(() => {
-                    this.logger.debug(`Saved ${thisBatch.length} caches by batch`);
-                })
-                .catch((err) => {
-                    this.logger.warn(`Failed to cache search result in batch`, { err });
-                });
-        }, 1000 * 10 + Math.round(1000 * Math.random())).unref();
     }
 
     override async init() {
@@ -126,38 +105,25 @@ export class SearcherHost extends RPCHost {
     async search(
         @RPCReflect() rpcReflect: RPCReflection,
         @Ctx() ctx: Context,
-        auth: JinaEmbeddingsAuthDTO,
+        @Param({ type: AUTH_DTO_CLS }) auth: BaseAuthDTO,
         crawlerOptions: CrawlerOptions,
         searchExplicitOperators: GoogleSearchExplicitOperatorsDto,
-        @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
-        count: number,
         @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
         variant: 'web' | 'images' | 'news',
-        @Param('provider', { type: new Set(['google', 'bing']), default: 'google' })
-        searchEngine: 'google' | 'bing',
+        @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
-        num?: number,
+        count: number = 10,
+        @Param('provider', { type: new Set(['google', 'bing', 'reader']) })
+        @Param('engine', { type: new Set(['google', 'bing', 'reader']) })
+        searchEngine?: 'google' | 'bing' | 'reader',
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
-        @Param('fallback', { type: Boolean, default: true }) fallback?: boolean,
+        @Param('fallback', { type: Boolean, default: false }) fallback?: boolean,
         @Param('q') q?: string,
+        @Param('nfpr') nfpr?: boolean,
     ) {
-        // We want to make our search API follow SERP schema, so we need to expose 'num' parameter.
-        // Since we used 'count' as 'num' previously, we need to keep 'count' for old users.
-        // Here we combine 'count' and 'num' to 'count' for the rest of the function.
-        count = (num !== undefined ? num : count) ?? 10;
-
-        const authToken = auth.bearerToken;
-        let highFreqKey: RateLimitCache | undefined;
-        if (authToken && this.highFreqKeyCache.has(authToken)) {
-            highFreqKey = this.highFreqKeyCache.get(authToken)!;
-            auth.user = highFreqKey.user;
-            auth.uid = highFreqKey.user?.user_id;
-        }
-
-        const uid = await auth.solveUID();
         // Return content by default
         const crawlWithoutContent = crawlerOptions.respondWith.includes('no-content');
         const withFavicon = Boolean(ctx.get('X-With-Favicons'));
@@ -168,7 +134,7 @@ export class SearcherHost extends RPCHost {
         const noSlashPath = decodeURIComponent(ctx.path).slice(1);
         if (!noSlashPath && !q) {
             const index = await this.crawler.getIndex(auth);
-            if (!uid) {
+            if (!auth.isInternal && !auth.bearerToken) {
                 index.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
             }
             if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
@@ -181,130 +147,32 @@ export class SearcherHost extends RPCHost {
             );
         }
 
-        const user = await auth.assertUser();
-        if (!(user.wallet.total_balance > 0)) {
-            throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
+        const {
+            uid,
+            reportOptions,
+            reportUsage,
+            isAnonymous,
+        } = await this.storageLayer.rateLimit(ctx, rpcReflect, auth as any);
+
+        if (isAnonymous && !auth.isInternal) {
+            throw new AuthenticationRequiredError('Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.');
         }
 
-        if (highFreqKey?.blockedUntil) {
-            const now = new Date();
-            const blockedTimeRemaining = (highFreqKey.blockedUntil.valueOf() - now.valueOf());
-            if (blockedTimeRemaining > 0) {
-                throw RateLimitTriggeredError.from({
-                    message: `Per UID rate limit exceeded (async)`,
-                    retryAfter: Math.ceil(blockedTimeRemaining / 1000),
-                });
-            }
-        }
-
-        const rateLimitPolicy = auth.getRateLimits(rpcReflect.name.toUpperCase()) || [
-            parseInt(user.metadata?.speed_level) >= 2 ?
-                RateLimitDesc.from({
-                    occurrence: 1000,
-                    periodSeconds: 60
-                }) :
-                RateLimitDesc.from({
-                    occurrence: 100,
-                    periodSeconds: 60
-                })
-        ];
-
-        const apiRollPromise = this.rateLimitControl.simpleRPCUidBasedLimit(
-            rpcReflect, uid!, [rpcReflect.name.toUpperCase()],
-            ...rateLimitPolicy
-        );
-
-        if (!highFreqKey) {
-            // Normal path
-            await apiRollPromise;
-
-            if (rateLimitPolicy.some(
-                (x) => {
-                    const rpm = x.occurrence / (x.periodSeconds / 60);
-                    if (rpm >= 400) {
-                        return true;
-                    }
-
-                    return false;
-                })
-            ) {
-                this.highFreqKeyCache.set(auth.bearerToken!, {
-                    user,
-                });
-            }
-
-        } else {
-            // High freq key path
-            apiRollPromise.then(
-                // Rate limit not triggered, make sure not blocking.
-                () => {
-                    delete highFreqKey.blockedUntil;
-                },
-                // Rate limit triggered
-                (err) => {
-                    if (!(err instanceof RateLimitTriggeredError)) {
-                        return;
-                    }
-                    const now = Date.now();
-                    let tgtDate;
-                    if (err.retryAfterDate) {
-                        tgtDate = err.retryAfterDate;
-                    } else if (err.retryAfter) {
-                        tgtDate = new Date(now + err.retryAfter * 1000);
-                    }
-
-                    if (tgtDate) {
-                        const dt = tgtDate.valueOf() - now;
-                        highFreqKey.blockedUntil = tgtDate;
-                        setTimeout(() => {
-                            if (highFreqKey.blockedUntil === tgtDate) {
-                                delete highFreqKey.blockedUntil;
-                            }
-                        }, dt).unref();
-                    }
-                }
-            ).finally(async () => {
-                // Always asynchronously update user(wallet);
-                const user = await auth.getBrief().catch(() => undefined);
-                if (user) {
-                    highFreqKey.user = user;
-                }
-            });
-        }
-
-        rpcReflect.finally(async () => {
-            if (chargeAmount) {
-                auth.reportUsage(chargeAmount, `reader-${rpcReflect.name}`).catch((err) => {
-                    this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
-                });
-                try {
-                    const apiRoll = await apiRollPromise;
-                    apiRoll.chargeAmount = chargeAmount;
-
-                } catch (err) {
-                    await this.rateLimitControl.record({
-                        uid,
-                        tags: [rpcReflect.name.toUpperCase()],
-                        status: API_CALL_STATUS.SUCCESS,
-                        chargeAmount,
-                    }).save().catch((err) => {
-                        this.logger.warn(`Failed to save rate limit record`, { err: marshalErrorLike(err) });
-                    });
-                }
-            }
+        rpcReflect.finally(() => {
+            reportOptions?.(crawlerOptions.customizedProps());
+            reportUsage?.(chargeAmount, 'reader-search');
         });
 
         delete crawlerOptions.html;
+        delete crawlerOptions.file;
+        delete crawlerOptions.pdf;
 
         const crawlOpts = await this.crawler.configure(crawlerOptions);
+        crawlOpts.eligibleForPageIndex = true;
         const searchQuery = searchExplicitOperators.addTo(q || noSlashPath);
 
-        let fetchNum = count;
-        if ((page ?? 1) === 1) {
-            fetchNum = count > 10 ? 30 : 20;
-        }
+        this.logger.info(`Accepting request from ${uid || ctx.ip}`, { opts: crawlerOptions, searchQuery });
 
-        let fallbackQuery: string | undefined;
         let chargeAmountScaler = 1;
         if (searchEngine === 'bing') {
             this.threadLocal.set('bing-preferred', true);
@@ -315,65 +183,125 @@ export class SearcherHost extends RPCHost {
             chargeAmountScaler = 5;
         }
 
-        // Search with fallback logic if enabled
         const searchParams = {
             variant,
             provider: searchEngine,
             q: searchQuery,
-            num: fetchNum,
+            num: count,
             gl,
             hl,
             location,
             page,
+            nfpr,
         };
+        const timeoutMs = crawlOpts.timeoutMs || this.reasonableDelayMs;
+        const t0 = performance.now();
 
-        const { results, query: successQuery, tryTimes } = await this.searchWithFallback(
-            searchParams, fallback, crawlerOptions.noCache
-        );
-        chargeAmountScaler *= tryTimes;
+        let localSearchIterator: AsyncGenerator<FormattedPage[], void, undefined> | undefined;
+        let localResultsPromise: Promise<FormattedPage[] | undefined> | undefined;
+        let isDelayDemanding = false;
+        let it;
+        let results: FormattedPage[];
+        if (searchEngine === 'reader') {
+            this.logger.debug(`Preparing local cache search`, { timeoutMs });
+            localSearchIterator = this.readerLocalSearch(searchParams, crawlOpts, crawlerOptions);
+            localResultsPromise = localSearchIterator.next().then((r) => r.value!);
+            results = await localResultsPromise || [];
+            it = localSearchIterator;
+        } else if (variant === 'web' && !crawlerOptions.noCache) {
+            const cachedSearchIterator = this.cachedSearch(searchParams, crawlOpts, crawlerOptions);
+            localSearchIterator = this.readerLocalSearch(searchParams, crawlOpts, crawlerOptions);
+            let raceIsOver = false;
+            if (timeoutMs <= 5000) {
+                localResultsPromise = localSearchIterator.next().then((r) => r.value!);
+                isDelayDemanding = true;
+                this.logger.debug(`Preparing local cache search`, { timeoutMs });
+            } else {
+                localResultsPromise = delay(timeoutMs - 5000).then(() => {
+                    if (raceIsOver) {
+                        localSearchIterator?.return();
+                        return;
+                    }
+                    this.logger.debug(`Preparing local cache search`, { timeoutMs });
+                    return localSearchIterator!.next();
+                }).then((r) => r?.value || undefined);
+            }
+            const liveResults = cachedSearchIterator.next().then((r) => r.value!);
+            const t0 = performance.now();
+            const r = await Promise.race([
+                delay(timeoutMs)
+                    .then(() => localResultsPromise)
+                    .then((r) => ({ results: r, it: localSearchIterator! }))
+                    .catch((err) => {
+                        this.logger.warn(`Error happened during consumption of local search generator`, { err });
+                        return liveResults.then((r) => ({ results: r, it: cachedSearchIterator }));
+                    }),
+                liveResults.then((r) => ({ results: r, it: cachedSearchIterator }))
+            ]).finally(() => raceIsOver = true);
 
-        fallbackQuery = successQuery !== searchQuery ? successQuery : undefined;
+            it = r.it;
+            const dt = performance.now() - t0;
+            if (it === localSearchIterator) {
+                this.logger.debug(`Local search won the race after ${dt.toFixed(1)}ms`, { timeoutMs });
+                delete crawlerOptions.timeout;
+                delete crawlOpts.timeoutMs;
+                consumeAsyncGenerator(cachedSearchIterator).catch((err) => {
+                    this.logger.warn(`Error happened during consumption of live search generator`, { err });
+                });
+            } else {
+                this.logger.debug(`Cached search won the race after ${dt.toFixed(1)}ms`, { timeoutMs });
+            }
+            results = r.results || [];
+        } else {
+            it = this.cachedSearch(searchParams, crawlOpts, crawlerOptions);
+            results = (await it.next()).value;
+        }
 
-        if (!results.length) {
+        if (!results?.length && fallback) {
+            this.logger.debug(`No results found, falling back to local search`, { searchQuery, timeoutMs });
+            const localResults = await localResultsPromise;
+            if (localResults?.length) {
+                results = localResults;
+                it = localSearchIterator!;
+                this.logger.debug(`Fallback to local search results`, { resultsNum: results.length, searchQuery });
+            }
+        }
+
+        if (!results?.length) {
             throw new AssertionFailureError(`No search results available for query ${searchQuery}`);
         }
 
-        if (crawlOpts.timeoutMs && crawlOpts.timeoutMs < 30_000) {
-            delete crawlOpts.timeoutMs;
-        }
-
-
         let lastScrapped: any[] | undefined;
-        const targetResultCount = crawlWithoutContent ? count : count + 2;
-        const trimmedResults: any[] = results.filter((x) => Boolean(x.link)).slice(0, targetResultCount).map((x) => this.mapToFinalResults(x));
-        trimmedResults.toString = function () {
-            let r = this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
-            if (fallbackQuery) {
-                r = `Fallback query: ${fallbackQuery}\n\n${r}`;
-            }
-            return r;
-        };
+
+
         if (!crawlerOptions.respondWith.includes('no-content') &&
             ['html', 'text', 'shot', 'markdown', 'content'].some((x) => crawlerOptions.respondWith.includes(x))
         ) {
-            for (const x of trimmedResults) {
+            for (const x of results) {
                 x.content ??= '';
             }
         }
-        const assigningOfGeneralMixins = Promise.allSettled(
-            trimmedResults.map((x) => this.assignGeneralMixin(x))
-        );
-
-        let it;
 
         if (crawlWithoutContent || count === 0) {
-            it = toAsyncGenerator(trimmedResults);
-            await assigningOfGeneralMixins;
+            if (localSearchIterator) {
+                localSearchIterator.return();
+            }
+            delete crawlerOptions.timeout;
+            delete crawlOpts.timeoutMs;
+
+            if (isDelayDemanding) {
+                consumeAsyncGenerator(it);
+            } else {
+                it.return();
+            }
+
+            it = toAsyncGenerator(results);
+        } else if (localSearchIterator && it !== localSearchIterator && (!page || page <= 1)) {
+            const dt = performance.now() - t0;
+            it = raceAsyncGenerators(it, delayGenerator(timeoutMs - dt, localSearchIterator));
         } else {
-            it = this.fetchSearchResults(crawlerOptions.respondWith, trimmedResults, crawlOpts,
-                CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
-                count,
-            );
+            const dt = performance.now() - t0;
+            it = raceAsyncGenerators(it, timeoutGenerator(Math.max(timeoutMs - dt, 2000)));
         }
 
         if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
@@ -388,15 +316,8 @@ export class SearcherHost extends RPCHost {
                         break;
                     }
 
-                    chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler, fallbackQuery);
-                    lastScrapped = scrapped;
-
-                    if (fallbackQuery) {
-                        sseStream.write({
-                            event: 'meta',
-                            data: { fallback: fallbackQuery },
-                        });
-                    }
+                    chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler);
+                    lastScrapped = scrapped.slice(0, count);
 
                     sseStream.write({
                         event: 'data',
@@ -418,177 +339,57 @@ export class SearcherHost extends RPCHost {
             return sseStream;
         }
 
-        let earlyReturn = false;
         if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
-            let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
-            const setEarlyReturnTimer = () => {
-                if (earlyReturnTimer) {
-                    return;
-                }
-                earlyReturnTimer = setTimeout(async () => {
-                    if (!lastScrapped) {
-                        return;
-                    }
-                    await assigningOfGeneralMixins;
-                    chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
-
-                    rpcReflect.return(lastScrapped);
-                    earlyReturn = true;
-                }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
-            };
-
             for await (const scrapped of it) {
                 lastScrapped = scrapped;
-                if (rpcReflect.signal.aborted || earlyReturn) {
+                if (rpcReflect.signal.aborted) {
                     break;
                 }
-                if (_.some(scrapped, (x) => this.pageQualified(x))) {
-                    setEarlyReturnTimer();
-                }
-                if (!this.searchResultsQualified(scrapped, count)) {
+
+                if (!lastScrapped || !this.searchResultsQualified(lastScrapped, count)) {
                     continue;
                 }
-                if (earlyReturnTimer) {
-                    clearTimeout(earlyReturnTimer);
-                }
-                await assigningOfGeneralMixins;
-                chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler, fallbackQuery);
 
-                return scrapped;
-            }
+                await this.assignGeneralMixin(lastScrapped, count);
+                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
 
-            if (earlyReturnTimer) {
-                clearTimeout(earlyReturnTimer);
+                return lastScrapped;
             }
 
             if (!lastScrapped) {
                 throw new AssertionFailureError(`No content available for query ${searchQuery}`);
             }
 
-            if (!earlyReturn) {
-                await assigningOfGeneralMixins;
-                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
-            }
+            await this.assignGeneralMixin(lastScrapped, count);
+            chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
 
             return lastScrapped;
         }
 
-        let earlyReturnTimer: ReturnType<typeof setTimeout> | undefined;
-        const setEarlyReturnTimer = () => {
-            if (earlyReturnTimer) {
-                return;
-            }
-            earlyReturnTimer = setTimeout(async () => {
-                if (!lastScrapped) {
-                    return;
-                }
-                await assigningOfGeneralMixins;
-                chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
-
-                rpcReflect.return(assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null }));
-                earlyReturn = true;
-            }, ((crawlerOptions.timeout || 0) * 1000) || this.reasonableDelayMs);
-        };
-
         for await (const scrapped of it) {
             lastScrapped = scrapped;
-            if (rpcReflect.signal.aborted || earlyReturn) {
+            if (rpcReflect.signal.aborted) {
                 break;
             }
-            if (_.some(scrapped, (x) => this.pageQualified(x))) {
-                setEarlyReturnTimer();
-            }
 
-            if (!this.searchResultsQualified(scrapped, count)) {
+            if (!lastScrapped || !this.searchResultsQualified(lastScrapped, count)) {
                 continue;
             }
 
-            if (earlyReturnTimer) {
-                clearTimeout(earlyReturnTimer);
-            }
-            await assigningOfGeneralMixins;
-            chargeAmount = this.assignChargeAmount(scrapped, count, chargeAmountScaler, fallbackQuery);
+            await this.assignGeneralMixin(lastScrapped, count);
+            chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
 
-            return assignTransferProtocolMeta(`${scrapped}`, { contentType: 'text/plain', envelope: null });
-        }
-
-        if (earlyReturnTimer) {
-            clearTimeout(earlyReturnTimer);
+            return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
         }
 
         if (!lastScrapped) {
             throw new AssertionFailureError(`No content available for query ${searchQuery}`);
         }
 
-        if (!earlyReturn) {
-            await assigningOfGeneralMixins;
-            chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler, fallbackQuery);
-        }
+        await this.assignGeneralMixin(lastScrapped, count);
+        chargeAmount = this.assignChargeAmount(lastScrapped, count, chargeAmountScaler);
 
         return assignTransferProtocolMeta(`${lastScrapped}`, { contentType: 'text/plain', envelope: null });
-    }
-
-    /**
-     * Search with fallback to progressively shorter queries if no results found
-     * @param params Search parameters
-     * @param useFallback Whether to use the fallback mechanism
-     * @param noCache Whether to bypass cache
-     * @returns Search response and the successful query
-     */
-    async searchWithFallback(
-        params: SerperSearchQueryParams & { variant: 'web' | 'images' | 'news'; provider?: string; },
-        useFallback: boolean = false,
-        noCache: boolean = false
-    ) {
-        // Try original query first
-        const originalQuery = params.q;
-        const containsRTL = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF\u0590-\u05FF\uFB1D-\uFB4F\u0700-\u074F\u0780-\u07BF\u07C0-\u07FF]/.test(originalQuery);
-
-        // Extract results based on variant
-        let tryTimes = 1;
-        const results = await this.cachedSearch(params.variant, params, noCache);
-        if (results.length || !useFallback) {
-            return { results, query: params.q, tryTimes };
-        }
-
-        let queryTerms = originalQuery.split(/\s+/);
-        const lastResort = containsRTL ? queryTerms.slice(queryTerms.length - 2) : queryTerms.slice(0, 2);
-
-        this.logger.info(`No results for "${originalQuery}", trying fallback queries`);
-
-        let terms: string[] = [];
-        // fallback n times
-        const n = 4;
-
-        while (tryTimes < n) {
-            const delta = Math.ceil(queryTerms.length / n) * tryTimes;
-            terms = containsRTL ? queryTerms.slice(delta) : queryTerms.slice(0, queryTerms.length - delta);
-            const query = terms.join(' ');
-            if (!query) {
-                break;
-            }
-            tryTimes += 1;
-            this.logger.info(`Retrying search with fallback query: "${query}"`);
-            const fallbackParams = { ...params, q: query };
-            const fallbackResults = await this.cachedSearch(params.variant, fallbackParams, noCache);
-            if (fallbackResults.length > 0) {
-                return { results: fallbackResults, query: fallbackParams.q, tryTimes };
-            }
-        }
-
-        if (terms.length > lastResort.length) {
-            const query = lastResort.join(' ');
-            this.logger.info(`Retrying search with fallback query: "${query}"`);
-            const fallbackParams = { ...params, q: query };
-            tryTimes += 1;
-            const fallbackResults = await this.cachedSearch(params.variant, fallbackParams, noCache);
-
-            if (fallbackResults.length > 0) {
-                return { results: fallbackResults, query, tryTimes };
-            }
-        }
-
-        return { results, query: originalQuery, tryTimes };
     }
 
     async *fetchSearchResults(
@@ -602,6 +403,23 @@ export class SearcherHost extends RPCHost {
             return;
         }
         const urls = searchResults.map((x) => new URL(x.url!));
+
+        if (crawlerOptions) {
+            let offloaded = false;
+            for await (const x of this.offloadScrapMany(urls, crawlerOptions, options)) {
+                offloaded = true;
+                for (const [i, v] of x.entries()) {
+                    if (v) {
+                        Object.assign(searchResults[i], v);
+                    }
+                }
+                yield this.reOrganizeSearchResults(searchResults, count);
+            }
+            if (offloaded) {
+                return;
+            }
+        }
+
         const snapshotMap = new WeakMap();
         for await (const scrapped of this.crawler.scrapMany(urls, options, crawlerOptions)) {
             const mapped = scrapped.map((x, i) => {
@@ -611,7 +429,7 @@ export class SearcherHost extends RPCHost {
                 if (snapshotMap.has(x)) {
                     return snapshotMap.get(x);
                 }
-                return this.crawler.formatSnapshotWithPDFSideLoad(mode, x, urls[i], undefined, options).then((r) => {
+                return this.snapshotFormatter.formatSnapshot(mode, x, urls[i]).then((r) => {
                     snapshotMap.set(x, r);
 
                     return r;
@@ -633,6 +451,110 @@ export class SearcherHost extends RPCHost {
         }
     }
 
+    async *offloadScrapMany(urls: URL[], crawlerOptions: CrawlerOptions, scrappingOptions?: ExtraScrappingOptions) {
+        if (!process.env.JINA_CRAWLER_OFFLOAD_ORIGIN) {
+            return undefined;
+        }
+        this.logger.debug(`Offloading ${urls.length} URLs to internal crawler API`, { urls });
+
+        const results = new Array(urls.length);
+        let nextDeferred = Defer<any>();
+        const abortCtrl = new AbortController();
+        const allJobs = urls.map(async (x, i) => {
+            try {
+                const cacheIt = this.crawler.queryCache(x, this.pageCacheToleranceMs);
+                const cacheMeta = await finalYield(cacheIt);
+                if (cacheMeta?.isFresh) {
+                    const snapshot = cacheMeta.snapshot;
+                    const patchedSnapshot = await this.jsdomControl.narrowSnapshot(snapshot, scrappingOptions);
+                    if (!patchedSnapshot) {
+                        return undefined;
+                    }
+                    const finalSnapshot = await this.snapshotFormatter.formatSnapshot(
+                        crawlerOptions.respondWith,
+                        patchedSnapshot,
+                        new URL(patchedSnapshot.href)
+                    );
+                    results[i] = finalSnapshot;
+                    return;
+                }
+
+                const r = await fetch(`${process.env.JINA_CRAWLER_OFFLOAD_ORIGIN}/`, {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'text/event-stream',
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        ...crawlerOptions,
+                        url: x.href,
+                        proxy: 'none',
+                    }),
+                    signal: abortCtrl.signal,
+                });
+
+                if (r.status !== 200) {
+                    const err = await r.json();
+                    this.logger.warn(`Failed to offload scrap for ${x.href}, status: ${r.status}`, { status: r.status });
+                    throw new DownstreamServiceFailureError({
+                        message: `Failed to offload scrap for ${x.href}, status: ${r.status}`,
+                        cause: err,
+                    });
+                }
+
+                const streamNormalized = Readable.fromWeb(r.body as any);
+                const parsed = streamNormalized.pipe(new InputServerEventStream());
+                streamNormalized.on('error', (err) => parsed.destroy(err));
+                parsed.on('error', () => 'dont crash anything');
+
+                parsed.on('data', (event) => {
+                    if (event.error) {
+                        const err = new DownstreamServiceFailureError({
+                            message: `Failed to offload scrap for ${x.href}`,
+                            cause: event.error,
+                        });
+
+                        parsed.destroy(err);
+                        return;
+                    }
+                    if (event.data && typeof event.data === 'object') {
+                        results[i] = event.data;
+                        nextDeferred.resolve();
+                        nextDeferred = Defer<any>();
+                    }
+                });
+
+                await once(parsed, 'end');
+            } catch (err: any) {
+                if (err?.name === 'AbortError') {
+                    return;
+                }
+                this.logger.warn(`Failed to offload scrap for ${x.href}`, { err });
+            }
+        });
+        let done;
+        Promise.allSettled(allJobs).then(() => {
+            done = true;
+            nextDeferred.resolve();
+        });
+
+        yield results;
+        try {
+            do {
+                const r = await nextDeferred.promise.catch(() => 'dont crash anything');
+                if (typeof r === 'string') {
+                    continue;
+                }
+                yield results;
+            } while (!done);
+            yield results;
+        } finally {
+            abortCtrl.abort();
+            this.logger.debug(`Offloaded scrap for ${urls.length} URLs done`, { urls });
+        }
+
+    }
+
     reOrganizeSearchResults(searchResults: FormattedPage[], count?: number) {
         const targetResultCount = count || this.targetResultCount;
         const [qualifiedPages, unqualifiedPages] = _.partition(searchResults, (x) => this.pageQualified(x));
@@ -652,7 +574,7 @@ export class SearcherHost extends RPCHost {
         return resultArray;
     }
 
-    assignChargeAmount(formatted: FormattedPage[], num: number, scaler: number, fallbackQuery?: string) {
+    assignChargeAmount(formatted: FormattedPage[], num: number, scaler: number) {
         let contentCharge = 0;
         for (const x of formatted) {
             const itemAmount = this.crawler.assignChargeAmount(x) || 0;
@@ -666,7 +588,12 @@ export class SearcherHost extends RPCHost {
 
         const numCharge = Math.ceil(formatted.length / 10) * 10000 * scaler;
 
-        const final = Math.max(contentCharge, numCharge);
+        let final = Math.max(contentCharge, numCharge);
+
+        if (final > 2_000_000) {
+            // We decided it's not quite fair to charge above 2M tokens even though the pages contains more.
+            final = 2_000_000;
+        }
 
         if (final === numCharge) {
             for (const x of formatted) {
@@ -675,11 +602,9 @@ export class SearcherHost extends RPCHost {
         }
 
         const metadata: Record<string, any> = { usage: { tokens: final } };
-        if (fallbackQuery) {
-            metadata.fallback = fallbackQuery;
-        }
 
         assignMeta(formatted, metadata);
+        assignTransferProtocolMeta(formatted, { headers: { 'X-Usage-Tokens': final.toString() } });
 
         return final;
     }
@@ -715,39 +640,43 @@ export class SearcherHost extends RPCHost {
         }
     }
 
-    *iterProviders(preference?: string, variant?: string) {
+    * iterProviders(preference?: string) {
         if (preference === 'bing') {
-            yield this.serperBing;
-            yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
-            yield this.serperGoogle;
-
+            if (this.envConfig.SERPER_SEARCH_API_KEY) {
+                yield this.serperBing;
+            }
+            yield this.bingSERP;
             return;
         }
 
         if (preference === 'google') {
-            yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
-            yield this.serperGoogle;
-            yield this.serperGoogle;
+            yield this.googleSERP;
+            if (this.envConfig.SERPER_SEARCH_API_KEY) {
+                yield this.serperGoogle;
+            }
+            yield this.commonGoogleSerp;
 
             return;
         }
 
-        yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
-        yield this.serperGoogle;
-        yield this.serperGoogle;
+        if (this.envConfig.SERPER_SEARCH_API_KEY) {
+            yield this.serperGoogle;
+        }
+        yield this.googleSERP;
+        yield this.bingSERP;
+        yield this.commonGoogleSerp;
     }
 
-    async cachedSearch(variant: 'web' | 'news' | 'images', query: Record<string, any>, noCache?: boolean): Promise<WebSearchEntry[]> {
-        const queryDigest = objHashMd5B64Of({ ...query, variant });
+    async *cachedSearch(query: Record<string, any> & { variant: 'web' | 'news' | 'images'; }, scrappingOptions: ExtraScrappingOptions, crawlerOptions: CrawlerOptions) {
+        const queryDigest = objHashMd5B64Of(query);
+        const variant = query.variant || 'web';
         const provider = query.provider;
         Reflect.deleteProperty(query, 'provider');
         let cache;
-        if (!noCache) {
-            cache = (await SERPResult.fromFirestoreQuery(
-                SERPResult.COLLECTION.where('queryDigest', '==', queryDigest)
-                    .orderBy('createdAt', 'desc')
-                    .limit(1)
-            ))[0];
+        let results;
+        let cacheUsed = false;
+        if (!crawlerOptions.noCache) {
+            cache = await this.storageLayer.findSERPResult({ queryDigest });
             if (cache) {
                 const age = Date.now() - cache.createdAt.valueOf();
                 const stale = cache.createdAt.valueOf() < (Date.now() - this.cacheValidMs);
@@ -755,72 +684,108 @@ export class SearcherHost extends RPCHost {
                     query, digest: queryDigest, age, stale
                 });
 
-                if (!stale) {
-                    return cache.response as any;
+                if (!stale && Array.isArray(cache.response)) {
+                    results = cache.response.filter((x) => x.link).map((x) => this.mapSearchEntryToPartialFormattedPage(x));
+                    cacheUsed = true;
+                    yield results;
                 }
             }
         }
 
-        try {
-            let r: any[] | undefined;
-            let lastError;
-            outerLoop:
-            for (const client of this.iterProviders(provider, variant)) {
-                const t0 = Date.now();
-                try {
+        if (!results) {
+            try {
+                let r: WebSearchEntry[] | undefined;
+                let lastError;
+                outerLoop:
+                for (const client of this.iterProviders(provider)) {
+                    const t0 = Date.now();
+                    let func;
                     switch (variant) {
                         case 'images': {
-                            r = await Reflect.apply(client.imageSearch, client, [query]);
+                            func = Reflect.get(client, 'imageSearch');
                             break;
                         }
                         case 'news': {
-                            r = await Reflect.apply(client.newsSearch, client, [query]);
+                            func = Reflect.get(client, 'newsSearch');
                             break;
                         }
                         case 'web':
                         default: {
-                            r = await Reflect.apply(client.webSearch, client, [query]);
+                            func = Reflect.get(client, 'webSearch');
                             break;
                         }
                     }
-                    const dt = Date.now() - t0;
-                    this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
-                    break outerLoop;
-                } catch (err) {
-                    lastError = err;
-                    const dt = Date.now() - t0;
-                    this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err, variant, searchDt: dt, });
+                    if (!func) {
+                        continue;
+                    }
+                    try {
+                        r = await Reflect.apply(func, client, [query]);
+                        const dt = Date.now() - t0;
+                        this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
+                        break outerLoop;
+                    } catch (err) {
+                        lastError = err;
+                        const dt = Date.now() - t0;
+                        this.logger.warn(`Failed to do ${variant} search using ${client.constructor.name}`, { err, variant, searchDt: dt, });
+                    }
                 }
+
+                if (r?.length) {
+                    const nowDate = new Date();
+                    const record = SERPResult.from({
+                        query,
+                        queryDigest,
+                        response: r,
+                        createdAt: nowDate,
+                        expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
+                    });
+                    Reflect.deleteProperty(record, '_id');
+                    this.storageLayer.storeSERPResult(record).catch((err) => {
+                        this.logger.warn(`Failed to save serp search result`, { err });
+                    });
+                    if (variant === 'web') {
+                        r.map((x) => {
+                            this.storageLayer.indexWebSearchEntry(x, {
+                                geolocation: query.gl?.toLowerCase(),
+                                language: bcp47ToIso639_3(query.hl),
+                            }).catch((err) => {
+                                this.logger.warn(`Failed to index SERP result`, { err });
+                            });
+                        });
+                    }
+                } else if (lastError) {
+                    throw lastError;
+                } else if (!r) {
+                    throw new AssertionFailureError(`No provider can do ${variant} search atm.`);
+                }
+
+                results = r.map((x) => this.mapSearchEntryToPartialFormattedPage(x));
+                yield results;
+            } catch (err: any) {
+                if (cache) {
+                    this.logger.warn(`Failed to fetch search result, but a stale cache is available. falling back to stale cache`, { err: marshalErrorLike(err) });
+
+                    cacheUsed = true;
+                    yield cache.response as any;
+                } else {
+                    throw err;
+                }
+
             }
-
-            if (r?.length) {
-                const nowDate = new Date();
-                const record = SERPResult.from({
-                    query,
-                    queryDigest,
-                    response: r,
-                    createdAt: nowDate,
-                    expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
-                });
-
-                this.batchedCaches.push(record);
-            } else if (lastError) {
-                throw lastError;
-            }
-
-            return r as WebSearchEntry[];
-        } catch (err: any) {
-            if (cache) {
-                this.logger.warn(`Failed to fetch search result, but a stale cache is available. falling back to stale cache`, { err: marshalErrorLike(err) });
-
-                return cache.response as any;
-            }
-
-            throw err;
         }
+
+        if (cacheUsed && crawlerOptions.respondWith?.includes('no-content')) {
+            yield results;
+            return;
+        }
+
+        yield* this.fetchSearchResults(crawlerOptions.respondWith, results, scrappingOptions,
+            CrawlerOptions.from({ ...crawlerOptions, cacheTolerance: crawlerOptions.cacheTolerance ?? this.pageCacheToleranceMs }),
+            query.num,
+        );
     }
 
-    mapToFinalResults(input: WebSearchEntry) {
+    mapSearchEntryToPartialFormattedPage(input: WebSearchEntry): FormattedPage {
         const whitelistedProps = [
             'imageUrl', 'imageWidth', 'imageHeight', 'source', 'date', 'siteLinks'
         ];
@@ -834,15 +799,89 @@ export class SearcherHost extends RPCHost {
         return result;
     }
 
-    async assignGeneralMixin(result: FormattedPage) {
+    async assignGeneralMixin(results: FormattedPage[], num?: number) {
         const collectFavicon = this.threadLocal.get('collect-favicon');
+        await Promise.allSettled(results.map(async (x) => {
+            if (collectFavicon && x.url) {
+                const url = new URL(x.url);
+                Reflect.set(x, 'favicon', await this.getFavicon(url.origin));
+            }
+            x.content ??= '';
 
-        if (collectFavicon && result.url) {
-            const url = new URL(result.url);
-            Reflect.set(result, 'favicon', await this.getFavicon(url.origin));
+            Object.setPrototypeOf(x, searchResultProto);
+
+            return x;
+        }));
+        if (num) {
+            results.length = Math.min(results.length, num);
         }
+        results.toString = function (this: FormattedPage[]) {
+            let r = this.map((x, i) => x ? Reflect.apply(x.toString, x, [i]) : '').join('\n\n').trimEnd() + '\n';
 
-        Object.setPrototypeOf(result, searchResultProto);
+            return r;
+        };
+
+        return results;
+    }
+
+    async *readerLocalSearch(inputQuery: SerperSearchQueryParams, scrappingOptions: ExtraScrappingOptions, crawlerOptions: CrawlerOptions) {
+        const query = parseSearchQuery(inputQuery);
+        this.logger.debug(`Running local search`, { inputQuery, query });
+        const results = await this.storageLayer.searchLocalIndex(query.query, {
+            queryMixins: query.queryMixins,
+            num: inputQuery.num,
+            lang: bcp47ToIso639_3(inputQuery.hl),
+        });
+
+        const mapped = results.map((x) => ({
+            title: x.title,
+            url: x.url,
+            description: x.highlights?.map((x) => x.texts.map((y) => y.value)).flat().join(' ') || x.description,
+            date: x.publishedAt ? `${x.publishedAt.toISOString()}` : undefined,
+        })) as FormattedPage[];
+        this.logger.debug(`Local search returned ${mapped.length} results`, { resultsNum: mapped.length, inputQuery });
+        yield mapped;
+
+        this.logger.debug(`Extracting local cache for full-text`, { resultsNum: mapped.length, inputQuery });
+        const r = await Promise.allSettled(results.map((x, i) => {
+            return this.storageLayer.readFile(`snapshots/${x._id}`).then(async (r) => {
+                const snapshot = JSON.parse(r.toString());
+                const patchedSnapshot = await this.jsdomControl.narrowSnapshot(snapshot, scrappingOptions);
+                if (!patchedSnapshot) {
+                    return undefined;
+                }
+                const finalSnapshot = await this.snapshotFormatter.formatSnapshot(
+                    crawlerOptions.respondWith,
+                    patchedSnapshot,
+                    new URL(patchedSnapshot.href)
+                );
+
+                const lite = mapped[i] as any;
+                const pageDescription = lite.description?.replaceAll(x.description || '', '') || '';
+                finalSnapshot.description = `${x.description ? `${x.description}\n` : ''}${pageDescription}`;
+                finalSnapshot.title ??= lite.title;
+                // @ts-ignore
+                finalSnapshot.source ??= lite.source;
+                // @ts-ignore
+                finalSnapshot.date ??= lite.date;
+
+                return finalSnapshot;
+            });
+        }));
+
+        this.logger.debug(`Done extracting reader local cache for full-text`, { resultsNum: mapped.length, inputQuery });
+
+        yield r.map((x) => {
+            if (x.status === 'fulfilled') {
+                if (!x.value) {
+                    return null;
+                }
+                return x.value;
+            }
+            this.logger.warn(`Failed to read snapshot`, { err: x.reason });
+
+            return null;
+        }).filter(Boolean) as FormattedPage[];
     }
 }
 
@@ -873,8 +912,9 @@ const searchResultProto = {
             }
         }
 
-        if (this.content) {
-            chunks.push(`\n${this.content}`);
+        const content = this.content || this.text;
+        if (content) {
+            chunks.push(`\n${content}`);
         }
 
         if (this.images) {

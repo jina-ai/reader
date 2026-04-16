@@ -1,7 +1,7 @@
 import { singleton } from 'tsyringe';
-import { pathToFileURL } from 'url';
 import { randomUUID } from 'crypto';
 import _ from 'lodash';
+import { Blob, File } from 'buffer';
 
 import {
     assignTransferProtocolMeta, RPCHost, RPCReflection,
@@ -9,7 +9,9 @@ import {
     RawString,
     ApplicationError,
     DataStreamBrokenError,
+    OperationNotAllowedError,
     assignMeta,
+    extractMeta,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import { Defer } from 'civkit/defer';
@@ -18,37 +20,50 @@ import { FancyFile } from 'civkit/fancy-file';
 
 import { CONTENT_FORMAT, CrawlerOptions, CrawlerOptionsHeaderOnly, ENGINE_TYPE, RESPOND_TIMING } from '../dto/crawler-options';
 
-import { Crawled } from '../db/crawled';
-import { DomainBlockade } from '../db/domain-blockade';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
 
 import { PageSnapshot, PuppeteerControl, ScrappingOptions } from '../services/puppeteer';
 import { JSDomControl } from '../services/jsdom';
-import { FormattedPage, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
-import { CurlControl } from '../services/curl';
+import { FormattedPage, FormattedPageDto, md5Hasher, SnapshotFormatter } from '../services/snapshot-formatter';
+import { CurlControl, CURLScrappingOptions, REDIRECTION_CODES } from '../services/curl';
 import { LmControl } from '../services/lm';
 import { tryDecodeURIComponent } from '../utils/misc';
 import { CFBrowserRendering } from '../services/cf-browser-rendering';
 
 import { GlobalLogger } from '../services/logger';
-import { RateLimitControl, RateLimitDesc } from '../shared/services/rate-limit';
 import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import {
-    BudgetExceededError, InsufficientBalanceError,
+    BudgetExceededError,
     SecurityCompromiseError, ServiceBadApproachError, ServiceBadAttemptError,
-    ServiceNodeResourceDrainError
+    ServiceCrashedError,
+    ServiceNodeResourceDrainError,
 } from '../services/errors';
 
-import { countGPTToken as estimateToken } from '../shared/utils/openai';
-import { ProxyProviderService } from '../shared/services/proxy-provider';
-import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
-import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
+import { countGPTToken as estimateToken } from '../utils/openai';
+import { ProxyProviderService } from '../services/proxy-provider';
+// import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
 import { RobotsTxtService } from '../services/robots-text';
 import { TempFileManager } from '../services/temp-file';
 import { MiscService } from '../services/misc';
 import { HTTPServiceError } from 'civkit/http';
 import { GeoIPService } from '../services/geoip';
+import { readFile } from 'fs/promises';
+import { openAsBlob } from 'fs';
+import { AltTextService } from '../services/alt-text';
+import '../config';
+import { AUTH_DTO_CLS } from '../config';
+import { Crawled, DomainBlockade } from '../db/models';
+import { BaseAuthDTO } from '../dto/base-auth';
+import { StorageLayer } from '../db/noop-storage';
+import { BinaryExtractorService } from '../services/binary-extractor';
+import { HashManager } from 'civkit/hash';
+import { detectBuff, extOfMime } from 'civkit/mime';
+import { STATUS_CODES } from 'http';
+import { fileURLToPath } from 'url';
+
+
+export const sha256Hasher = new HashManager('sha256', 'hex');
 
 export interface ExtraScrappingOptions extends ScrappingOptions {
     withIframe?: boolean | 'quoted';
@@ -60,6 +75,8 @@ export interface ExtraScrappingOptions extends ScrappingOptions {
     allocProxy?: string;
     private?: boolean;
     countryHint?: string;
+    readabilityRequired?: boolean;
+    eligibleForPageIndex?: boolean;
 }
 
 const indexProto = {
@@ -72,6 +89,9 @@ const indexProto = {
     }
 };
 
+const hostTrimerRegexpMap = new Map<string, RegExp>();
+const redundantProtocolRegexp = /^(?:(?:https?:\/+)|(?:view-source:))+(https?:\/+)/i;
+
 @singleton()
 export class CrawlerHost extends RPCHost {
     logger = this.globalLogger.child({ service: this.constructor.name });
@@ -80,9 +100,11 @@ export class CrawlerHost extends RPCHost {
     cacheValidMs = 1000 * 3600;
     urlValidMs = 1000 * 3600 * 4;
     abuseBlockMs = 1000 * 3600;
+    consecutiveErrorThreshold = 10;
+    consecutiveErrorRetentionMs = 1000 * 3600;
     domainProfileRetentionMs = 1000 * 3600 * 24 * 30;
 
-    batchedCaches: Crawled[] = [];
+    indexedOpts = new WeakSet<ScrappingOptions | object>();
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -93,18 +115,32 @@ export class CrawlerHost extends RPCHost {
         protected lmControl: LmControl,
         protected jsdomControl: JSDomControl,
         protected snapshotFormatter: SnapshotFormatter,
-        protected firebaseObjectStorage: FirebaseStorageBucketControl,
-        protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncLocalContext,
         protected robotsTxtService: RobotsTxtService,
         protected tempFileManager: TempFileManager,
         protected geoIpService: GeoIPService,
         protected miscService: MiscService,
+        protected altTextService: AltTextService,
+        protected storageLayer: StorageLayer,
+        protected binaryExtractorService: BinaryExtractorService,
     ) {
         super(...arguments);
 
-        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ExtraScrappingOptions & { url: URL; }) => {
-            if (!snapshot.title?.trim() && !snapshot.pdfs?.length) {
+        this.on('index-snapshot', async (targetUrl: URL | undefined, snapshot: PageSnapshot, options: ExtraScrappingOptions, sourceHint?: string) => {
+            if (this.indexedOpts.has(options) && sourceHint !== 'pptr' && sourceHint !== 'blob') {
+                return;
+            } else if (this.indexedOpts.has(options) && sourceHint === 'pptr' && snapshot.blobs?.length) {
+                return;
+            } else if (sourceHint === 'cache') {
+                this.indexedOpts.add(options);
+                return;
+            } else if (this.indexedOpts.has(this.threadLocal.ctx) && !sourceHint) {
+                return;
+            }
+            this.indexedOpts.add(options);
+            this.indexedOpts.add(this.threadLocal.ctx);
+
+            if (!snapshot.title?.trim() && !snapshot.blobs?.length) {
                 return;
             }
             if (options.cookies?.length || options.private) {
@@ -115,35 +151,41 @@ export class CrawlerHost extends RPCHost {
                 // Potentially mangeled content, dont cache if scripts are injected
                 return;
             }
-            if (snapshot.isIntermediate) {
+            if (snapshot.elemCount && snapshot.isIntermediate) {
                 return;
             }
-            if (!snapshot.lastMutationIdle) {
-                // Never reached mutationIdle, presumably too short timeout
+            if (snapshot.elemCount && !snapshot.lastMutationIdle) {
+                // Created by browser but never reached mutationIdle, presumably too short timeout
                 return;
             }
             if (options.locale) {
                 Reflect.set(snapshot, 'locale', options.locale);
             }
 
-            const analyzed = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
-            if (analyzed.tokens < 200) {
-                // Does not contain enough content
-                if (snapshot.status !== 200) {
-                    return;
-                }
-                if (snapshot.html.includes('captcha') || snapshot.html.includes('cf-turnstile')) {
-                    return;
+            if (!snapshot.traits?.length) {
+                const analyzed = await this.jsdomControl.analyzeHTMLTextLite(snapshot.html);
+                if (analyzed.tokens < 200) {
+                    // Does not contain enough content
+                    if (snapshot.status !== 200) {
+                        return;
+                    }
+                    if (snapshot.html.includes('captcha') || snapshot.html.includes('cf-turnstile')) {
+                        return;
+                    }
                 }
             }
 
-            await this.setToCache(options.url, snapshot);
+            this.setToCache(targetUrl || new URL(snapshot.href), snapshot, options.eligibleForPageIndex);
+        });
+
+        puppeteerControl.on('crawled', async (snapshot: PageSnapshot, options: ExtraScrappingOptions, url: URL) => {
+            this.emit('index-snapshot', url, snapshot, options, 'pptr');
         });
 
         puppeteerControl.on('abuse', async (abuseEvent: { url: URL; reason: string, sn: number; }) => {
             this.logger.warn(`Abuse detected on ${abuseEvent.url}, blocking ${abuseEvent.url.hostname}`, { reason: abuseEvent.reason, sn: abuseEvent.sn });
 
-            await DomainBlockade.save(DomainBlockade.from({
+            await this.storageLayer.storeDomainBlockade(DomainBlockade.from({
                 domain: abuseEvent.url.hostname.toLowerCase(),
                 triggerReason: `${abuseEvent.reason}`,
                 triggerUrl: abuseEvent.url.toString(),
@@ -154,27 +196,6 @@ export class CrawlerHost extends RPCHost {
             });
 
         });
-
-        setInterval(() => {
-            const thisBatch = this.batchedCaches;
-            this.batchedCaches = [];
-            if (!thisBatch.length) {
-                return;
-            }
-            const batch = Crawled.DB.batch();
-
-            for (const x of thisBatch) {
-                batch.set(Crawled.COLLECTION.doc(x._id), x.degradeForFireStore(), { merge: true });
-            }
-
-            batch.commit()
-                .then(() => {
-                    this.logger.debug(`Saved ${thisBatch.length} caches by batch`);
-                })
-                .catch((err) => {
-                    this.logger.warn(`Failed to save cache in batch`, { err });
-                });
-        }, 1000 * 10 + Math.round(1000 * Math.random())).unref();
     }
 
     override async init() {
@@ -187,7 +208,7 @@ export class CrawlerHost extends RPCHost {
         this.emit('ready');
     }
 
-    async getIndex(auth?: JinaEmbeddingsAuthDTO) {
+    async getIndex(auth?: BaseAuthDTO) {
         const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
         Object.assign(indexObject, {
             usage1: 'https://r.jina.ai/YOUR_URL',
@@ -195,12 +216,14 @@ export class CrawlerHost extends RPCHost {
             homepage: 'https://jina.ai/reader',
         });
 
-        await auth?.solveUID();
-        if (auth && auth.user) {
-            indexObject[''] = undefined;
-            indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
-            indexObject.balanceLeft = auth.user.wallet.total_balance;
-        }
+        // if (auth instanceof JinaEmbeddingsAuthDTO) {
+        //     await auth?.solveUID();
+        //     if (auth && auth.user) {
+        //         indexObject[''] = undefined;
+        //         indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
+        //         indexObject.balanceLeft = auth.user.wallet.total_balance;
+        //     }
+        // }
 
         return indexObject;
     }
@@ -217,7 +240,16 @@ export class CrawlerHost extends RPCHost {
         tags: ['misc', 'crawl'],
         returnType: [String, Object],
     })
-    async getIndexCtrl(@Ctx() ctx: Context, @Param({ required: false }) auth?: JinaEmbeddingsAuthDTO) {
+    async getIndexCtrl(
+        @RPCReflect() rpcReflect: RPCReflection,
+        @Ctx() ctx: Context,
+        @Param({ type: AUTH_DTO_CLS }) auth: BaseAuthDTO,
+        crawlerOptionsParamsAllowed: CrawlerOptions,
+    ) {
+        if (crawlerOptionsParamsAllowed.url || (crawlerOptionsParamsAllowed.file || crawlerOptionsParamsAllowed.pdf || crawlerOptionsParamsAllowed.html)) {
+            return this.crawl(rpcReflect, ctx, auth, crawlerOptionsParamsAllowed, crawlerOptionsParamsAllowed);
+        }
+
         const indexObject = await this.getIndex(auth);
 
         if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
@@ -256,127 +288,155 @@ export class CrawlerHost extends RPCHost {
     async crawl(
         @RPCReflect() rpcReflect: RPCReflection,
         @Ctx() ctx: Context,
-        auth: JinaEmbeddingsAuthDTO,
+        @Param({ type: AUTH_DTO_CLS }) auth: BaseAuthDTO,
         crawlerOptionsHeaderOnly: CrawlerOptionsHeaderOnly,
         crawlerOptionsParamsAllowed: CrawlerOptions,
     ) {
-        const uid = await auth.solveUID();
         let chargeAmount = 0;
+        let finalSnapshot: PageSnapshot | undefined;
         const crawlerOptions = ctx.method === 'GET' ? crawlerOptionsHeaderOnly : crawlerOptionsParamsAllowed;
         const tierPolicy = await this.saasAssertTierPolicy(crawlerOptions, auth);
+        const futureRateLimit = this.storageLayer.rateLimit(ctx, rpcReflect, auth as any);
 
         // Use koa ctx.URL, a standard URL object to avoid node.js framework prop naming confusion
-        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(`${ctx.URL.pathname}${ctx.URL.search}`), crawlerOptions);
+        const targetUrl = await this.getTargetUrl(tryDecodeURIComponent(`${ctx.URL.pathname}${ctx.URL.search}`), crawlerOptions, ctx.URL.host);
         if (!targetUrl) {
             return await this.getIndex(auth);
         }
+        crawlerOptions.url = targetUrl.toString();
 
         // Prevent circular crawling
         this.puppeteerControl.circuitBreakerHosts.add(
             ctx.hostname.toLowerCase()
         );
 
-        if (uid) {
-            const user = await auth.assertUser();
-            if (!(user.wallet.total_balance > 0)) {
-                throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
+        const {
+            isAnonymous,
+            uid,
+            reportOptions,
+            reportUsage
+        } = await futureRateLimit;
+
+        rpcReflect.finally(() => {
+            reportOptions?.(crawlerOptions.customizedProps());
+            if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
+                return;
             }
+            reportUsage?.(chargeAmount, 'reader-crawl');
+        });
 
-            const rateLimitPolicy = auth.getRateLimits('CRAWL') || [
-                parseInt(user.metadata?.speed_level) >= 2 ?
-                    RateLimitDesc.from({
-                        occurrence: 5000,
-                        periodSeconds: 60
-                    }) :
-                    RateLimitDesc.from({
-                        occurrence: 500,
-                        periodSeconds: 60
-                    })
-            ];
-
-            const apiRoll = await this.rateLimitControl.simpleRPCUidBasedLimit(
-                rpcReflect, uid, ['CRAWL'],
-                ...rateLimitPolicy
-            );
-
-            rpcReflect.finally(() => {
-                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                    return;
-                }
-                if (chargeAmount) {
-                    auth.reportUsage(chargeAmount, `reader-crawl`).catch((err) => {
-                        this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
-                    });
-                    apiRoll.chargeAmount = chargeAmount;
-                }
-            });
-        } else if (ctx.ip) {
-            const apiRoll = await this.rateLimitControl.simpleRpcIPBasedLimit(rpcReflect, ctx.ip, ['CRAWL'],
-                [
-                    // 20 requests per minute
-                    new Date(Date.now() - 60 * 1000), 20
-                ]
-            );
-
-            rpcReflect.finally(() => {
-                if (crawlerOptions.tokenBudget && chargeAmount > crawlerOptions.tokenBudget) {
-                    return;
-                }
-                apiRoll.chargeAmount = chargeAmount;
-            });
-        }
-
-        if (!uid) {
+        if (isAnonymous) {
             // Enforce no proxy is allocated for anonymous users due to abuse.
             crawlerOptions.proxy = 'none';
-            const blockade = (await DomainBlockade.fromFirestoreQuery(
-                DomainBlockade.COLLECTION
-                    .where('domain', '==', targetUrl.hostname.toLowerCase())
-                    .where('expireAt', '>=', new Date())
-                    .limit(1)
-            ))[0];
+            if (crawlerOptions.respondWith.includes('html')) {
+                crawlerOptions.engine ??= ENGINE_TYPE.CURL;
+            }
+            const blockade = await this.storageLayer.findDomainBlockade({
+                domain: targetUrl.hostname.toLowerCase(),
+                expireAt: new Date()
+            }).catch((err) => {
+                this.logger.warn(`Failed to query domain blockade for ${targetUrl.hostname}`, { err });
+                return undefined;
+            });
+
             if (blockade) {
-                throw new SecurityCompromiseError(`Domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
+                throw new SecurityCompromiseError(`Anonymous access to domain ${targetUrl.hostname} blocked until ${blockade.expireAt || 'Eternally'} due to previous abuse found on ${blockade.triggerUrl || 'site'}: ${blockade.triggerReason}`);
             }
         }
         const crawlOpts = await this.configure(crawlerOptions);
+        if (auth.isInternal) {
+            crawlOpts.eligibleForPageIndex = true;
+            this.threadLocal.set('isInternal', true);
+        }
         this.logger.info(`Accepting request from ${uid || ctx.ip}`, { opts: crawlerOptions });
+        rpcReflect.finally(() => {
+            if (!finalSnapshot) {
+                return;
+            }
+            this.emit('index-snapshot', targetUrl, finalSnapshot, crawlOpts);
+        });
         if (crawlerOptions.robotsTxt) {
             await this.robotsTxtService.assertAccessAllowed(targetUrl, crawlerOptions.robotsTxt);
         }
         if (rpcReflect.signal.aborted) {
             return;
         }
+        rpcReflect.catch((err) => {
+            if (!(err instanceof AssertionFailureError)) {
+                return;
+            }
+            const nowDate = new Date();
+            this.storageLayer.storeConsecutiveError({
+                _id: this.getUrlDigest(targetUrl),
+                url: targetUrl.toString(),
+                lastError: `${err}`,
+                updatedAt: nowDate,
+                createdAt: nowDate,
+                expireAt: new Date(Date.now() + this.abuseBlockMs),
+                count: 1,
+            }).catch((err) => {
+                this.logger.warn(`Failed to save consecutive error for ${targetUrl}`, { err: marshalErrorLike(err) });
+            });
+        });
         if (!ctx.accepts('text/plain') && ctx.accepts('text/event-stream')) {
             const sseStream = new OutputServerEventStream();
             rpcReflect.return(sseStream);
-
-            try {
-                for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
-                    if (!scrapped) {
-                        continue;
-                    }
-                    if (rpcReflect.signal.aborted) {
-                        break;
-                    }
-
-                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
-                    chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
+            let scrapped: PageSnapshot;
+            const seenSnapshot = new WeakSet();
+            let job;
+            const writeToStream = async () => {
+                if (seenSnapshot.has(scrapped)) {
+                    job = undefined;
+                    return;
+                }
+                const formatted = await this.formatSnapshot(crawlerOptions, scrapped!, targetUrl, this.urlValidMs);
+                seenSnapshot.add(scrapped);
+                finalSnapshot = scrapped;
+                chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
+                if (!sseStream.writableEnded) {
                     sseStream.write({
                         event: 'data',
                         data: formatted,
                     });
-                    if (chargeAmount && scrapped.pdfs?.length) {
+                }
+                job = undefined;
+            };
+
+            try {
+                for await (const snapshot of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
+                    if (rpcReflect.signal.aborted || sseStream.writableEnded) {
+                        break;
+                    }
+                    if (!snapshot) {
+                        continue;
+                    }
+                    scrapped = snapshot;
+                    if (job) {
+                        continue;
+                    }
+                    job = writeToStream();
+
+                    if (chargeAmount && scrapped.blobs?.length) {
                         break;
                     }
                 }
             } catch (err: any) {
                 this.logger.error(`Failed to crawl ${targetUrl}`, { err: marshalErrorLike(err) });
+                await Promise.allSettled([job]).then(() => {
+                    sseStream.end({
+                        event: 'error',
+                        data: marshalErrorLike(err),
+                    });
+                });
+
+                return sseStream;
+            }
+            await writeToStream().catch((err) => {
                 sseStream.write({
                     event: 'error',
                     data: marshalErrorLike(err),
                 });
-            }
+            });
 
             sseStream.end();
 
@@ -387,21 +447,24 @@ export class CrawlerHost extends RPCHost {
         if (!ctx.accepts('text/plain') && (ctx.accepts('text/json') || ctx.accepts('application/json'))) {
             try {
                 for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
-                    lastScrapped = scrapped;
                     if (rpcReflect.signal.aborted) {
                         break;
                     }
-                    if (!scrapped || !crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
+                    if (!scrapped) {
                         continue;
                     }
-                    if (!scrapped.title) {
+                    lastScrapped = scrapped;
+                    if (!crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
+                        continue;
+                    }
+                    if (!scrapped.title && !scrapped.blobs?.length) {
                         continue;
                     }
 
-                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
+                    const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
                     chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
 
-                    if (scrapped?.pdfs?.length && !chargeAmount) {
+                    if (scrapped?.blobs?.length && !chargeAmount) {
                         continue;
                     }
 
@@ -420,8 +483,9 @@ export class CrawlerHost extends RPCHost {
                 throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
             }
 
-            const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
+            const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
             chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
+            finalSnapshot = lastScrapped;
 
             return formatted;
         }
@@ -429,38 +493,31 @@ export class CrawlerHost extends RPCHost {
         if (crawlerOptions.isRequestingCompoundContentFormat()) {
             throw new ParamValidationError({
                 path: 'respondWith',
-                message: `You are requesting compound content format, please explicitly accept 'text/event-stream' or 'application/json' in header.`
+                message: `Looks like you might be requesting compound content format, please explicitly accept 'text/event-stream' or 'application/json' in header, or check your request.`
             });
         }
 
         try {
             for await (const scrapped of this.iterSnapshots(targetUrl, crawlOpts, crawlerOptions)) {
-                lastScrapped = scrapped;
                 if (rpcReflect.signal.aborted) {
                     break;
                 }
-                if (!scrapped || !crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
+                if (!scrapped) {
                     continue;
                 }
-                if (!scrapped.title) {
+                lastScrapped = scrapped;
+                if (!crawlerOptions.isSnapshotAcceptableForEarlyResponse(scrapped)) {
+                    continue;
+                }
+                if (!scrapped.title && !scrapped.blobs?.length) {
                     continue;
                 }
 
-                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs, crawlOpts);
+                const formatted = await this.formatSnapshot(crawlerOptions, scrapped, targetUrl, this.urlValidMs);
                 chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
+                finalSnapshot = lastScrapped;
 
-                if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
-                    return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-                    );
-                }
-                if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
-                    return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                        { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
-                    );
-                }
-
-                return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null });
+                return this._finalFormat(crawlerOptions, formatted);
             }
         } catch (err) {
             if (!lastScrapped) {
@@ -474,39 +531,86 @@ export class CrawlerHost extends RPCHost {
             }
             throw new AssertionFailureError(`No content available for URL ${targetUrl}`);
         }
-        const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs, crawlOpts);
+        const formatted = await this.formatSnapshot(crawlerOptions, lastScrapped, targetUrl, this.urlValidMs);
         chargeAmount = this.assignChargeAmount(formatted, tierPolicy);
+        finalSnapshot = lastScrapped;
 
-        if (crawlerOptions.respondWith === 'screenshot' && Reflect.get(formatted, 'screenshotUrl')) {
-
-            return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl') } }
-            );
-        }
-        if (crawlerOptions.respondWith === 'pageshot' && Reflect.get(formatted, 'pageshotUrl')) {
-
-            return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
-                { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl') } }
-            );
-        }
-
-        return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null });
-
+        return this._finalFormat(crawlerOptions, formatted);
     }
 
-    async getTargetUrl(originPath: string, crawlerOptions: CrawlerOptions) {
+    private _finalFormat(crawlerOptions: CrawlerOptions, formatted: FormattedPage) {
+        const usage = extractMeta(formatted)?.usage?.tokens?.toString() || '0';
+        const headerMixin = { 'X-Usage-Tokens': usage };
+        if (crawlerOptions.respondWith === 'screenshot') {
+            if (formatted.screenshotUrl) {
+                return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
+                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'screenshotUrl'), ...headerMixin } }
+                );
+            }
+            if (formatted.screenshot) {
+                return assignTransferProtocolMeta(formatted.screenshot,
+                    { code: 200, envelope: null, contentType: 'image/png', headers: { ...headerMixin } }
+                );
+            }
+        }
+        if (crawlerOptions.respondWith === 'pageshot') {
+            if (formatted.pageshotUrl) {
+                return assignTransferProtocolMeta(`${formatted.textRepresentation}`,
+                    { code: 302, envelope: null, headers: { Location: Reflect.get(formatted, 'pageshotUrl'), ...headerMixin } }
+                );
+            }
+            if (formatted.pageshot) {
+                return assignTransferProtocolMeta(formatted.pageshot,
+                    { code: 200, envelope: null, contentType: 'image/png', headers: { ...headerMixin } }
+                );
+            }
+        }
+
+        return assignTransferProtocolMeta(`${formatted.textRepresentation}`, { contentType: 'text/plain; charset=utf-8', envelope: null, headers: { ...headerMixin } });
+    }
+
+    _attemptURLFix(inputUrl: string, hostname: string = '') {
+        let url = inputUrl;
+        let hostTrimer = hostTrimerRegexpMap.get(hostname);
+        if (!hostTrimer) {
+            hostTrimer = new RegExp(`^(https?:/+)?${hostname.replace(/\./g, '\\.')}/`, 'i');
+            hostTrimerRegexpMap.set(hostname, hostTrimer);
+        }
+        url = url.replace(hostTrimer, '').replace(redundantProtocolRegexp, '$1');
+
+        return url;
+    }
+
+    async getTargetUrl(originPath: string, crawlerOptions: CrawlerOptions, thisServerHost?: string) {
         let url: string = '';
 
         const targetUrlFromGet = originPath.slice(1);
-        if (crawlerOptions.pdf) {
-            const pdfFile = crawlerOptions.pdf;
-            const identifier = pdfFile instanceof FancyFile ? (await pdfFile.sha256Sum) : randomUUID();
-            url = `blob://pdf/${identifier}`;
+        const binaryFile = crawlerOptions.pdf || crawlerOptions.file;
+        if (
+            binaryFile instanceof FancyFile && (await binaryFile.size) > 0 ||
+            (typeof binaryFile === 'string' && binaryFile)
+        ) {
+            const identifier = binaryFile instanceof FancyFile ? (await binaryFile.sha256Sum) : randomUUID();
+            url = `blob:${identifier}`;
+            if (crawlerOptions.url && URL.canParse(crawlerOptions.url)) {
+                const nominalUrl = new URL(crawlerOptions.url);
+                if (nominalUrl.hash) {
+                    url += nominalUrl.hash;
+                }
+            }
             crawlerOptions.url ??= url;
         } else if (targetUrlFromGet) {
             url = targetUrlFromGet.trim();
         } else if (crawlerOptions.url) {
             url = crawlerOptions.url.trim();
+        } else if (crawlerOptions.html && !url) {
+            url = `blob:${sha256Hasher.hash(crawlerOptions.html)}`;
+        }
+
+        url = this._attemptURLFix(url, thisServerHost);
+
+        if (url && URL.canParse(url)) {
+            url = new URL(url).href;
         }
 
         if (!url) {
@@ -516,14 +620,15 @@ export class CrawlerHost extends RPCHost {
             });
         }
 
-        const { url: safeURL, ips } = await this.miscService.assertNormalizedUrl(url);
+        const { url: safeURL, ips, hintCountry } = await this.miscService.assertNormalizedUrl(url);
         if (this.puppeteerControl.circuitBreakerHosts.has(safeURL.hostname.toLowerCase())) {
             throw new SecurityCompromiseError({
-                message: `Circular hostname: ${safeURL.protocol}`,
+                message: `Circular hostname: ${safeURL.hostname}`,
                 path: 'url'
             });
         }
         crawlerOptions._hintIps = ips;
+        crawlerOptions._hintCountry = hintCountry;
 
         return safeURL;
     }
@@ -542,19 +647,10 @@ export class CrawlerHost extends RPCHost {
     async *queryCache(urlToCrawl: URL, cacheTolerance: number) {
         const digest = this.getUrlDigest(urlToCrawl);
 
-        const cache = (
-            await
-                (Crawled.fromFirestoreQuery(
-                    Crawled.COLLECTION.where('urlPathDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)
-                ).catch((err) => {
-                    this.logger.warn(`Failed to query cache, unknown issue`, { err });
-                    // https://github.com/grpc/grpc-node/issues/2647
-                    // https://github.com/googleapis/nodejs-firestore/issues/1023
-                    // https://github.com/googleapis/nodejs-firestore/issues/1023
-
-                    return undefined;
-                }))
-        )?.[0];
+        const cache = await this.storageLayer.findPageCache({ urlPathDigest: digest }).catch((err) => {
+            this.logger.warn(`Failed to query cache, unknown issue`, { err });
+            return undefined;
+        });
 
         yield cache;
 
@@ -563,29 +659,63 @@ export class CrawlerHost extends RPCHost {
         }
 
         const age = Date.now() - cache.createdAt.valueOf();
-        const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
-        this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
+        const stale = cache.coerced ? false : cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
+        this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'}${cache.coerced ? ' (coerced)' : ''} for ${urlToCrawl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
             url: urlToCrawl, digest, age, stale, cacheTolerance
         });
 
         let snapshot: PageSnapshot | undefined;
+
+        const loadingOfSnapshot = this.storageLayer.readFile(`snapshots/${cache._id}`).then((r) => {
+            snapshot = JSON.parse(r.toString('utf-8'));
+            return snapshot;
+        });
+
+        const preparations: Promise<unknown>[] = [];
+
         let screenshotUrl: string | undefined;
         let pageshotUrl: string | undefined;
-        const preparations = [
-            this.firebaseObjectStorage.downloadFile(`snapshots/${cache._id}`).then((r) => {
-                snapshot = JSON.parse(r.toString('utf-8'));
-            }),
-            cache.screenshotAvailable ?
-                this.firebaseObjectStorage.signDownloadUrl(`screenshots/${cache._id}`, Date.now() + this.urlValidMs).then((r) => {
+
+        if (cache.traits?.includes('blob')) {
+            const rawSnapshot = await loadingOfSnapshot;
+            const urlHash = urlToCrawl.hash.slice(1);
+            let page = parseInt(urlHash, 10);
+            if (page) {
+                const cachedPage = rawSnapshot?.childFrames?.[page - 1];
+                if (cachedPage) {
+                    snapshot = cachedPage;
+                } else {
+                    page = 1;
+                }
+            } else {
+                page = 1;
+            }
+            preparations.push(this.storageLayer.fileExists(`screenshots/${cache._id}/${page}`).then((r) => {
+                if (!r) {
+                    return;
+                }
+                return this.storageLayer.signDownloadUrl(`screenshots/${cache._id}/${page}`, Math.ceil(this.urlValidMs / 1000)).then((r) => {
                     screenshotUrl = r;
-                }) :
-                Promise.resolve(undefined),
-            cache.pageshotAvailable ?
-                this.firebaseObjectStorage.signDownloadUrl(`pageshots/${cache._id}`, Date.now() + this.urlValidMs).then((r) => {
-                    pageshotUrl = r;
-                }) :
-                Promise.resolve(undefined)
-        ];
+                });
+            }));
+        } else {
+            preparations.push(loadingOfSnapshot);
+            if (cache.screenshotAvailable) {
+                preparations.push(
+                    this.storageLayer.signDownloadUrl(`screenshots/${cache._id}`, Math.ceil(this.urlValidMs / 1000)).then((r) => {
+                        screenshotUrl = r;
+                    })
+                );
+            }
+            if (cache.pageshotAvailable) {
+                preparations.push(
+                    this.storageLayer.signDownloadUrl(`pageshots/${cache._id}`, Math.ceil(this.urlValidMs / 1000)).then((r) => {
+                        pageshotUrl = r;
+                    })
+                );
+            }
+        }
+
         try {
             await Promise.all(preparations);
         } catch (_err) {
@@ -602,26 +732,48 @@ export class CrawlerHost extends RPCHost {
                 pageshot: undefined,
                 screenshotUrl,
                 pageshotUrl,
-            } as PageSnapshot & { screenshotUrl?: string; pageshotUrl?: string; }
+            } as PageSnapshot
         };
     }
 
-    async setToCache(urlToCrawl: URL, snapshot: PageSnapshot) {
+    async setToCache(urlToCrawl: URL, snapshot: PageSnapshot, pageIndex?: boolean) {
         const digest = this.getUrlDigest(urlToCrawl);
 
-        this.logger.info(`Caching snapshot of ${urlToCrawl}...`, { url: urlToCrawl, digest, title: snapshot?.title, href: snapshot?.href });
+        this.storageLayer.clearConsecutiveError({ _id: digest }).catch((err) => {
+            this.logger.warn(`Failed to delete consecutive error for ${urlToCrawl}`, { err, digest });
+        });
+
+        if (this.storageLayer.constructor !== StorageLayer) {
+            this.logger.info(`Caching snapshot of ${urlToCrawl}...`, { url: urlToCrawl, digest, title: snapshot?.title, href: snapshot?.href });
+        }
         const nowDate = new Date();
 
         const cache = Crawled.from({
-            _id: randomUUID(),
+            _id: digest,
             url: urlToCrawl.toString(),
             createdAt: nowDate,
             expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs),
             htmlSignificantlyModifiedByJs: snapshot.htmlSignificantlyModifiedByJs,
             urlPathDigest: digest,
+            traits: snapshot.traits,
         });
 
-        const savingOfSnapshot = this.firebaseObjectStorage.saveFile(`snapshots/${cache._id}`,
+        if (snapshot.childFrames?.length) {
+            await Promise.all(snapshot.childFrames.map(async (childFrame, idx) => {
+                if (!(childFrame.screenshotUrl && childFrame.screenshotUrl.startsWith('file:'))) {
+                    return;
+                }
+                const furl = childFrame.screenshotUrl;
+                delete childFrame.screenshotUrl;
+                await this.storageLayer.storeFile(
+                    `screenshots/${cache._id}/${idx + 1}`,
+                    await readFile(fileURLToPath(furl)),
+                    { 'Content-Type': 'image/png' }
+                );
+            }));
+        }
+
+        await this.storageLayer.storeFile(`snapshots/${cache._id}`,
             Buffer.from(
                 JSON.stringify({
                     ...snapshot,
@@ -631,9 +783,7 @@ export class CrawlerHost extends RPCHost {
                 'utf-8'
             ),
             {
-                metadata: {
-                    contentType: 'application/json',
-                }
+                'Content-Type': 'application/json',
             }
         ).then((r) => {
             cache.snapshotAvailable = true;
@@ -641,28 +791,31 @@ export class CrawlerHost extends RPCHost {
         });
 
         if (snapshot.screenshot) {
-            await this.firebaseObjectStorage.saveFile(`screenshots/${cache._id}`, snapshot.screenshot, {
-                metadata: {
-                    contentType: 'image/png',
-                }
+            await this.storageLayer.storeFile(`screenshots/${cache._id}`, snapshot.screenshot, {
+                'Content-Type': 'image/png',
             });
             cache.screenshotAvailable = true;
         }
         if (snapshot.pageshot) {
-            await this.firebaseObjectStorage.saveFile(`pageshots/${cache._id}`, snapshot.pageshot, {
-                metadata: {
-                    contentType: 'image/png',
-                }
+            await this.storageLayer.storeFile(`pageshots/${cache._id}`, snapshot.pageshot, {
+                'Content-Type': 'image/png',
             });
             cache.pageshotAvailable = true;
         }
-        await savingOfSnapshot;
-        this.batchedCaches.push(cache);
-        // const r = await Crawled.save(cache.degradeForFireStore()).catch((err) => {
-        //     this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err: marshalErrorLike(err) });
+        this.storageLayer.storePageCache(cache).catch((err) => {
+            this.logger.error(`Failed to save cache for ${urlToCrawl}`, { err });
 
-        //     return undefined;
-        // });
+            return undefined;
+        });
+        if (pageIndex) {
+            this.storageLayer.indexSnapshot(digest, {
+                ...snapshot,
+                screenshot: undefined,
+                pageshot: undefined,
+            }).catch((err) => {
+                this.logger.warn(`Failed to add snapshot to indexedPage collection`, { err });
+            });
+        }
 
         return cache;
     }
@@ -710,36 +863,131 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
-        yield* this.cachedScrap(urlToCrawl, crawlOpts, crawlerOpts);
+        try {
+            let badBlob = false;
+            for await (const snapshot of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOpts)) {
+                if (!badBlob && snapshot?.blobs?.[0] && !snapshot.traits?.includes('blob')) {
+                    const blobUrl = snapshot.blobs[0].url;
+                    try {
+                        const equivalentOpts = { ...crawlOpts, engine: ENGINE_TYPE.CURL };
+
+                        yield* this.cachedScrap(new URL(blobUrl), equivalentOpts, crawlerOpts);
+                        return;
+                    } catch (err) {
+                        badBlob = true;
+                        this.logger.warn(`Failed to crawl blob URL ${snapshot.blobs[0].url} referenced from ${urlToCrawl}`, { err });
+                    }
+                }
+                yield snapshot;
+            }
+        } catch (err) {
+            if (err instanceof ServiceCrashedError) {
+                // ignore this case, give anything at hand
+                return;
+            }
+            throw err;
+        }
     }
 
     async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
         if (crawlerOpts?.html) {
-            const snapshot = {
-                href: urlToCrawl.toString(),
-                html: crawlerOpts.html,
-                title: '',
-                text: '',
-            } as PageSnapshot;
+            const htmlBuff = Buffer.from(crawlerOpts.html, 'utf-8');
+            const digest = sha256Hasher.hash(htmlBuff, 'hex');
+            const snapshot = await this.createSnapshotFromBlob(crawlOpts || {}, new URL(`blob:${digest}`), new Blob([htmlBuff], { type: 'text/html' }), 'text/html', `${digest}.html`);
             yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
 
             return;
         }
 
-        if (crawlerOpts?.pdf) {
-            const pdfFile = crawlerOpts.pdf instanceof FancyFile ? crawlerOpts.pdf : this.tempFileManager.cacheBuffer(Buffer.from(crawlerOpts.pdf, 'base64'));
-            const pdfLocalPath = pathToFileURL((await pdfFile.filePath));
-            const snapshot = {
-                href: urlToCrawl.toString(),
-                html: `<!DOCTYPE html><html><head></head><body style="height: 100%; width: 100%; overflow: hidden; margin:0px; background-color: rgb(82, 86, 89);"><embed style="position:absolute; left: 0; top: 0;" width="100%" height="100%" src="${crawlerOpts.url}"></body></html>`,
-                title: '',
-                text: '',
-                pdfs: [pdfLocalPath.href],
-            } as PageSnapshot;
+        let binaryFile = crawlerOpts?.pdf || crawlerOpts?.file;
+        let blob: Blob | undefined;
+        let digest: string | undefined;
+        if (binaryFile) {
+            if (binaryFile instanceof FancyFile && (await binaryFile.size) > 0) {
+                const binFilePath = await binaryFile.filePath;
+                blob = await openAsBlob(binFilePath, { type: await binaryFile.mimeType }) as any as Blob;
+                digest = await binaryFile.sha256Sum;
+                blob = new File([blob], await binaryFile.fileName || `${digest}`, { type: blob.type });
+            } else if (typeof binaryFile === 'string') {
+                const binBuffer = Buffer.from(binaryFile, 'base64');
+                digest = sha256Hasher.hash(binBuffer, 'hex') as string;
+                blob = new Blob([binBuffer], { type: await detectBuff(binBuffer).catch(() => 'application/octet-stream') });
+            }
+        }
 
+        const urlDigest = this.getUrlDigest(urlToCrawl);
+        const pConsecutiveError = this.storageLayer.findConsecutiveError({ _id: urlDigest, count: this.consecutiveErrorThreshold })
+            .catch((err) => {
+                this.logger.warn(`Failed to query consecutive error for ${urlToCrawl}`, { err, urlDigest });
+                return undefined;
+            });
+
+        const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
+        const cacheIt = this.queryCache(urlToCrawl, cacheTolerance);
+
+        let cache = (await cacheIt.next()).value;
+
+        if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
+            cache = (await cacheIt.next()).value;
+
+            // Ignore cache if it has a Blob URL with search params.
+            // Chances are the URL being temporal.
+            let blobUrl = cache?.snapshot?.pdfs?.[0];
+            blobUrl ??= cache?.snapshot?.blobs?.[0]?.url;
+
+            if (blobUrl && URL.canParse(blobUrl)) {
+                const blobUrlObj = new URL(blobUrl);
+                if (blobUrlObj.search) {
+                    cache = undefined;
+                }
+            }
+        } else {
+            cache = undefined;
+        }
+        cacheIt.return(undefined);
+
+        if (blob && digest) {
+            if (
+                cache?.snapshot &&
+                (!crawlOpts?.favorScreenshot || cache.snapshot?.screenshotUrl)
+            ) {
+                cache.snapshot.isFromCache = true;
+
+                this.emit('index-snapshot', urlToCrawl, cache.snapshot, crawlOpts, 'cache');
+                yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
+
+                return;
+            }
+
+            const snapshot = await this.createSnapshotFromBlob(crawlOpts || {}, urlToCrawl, blob, blob.type, (blob as File).name || `${digest}.${extOfMime(blob.type)}`);
             yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
 
             return;
+        }
+
+        const consecutiveError = await pConsecutiveError;
+
+        if (cache?.isFresh &&
+            (!crawlOpts?.favorScreenshot || ((cache.screenshotAvailable && cache.pageshotAvailable) || cache.snapshot?.screenshotUrl)) &&
+            (_.get(cache.snapshot, 'locale') === crawlOpts?.locale)
+        ) {
+            if (cache.snapshot) {
+                if ((cache.snapshot.pdfs?.length || cache.snapshot.blobs?.length) && consecutiveError) {
+                    this.logger.warn(`Consecutive error for file ${urlToCrawl}, rejecting`, { url: urlToCrawl, digest: urlDigest, count: consecutiveError.count, expireAt: consecutiveError.expireAt });
+                    throw new OperationNotAllowedError(`Consecutive error detected on file URL ${urlToCrawl} for too many times${consecutiveError.lastError ? ` (${consecutiveError.lastError})` : ''}, please retry after ${consecutiveError.expireAt?.toISOString()}.`);
+                }
+
+                cache.snapshot.isFromCache = true;
+            }
+            this.emit('index-snapshot', urlToCrawl, cache.snapshot, crawlOpts, 'cache');
+            yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
+
+            return;
+        }
+
+        if (consecutiveError) {
+            this.logger.warn(`Consecutive error for ${urlToCrawl}, rejecting`, { url: urlToCrawl, digest: urlDigest, count: consecutiveError.count, expireAt: consecutiveError.expireAt });
+            throw new OperationNotAllowedError(`Consecutive error detected on URL ${urlToCrawl} for too many times${consecutiveError.lastError ? ` (${consecutiveError.lastError})` : ''}, please retry after ${consecutiveError.expireAt?.toISOString()}.`);
         }
 
         if (
@@ -747,11 +995,39 @@ export class CrawlerHost extends RPCHost {
             // deprecated name
             crawlOpts?.engine === 'direct'
         ) {
+            const equivalentOpts = { ...crawlOpts };
+            const potentialPreviousResult = crawlOpts.sideLoad?.impersonate[urlToCrawl.href];
+            if (potentialPreviousResult?.status === 200 && potentialPreviousResult.body) {
+                let blob: Blob;
+                if (potentialPreviousResult.body instanceof Blob) {
+                    blob = potentialPreviousResult.body;
+                } else {
+                    blob = await openAsBlob(await potentialPreviousResult.body.filePath, { type: potentialPreviousResult.contentType || await potentialPreviousResult.body.mimeType }) as any as Blob;
+                }
+
+                const draftSnapshot = await this.createSnapshotFromBlob(equivalentOpts, urlToCrawl, blob, potentialPreviousResult.contentType);
+                draftSnapshot.status = potentialPreviousResult.status;
+                draftSnapshot.statusText = STATUS_CODES[potentialPreviousResult.status];
+                draftSnapshot.lastModified = (potentialPreviousResult.headers?.['Last-Modified'] || potentialPreviousResult.headers?.['last-modified']) as string | undefined;
+                draftSnapshot.geolocation = equivalentOpts?.countryHint;
+                yield this.jsdomControl.narrowSnapshot(draftSnapshot, equivalentOpts);
+
+                return;
+            }
+
+            const hint = equivalentOpts.sideLoad?.hint?.[urlToCrawl.href];
+            if (hint?.headers) {
+                equivalentOpts.extraHeaders ??= hint.headers as Record<string, string>;
+            }
+            if (hint?.cookies) {
+                equivalentOpts.cookies ??= hint?.cookies;
+            }
+
             let sideLoaded;
             try {
-                sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
-                    await this.sideLoadWithAllocatedProxy(urlToCrawl, crawlOpts) :
-                    await this.curlControl.sideLoad(urlToCrawl, crawlOpts);
+                sideLoaded = (equivalentOpts?.allocProxy && !equivalentOpts?.proxyUrl) ?
+                    await this.sideLoadWithAllocatedProxy(urlToCrawl, equivalentOpts) :
+                    await this.curlControl.sideLoadBlob(urlToCrawl, equivalentOpts);
 
             } catch (err) {
                 if (err instanceof ServiceBadAttemptError) {
@@ -762,12 +1038,16 @@ export class CrawlerHost extends RPCHost {
             if (!sideLoaded?.file) {
                 throw new AssertionFailureError(`Remote server did not return a body: ${urlToCrawl}`);
             }
-            const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
+            crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
+            const draftSnapshot = await this.createSnapshotFromBlob(equivalentOpts, sideLoaded.finalURL, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName);
             draftSnapshot.status = sideLoaded.status;
             draftSnapshot.statusText = sideLoaded.statusText;
+            draftSnapshot.lastModified = sideLoaded.headers?.['Last-Modified'] || sideLoaded.headers?.['last-modified'];
+            draftSnapshot.geolocation = crawlOpts?.countryHint;
             yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
             return;
         }
+
         if (crawlOpts?.engine === ENGINE_TYPE.CF_BROWSER_RENDERING) {
             const html = await this.cfBrowserRendering.fetchContent(urlToCrawl.href);
             const snapshot = {
@@ -776,37 +1056,18 @@ export class CrawlerHost extends RPCHost {
                 title: '',
                 text: '',
             } as PageSnapshot;
+            snapshot.geolocation = crawlOpts?.countryHint;
             yield this.jsdomControl.narrowSnapshot(snapshot, crawlOpts);
             return;
         }
 
-        const cacheTolerance = crawlerOpts?.cacheTolerance ?? this.cacheValidMs;
-        const cacheIt = this.queryCache(urlToCrawl, cacheTolerance);
-
-        let cache = (await cacheIt.next()).value;
         if (cache?.htmlSignificantlyModifiedByJs === false) {
             if (crawlerOpts && crawlerOpts.timeout === undefined) {
                 crawlerOpts.respondTiming ??= RESPOND_TIMING.HTML;
             }
         }
 
-        if (!crawlerOpts || crawlerOpts.isCacheQueryApplicable()) {
-            cache = (await cacheIt.next()).value;
-        }
-        cacheIt.return(undefined);
-
-        if (cache?.isFresh &&
-            (!crawlOpts?.favorScreenshot || (crawlOpts?.favorScreenshot && (cache.screenshotAvailable && cache.pageshotAvailable))) &&
-            (_.get(cache.snapshot, 'locale') === crawlOpts?.locale)
-        ) {
-            if (cache.snapshot) {
-                cache.snapshot.isFromCache = true;
-            }
-            yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
-
-            return;
-        }
-
+        let backUpSideLoadSnapshot;
         if (crawlOpts?.engine !== ENGINE_TYPE.BROWSER && !this.knownUrlThatSideLoadingWouldCrashTheBrowser(urlToCrawl)) {
             const sideLoadSnapshotPermitted = crawlerOpts?.browserIsNotRequired() &&
                 [RESPOND_TIMING.HTML, RESPOND_TIMING.VISIBLE_CONTENT].includes(crawlerOpts.presumedRespondTiming);
@@ -814,7 +1075,7 @@ export class CrawlerHost extends RPCHost {
                 const altOpts = { ...crawlOpts };
                 let sideLoaded = (crawlOpts?.allocProxy && !crawlOpts?.proxyUrl) ?
                     await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts) :
-                    await this.curlControl.sideLoad(urlToCrawl, altOpts).catch((err) => {
+                    await this.curlControl.sideLoadBlob(urlToCrawl, altOpts).catch((err) => {
                         this.logger.warn(`Failed to side load ${urlToCrawl.origin}`, { err: marshalErrorLike(err), href: urlToCrawl.href });
 
                         if (err instanceof ApplicationError && !(err instanceof ServiceBadAttemptError)) {
@@ -826,9 +1087,13 @@ export class CrawlerHost extends RPCHost {
                 if (!sideLoaded.file) {
                     throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
                 }
-                const draftSnapshot = await this.snapshotFormatter.createSnapshotFromFile(
-                    urlToCrawl, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName
+                const draftSnapshot = await this.createSnapshotFromBlob(
+                    altOpts,
+                    sideLoaded.finalURL, sideLoaded.file, sideLoaded.contentType, sideLoaded.fileName
                 ).catch((err) => {
+                    if (err instanceof AssertionFailureError) {
+                        return Promise.reject(err);
+                    }
                     if (err instanceof ApplicationError) {
                         return Promise.reject(new ServiceBadAttemptError(err.message));
                     }
@@ -836,7 +1101,20 @@ export class CrawlerHost extends RPCHost {
                 });
                 draftSnapshot.status = sideLoaded.status;
                 draftSnapshot.statusText = sideLoaded.statusText;
-                if (sideLoaded.status == 200 && !sideLoaded.contentType.startsWith('text/html')) {
+                draftSnapshot.lastModified = sideLoaded.headers?.['Last-Modified'] || sideLoaded.headers?.['last-modified'];
+                draftSnapshot.geolocation = crawlOpts?.countryHint;
+                if (
+                    (
+                        sideLoaded.status === 200 ||
+                        (REDIRECTION_CODES.has(sideLoaded.status) && !sideLoaded.headers?.location && !sideLoaded.headers?.Location)
+                    ) &&
+                    sideLoaded.contentType &&
+                    !sideLoaded.contentType.startsWith('text/html') &&
+                    !sideLoaded.contentType.startsWith('application/xhtml+xml')
+                ) {
+                    if (crawlOpts) {
+                        crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
+                    }
                     yield draftSnapshot;
                     return;
                 }
@@ -846,19 +1124,28 @@ export class CrawlerHost extends RPCHost {
                 draftSnapshot.isIntermediate = true;
                 if (sideLoadSnapshotPermitted) {
                     yield this.jsdomControl.narrowSnapshot(draftSnapshot, crawlOpts);
+                } else {
+                    backUpSideLoadSnapshot = draftSnapshot;
                 }
                 let fallbackProxyIsUsed = false;
                 if (
-                    ((!crawlOpts?.allocProxy || crawlOpts.allocProxy !== 'none') && !crawlOpts?.proxyUrl) &&
-                    (analyzed.tokens < 42 || sideLoaded.status !== 200)
+                    (!crawlOpts?.allocProxy || crawlOpts.allocProxy !== 'none') &&
+                    !crawlOpts?.proxyUrl &&
+                    (analyzed.tokens < 42 || sideLoaded.status !== 200) &&
+
+                    // No point retrying with proxy in these cases
+                    ![201, 202, 404, 405].includes(sideLoaded.status)
                 ) {
                     const proxyLoaded = await this.sideLoadWithAllocatedProxy(urlToCrawl, altOpts);
                     if (!proxyLoaded.file) {
                         throw new ServiceBadAttemptError(`Remote server did not return a body: ${urlToCrawl}`);
                     }
-                    const proxySnapshot = await this.snapshotFormatter.createSnapshotFromFile(
-                        urlToCrawl, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName
+                    const proxySnapshot = await this.createSnapshotFromBlob(
+                        altOpts, sideLoaded.finalURL, proxyLoaded.file, proxyLoaded.contentType, proxyLoaded.fileName
                     ).catch((err) => {
+                        if (err instanceof AssertionFailureError) {
+                            return Promise.reject(err);
+                        }
                         if (err instanceof ApplicationError) {
                             return Promise.reject(new ServiceBadAttemptError(err.message));
                         }
@@ -866,13 +1153,25 @@ export class CrawlerHost extends RPCHost {
                     });
                     proxySnapshot.status = proxyLoaded.status;
                     proxySnapshot.statusText = proxyLoaded.statusText;
-                    if (proxyLoaded.status === 200 && crawlerOpts?.browserIsNotRequired()) {
+                    proxySnapshot.lastModified = proxyLoaded.headers?.['Last-Modified'] || proxyLoaded.headers?.['last-modified'];
+                    proxySnapshot.geolocation = crawlOpts?.countryHint;
+                    if (proxyLoaded.status == 200 && proxyLoaded.contentType && !proxyLoaded.contentType.startsWith('text/html') && !proxyLoaded.contentType.startsWith('application/xhtml+xml')) {
+                        if (crawlOpts) {
+                            crawlOpts.sideLoad ??= sideLoaded.sideLoadOpts;
+                        }
+                        yield proxySnapshot;
+                        return;
                     }
                     analyzed = await this.jsdomControl.analyzeHTMLTextLite(proxySnapshot.html);
                     if (proxyLoaded.status === 200 || analyzed.tokens >= 200) {
                         proxySnapshot.isIntermediate = true;
                         if (sideLoadSnapshotPermitted) {
+                            if (crawlOpts) {
+                                crawlOpts.sideLoad ??= proxyLoaded.sideLoadOpts;
+                            }
                             yield this.jsdomControl.narrowSnapshot(proxySnapshot, crawlOpts);
+                        } else {
+                            backUpSideLoadSnapshot = proxySnapshot;
                         }
                         sideLoaded = proxyLoaded;
                         fallbackProxyIsUsed = true;
@@ -900,20 +1199,44 @@ export class CrawlerHost extends RPCHost {
             crawlOpts.proxyUrl = proxyUrl.href;
         }
 
+        let anythingYielded = false;
         try {
             if (crawlOpts?.targetSelector || crawlOpts?.removeSelector || crawlOpts?.withIframe || crawlOpts?.withShadowDom) {
                 for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
+                    anythingYielded = true;
+                    if (x) {
+                        x.geolocation = crawlOpts?.countryHint;
+                    }
                     yield this.jsdomControl.narrowSnapshot(x, crawlOpts);
+                }
+
+                if (!anythingYielded && backUpSideLoadSnapshot) {
+                    yield this.jsdomControl.narrowSnapshot(backUpSideLoadSnapshot, crawlOpts);
                 }
 
                 return;
             }
 
-            yield* this.puppeteerControl.scrap(urlToCrawl, crawlOpts);
+            for await (const x of this.puppeteerControl.scrap(urlToCrawl, crawlOpts)) {
+                anythingYielded = true;
+                if (x) {
+                    x.geolocation = crawlOpts?.countryHint;
+                }
+                yield x;
+            }
+            if (!anythingYielded && backUpSideLoadSnapshot) {
+                yield this.jsdomControl.narrowSnapshot(backUpSideLoadSnapshot, crawlOpts);
+            }
+
         } catch (err: any) {
             if (cache && !(err instanceof SecurityCompromiseError)) {
                 this.logger.warn(`Failed to scrap ${urlToCrawl}, but a stale cache is available. Falling back to cache`, { err: marshalErrorLike(err) });
                 yield this.jsdomControl.narrowSnapshot(cache.snapshot, crawlOpts);
+                return;
+            }
+            if (!anythingYielded && backUpSideLoadSnapshot) {
+                yield this.jsdomControl.narrowSnapshot(backUpSideLoadSnapshot, crawlOpts);
+                this.logger.warn(`Failed to scrap ${urlToCrawl}, but a side-load is available. Falling back to side-load`, { err: marshalErrorLike(err) });
                 return;
             }
             throw err;
@@ -944,8 +1267,18 @@ export class CrawlerHost extends RPCHost {
             amount += 765;
         }
 
+        if (isNaN(amount)) {
+            // A flat rate is charged if anything goes wrong with token estimation.
+            amount = 1000;
+        }
+
         if (saasTierPolicy) {
             amount = this.saasApplyTierPolicy(saasTierPolicy, amount);
+        }
+
+        if (amount > 2_000_000) {
+            // We decided it's not fair to charge above 2M tokens even though the page contains more.
+            amount = 2_000_000;
         }
 
         Object.assign(formatted, { usage: { tokens: amount } });
@@ -1016,10 +1349,31 @@ export class CrawlerHost extends RPCHost {
             this.threadLocal.set('timeout', opts.timeout * 1000);
         }
         this.threadLocal.set('retainImages', opts.retainImages);
+        this.threadLocal.set('retainLinks', opts.retainLinks);
         this.threadLocal.set('noGfm', opts.noGfm);
         this.threadLocal.set('DNT', Boolean(opts.doNotTrack));
+        if (opts.maxTokens) {
+            this.threadLocal.set('maxTokens', opts.maxTokens);
+        }
         if (opts.markdown) {
             this.threadLocal.set('turndownOpts', opts.markdown);
+        }
+        this.threadLocal.set('viewport', opts.viewport);
+        if (opts.instruction) {
+            this.threadLocal.set('instruction', opts.instruction);
+        }
+        if (opts.markdownChunking) {
+            if (opts.markdown?.headingStyle) {
+                opts.markdown.headingStyle = 'atx';
+            }
+            if (opts.markdownChunking.startsWith('s')) {
+                this.threadLocal.set('markdownChunking', 'contextual');
+            } else {
+                this.threadLocal.set('markdownChunking', 'simple');
+            }
+            if (parseInt(opts.markdownChunking.substring(opts.markdownChunking.length - 1)) > 0) {
+                this.threadLocal.set('markdownChunkingDepth', parseInt(opts.markdownChunking.substring(opts.markdownChunking.length - 1)));
+            }
         }
 
         const crawlOpts: ExtraScrappingOptions = {
@@ -1040,6 +1394,8 @@ export class CrawlerHost extends RPCHost {
             allocProxy: opts.proxy?.endsWith('+') ? opts.proxy.slice(0, -1) : opts.proxy,
             proxyResources: (opts.proxyUrl || opts.proxy?.endsWith('+')) ? true : false,
             private: Boolean(opts.doNotTrack),
+            readabilityRequired: opts.readabilityRequired(),
+            extraHeaders: opts.customHeader,
         };
 
         if (crawlOpts.targetSelector?.length) {
@@ -1058,16 +1414,8 @@ export class CrawlerHost extends RPCHost {
             }
         }
 
-        if (opts._hintIps?.length) {
-            const hints = await this.geoIpService.lookupCities(opts._hintIps);
-            const board: Record<string, number> = {};
-            for (const x of hints) {
-                if (x.country?.code) {
-                    board[x.country.code] = (board[x.country.code] || 0) + 1;
-                }
-            }
-            const hintCountry = _.maxBy(Array.from(Object.entries(board)), 1)?.[0];
-            crawlOpts.countryHint = hintCountry?.toLowerCase();
+        if (opts._hintCountry) {
+            crawlOpts.countryHint = opts._hintCountry.toLowerCase();
         }
 
         if (opts.locale) {
@@ -1102,6 +1450,35 @@ export class CrawlerHost extends RPCHost {
                 })
             )).filter(Boolean);
         }
+        if (opts.removeOverlay) {
+            crawlOpts.injectPageScripts ??= [];
+            crawlOpts.injectPageScripts.push(`
+(() => {
+    const handler = ()=> {
+        let overlay;
+        while (overlay = detectOverlay()) {
+            let elem = overlay.parentElement;
+            overlay.remove();
+            while (elem !== document.body) {
+                const boundingRect = elem.getBoundingClientRect();
+                if (boundingRect.width * boundingRect.height === 0) {
+                    const tmp = elem;
+                    elem = elem.parentElement;
+                    tmp.remove();
+                    continue;
+                }
+                break;
+            }
+        }
+    };
+    window.addEventListener('load', handler);
+    document.addEventListener('DOMContentLoaded', handler);
+    document.addEventListener('mutationIdle', handler);
+})();
+`);
+        }
+
+        (crawlOpts as CURLScrappingOptions).maxSize ??= 1024 * 1024 * 1024; // 1GB
 
         return crawlOpts;
     }
@@ -1112,9 +1489,8 @@ export class CrawlerHost extends RPCHost {
             screenshotUrl?: string;
             pageshotUrl?: string;
         },
-        nominalUrl?: URL,
+        nominalUrl: URL,
         urlValidMs?: number,
-        scrappingOptions?: ScrappingOptions
     ) {
         const presumedURL = crawlerOptions.base === 'final' ? new URL(snapshot.href) : nominalUrl;
 
@@ -1126,50 +1502,31 @@ export class CrawlerHost extends RPCHost {
                 url: presumedURL?.href || snapshot.href,
             };
 
-            Object.defineProperty(output, 'textRepresentation', {
-                value: snapshot.parsed?.textContent,
-                enumerable: false,
-            });
-
-            return output;
+            return FormattedPageDto.from(output);
         }
 
-        return this.formatSnapshotWithPDFSideLoad(respondWith, snapshot, presumedURL, urlValidMs, scrappingOptions);
-    }
-
-    async formatSnapshotWithPDFSideLoad(mode: string, snapshot: PageSnapshot, nominalUrl?: URL, urlValidMs?: number, scrappingOptions?: ScrappingOptions) {
-        const snapshotCopy = _.cloneDeep(snapshot);
-
-        if (snapshotCopy.pdfs?.length) {
-            const pdfUrl = snapshotCopy.pdfs[0];
-            if (pdfUrl.startsWith('http')) {
-                const sideLoaded = scrappingOptions?.sideLoad?.impersonate[pdfUrl];
-                if (sideLoaded?.status === 200 && sideLoaded.body) {
-                    snapshotCopy.pdfs[0] = pathToFileURL(await sideLoaded?.body.filePath).href;
-                    return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
-                }
-
-                const r = await this.curlControl.sideLoad(new URL(pdfUrl), scrappingOptions).catch((err) => {
-                    if (err instanceof ServiceBadAttemptError) {
-                        return Promise.reject(new AssertionFailureError(`Failed to load PDF(${pdfUrl}): ${err.message}`));
-                    }
-
-                    return Promise.reject(err);
+        if (snapshot.imgs?.length && crawlerOptions.withGeneratedAlt) {
+            const tasks = _.uniqBy((snapshot.imgs || []), 'src').map(async (x) => {
+                const r = await this.altTextService.getAltText(x).catch((err: any) => {
+                    this.logger.warn(`Failed to get alt text for ${x.src}`, { err });
+                    return undefined;
                 });
-                if (r.status !== 200) {
-                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded status ${r.status}`);
+                if (r && x.src) {
+                    return [x.src, r];
                 }
-                if (!r.contentType.includes('application/pdf')) {
-                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server responded with wrong content type ${r.contentType}`);
-                }
-                if (!r.file) {
-                    throw new AssertionFailureError(`Failed to load PDF(${pdfUrl}): Server did not return a body`);
-                }
-                snapshotCopy.pdfs[0] = pathToFileURL(await r.file.filePath).href;
+
+                return undefined;
+            });
+
+            const pairs = (await Promise.all(tasks)).filter(Boolean) as [string, string][];
+            const imgAltDict = _.fromPairs(pairs);
+
+            for (const x of snapshot.imgs) {
+                x.alt = imgAltDict[x.src] || x.alt;
             }
         }
 
-        return this.snapshotFormatter.formatSnapshot(mode, snapshotCopy, nominalUrl, urlValidMs);
+        return this.snapshotFormatter.formatSnapshot(respondWith, snapshot, presumedURL, urlValidMs);
     }
 
     async getFinalSnapshot(url: URL, opts?: ExtraScrappingOptions, crawlerOptions?: CrawlerOptions): Promise<PageSnapshot | undefined> {
@@ -1262,7 +1619,7 @@ export class CrawlerHost extends RPCHost {
     }, 3)
     async sideLoadWithAllocatedProxy(url: URL, opts?: ExtraScrappingOptions) {
         if (opts?.allocProxy === 'none') {
-            return this.curlControl.sideLoad(url, opts);
+            return this.curlControl.sideLoadBlob(url, opts);
         }
         let proxy;
         if (opts) {
@@ -1276,7 +1633,7 @@ export class CrawlerHost extends RPCHost {
 
         proxy ??= await this.proxyProvider.alloc(this.figureOutBestProxyCountry(opts));
         this.logger.debug(`Proxy allocated`, { proxy: proxy.href });
-        const r = await this.curlControl.sideLoad(url, {
+        const r = await this.curlControl.sideLoadBlob(url, {
             ...opts,
             proxyUrl: proxy.href,
         });
@@ -1322,7 +1679,7 @@ export class CrawlerHost extends RPCHost {
         return false;
     }
 
-    async saasAssertTierPolicy(opts: CrawlerOptions, auth: JinaEmbeddingsAuthDTO) {
+    async saasAssertTierPolicy(opts: CrawlerOptions, auth: BaseAuthDTO) {
         let chargeScalar = 1;
         let minimalCharge = 0;
 
@@ -1343,6 +1700,10 @@ export class CrawlerHost extends RPCHost {
         if (opts.engine === ENGINE_TYPE.CF_BROWSER_RENDERING) {
             await auth.assertTier(0, 'Cloudflare browser rendering');
             minimalCharge = 4_000;
+        }
+
+        if (opts.engine === ENGINE_TYPE.BROWSER && opts.respondWith.includes('html')) {
+            await auth.assertTier(0, 'Browser rendered HTML');
         }
 
         if (opts.respondWith.includes('lm') || opts.engine?.includes('lm')) {
@@ -1371,4 +1732,29 @@ export class CrawlerHost extends RPCHost {
 
         return effectiveChargeAmount;
     }
+
+    async createSnapshotFromBlob(scrappingOptions: ExtraScrappingOptions, url: URL, blob: Blob, contentType?: string, fileName?: string) {
+        const rawSnapshot = await this.binaryExtractorService.createSnapshotFromBlob(url, blob, contentType, fileName);
+
+        process.nextTick(
+            this.threadLocal.bridged(
+                () => {
+                    this.emit('index-snapshot', url, rawSnapshot, scrappingOptions, 'blob');
+                }
+            )
+        );
+
+        if (!rawSnapshot.childFrames?.length) {
+            return rawSnapshot;
+        }
+
+        const urlHash = url.hash.slice(1);
+        const page = parseInt(urlHash, 10);
+        if (page >= 1 && page <= rawSnapshot.childFrames.length) {
+            return rawSnapshot.childFrames[page - 1];
+        }
+
+        return rawSnapshot;
+    }
+
 }

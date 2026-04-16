@@ -9,6 +9,10 @@ import { AsyncLocalContext } from './async-context';
 import { PseudoTransfer } from './pseudo-transfer';
 import { cpus } from 'os';
 import { isMainThread } from 'worker_threads';
+import { EnvConfig } from './envconfig';
+import { Finalizer } from './finalizer';
+
+import '../config';
 
 @singleton()
 export class ThreadedServiceRegistry extends AbstractThreadedServiceRegistry {
@@ -20,6 +24,7 @@ export class ThreadedServiceRegistry extends AbstractThreadedServiceRegistry {
         protected globalLogger: GlobalLogger,
         public asyncContext: AsyncLocalContext,
         public pseudoTransfer: PseudoTransfer,
+        protected envConfig: EnvConfig,
     ) {
         super(...arguments);
     }
@@ -56,6 +61,22 @@ export class ThreadedServiceRegistry extends AbstractThreadedServiceRegistry {
         }
 
         this.emit('ready');
+    }
+
+    override get workerOptions() {
+        return {
+            ...super.workerOptions,
+            env: { ...this.envConfig.originalEnv, ...process.env }
+        };
+    }
+
+    @Finalizer()
+    override standDown() {
+        for (const worker of this.workers.keys()) {
+            worker.terminate();
+        }
+
+        return super.standDown();
     }
 
 }

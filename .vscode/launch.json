@@ -2,6 +2,135 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Debug Stand Alone Crawl",
+      "request": "launch",
+      "runtimeVersion": "24",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/crawl.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:prepare",
+      "killBehavior": "forceful"
+    },
+    {
+      "name": "Debug Stand Alone Crawl + Browser",
+      "request": "launch",
+      "runtimeVersion": "24",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        "DEBUG_BROWSER": "true"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/crawl.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:prepare",
+      "killBehavior": "forceful"
+    },
+    {
+      "name": "Debug Stand Alone Crawl - EU",
+      "request": "launch",
+      "runtimeVersion": "24",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        "FIRESTORE_DATABASE": "reader-eu",
+        "GCP_STORAGE_BUCKET": "reader-eu"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/crawl.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:prepare",
+      "killBehavior": "forceful"
+    },
+    {
+      "name": "Debug Stand Alone Search",
+      "request": "launch",
+      "runtimeVersion": "24",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        "PREFERRED_PROXY_COUNTRY": "us",
+        // "JINA_CRAWLER_OFFLOAD_ORIGIN": "https://r.jina.ai"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/search.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:prepare",
+      "killBehavior": "forceful"
+    },
+    {
+      "name": "Debug Stand Alone Search + Offload",
+      "request": "launch",
+      "runtimeVersion": "24",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        "PREFERRED_PROXY_COUNTRY": "us",
+        "JINA_CRAWLER_OFFLOAD_ORIGIN": "https://r.jina.ai"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/search.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:prepare",
+      "killBehavior": "forceful"
+    },
+    {
+      "name": "Debug Stand Alone SERP",
+      "request": "launch",
+      "runtimeVersion": "24",
+      "runtimeArgs": [
+        "--env-file=.secret.local",
+      ],
+      "env": {
+        "GCLOUD_PROJECT": "reader-6b7dc",
+        // "OVERRIDE_GOOGLE_DOMAIN": "www.google.com.hk",
+        "PREFERRED_PROXY_COUNTRY": "us"
+      },
+      "cwd": "${workspaceFolder}",
+      "program": "build/stand-alone/serp.js",
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
+      "type": "node",
+      "outputCapture": "std",
+      "preLaunchTask": "Backend:prepare",
+      "killBehavior": "forceful"
+    },
+    {
       "name": "Attach",
       "port": 9229,
       "request": "attach",
@@ -18,111 +147,6 @@
         "<node_internals>/**"
       ],
       "type": "node"
-    },
-    {
-      "name": "Debug Stand Alone Crawl",
-      "request": "launch",
-      "runtimeArgs": [
-        "--env-file=.secret.local",
-      ],
-      "env": {
-        "GCLOUD_PROJECT": "reader-6b7dc",
-        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
-      },
-      "cwd": "${workspaceFolder}",
-      "program": "build/stand-alone/crawl.js",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
-      "type": "node",
-      "outputCapture": "std",
-      "preLaunchTask": "Backend:build:watch",
-      "killBehavior": "forceful"
-    },
-    {
-      "name": "Debug Stand Alone Crawl + Browser",
-      "request": "launch",
-      "runtimeArgs": [
-        "--env-file=.secret.local",
-      ],
-      "env": {
-        "GCLOUD_PROJECT": "reader-6b7dc",
-        "DEBUG_BROWSER": "true",
-        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
-      },
-      "cwd": "${workspaceFolder}",
-      "program": "build/stand-alone/crawl.js",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
-      "type": "node",
-      "outputCapture": "std",
-      "preLaunchTask": "Backend:build:watch",
-      "killBehavior": "forceful"
-    },
-    {
-      "name": "Debug Stand Alone Crawl - EU",
-      "request": "launch",
-      "runtimeArgs": [
-        "--env-file=.secret.local",
-      ],
-      "env": {
-        "GCLOUD_PROJECT": "reader-6b7dc",
-        "FIRESTORE_DATABASE": "reader-eu",
-        "GCP_STORAGE_BUCKET": "reader-eu",
-        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
-      },
-      "cwd": "${workspaceFolder}",
-      "program": "build/stand-alone/crawl.js",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
-      "type": "node",
-      "outputCapture": "std",
-      "preLaunchTask": "Backend:build:watch",
-      "killBehavior": "forceful"
-    },
-    {
-      "name": "Debug Stand Alone Search",
-      "request": "launch",
-      "runtimeArgs": [
-        "--env-file=.secret.local",
-      ],
-      "env": {
-        "GCLOUD_PROJECT": "reader-6b7dc",
-        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
-      },
-      "cwd": "${workspaceFolder}",
-      "program": "build/stand-alone/search.js",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
-      "type": "node",
-      "outputCapture": "std",
-      "preLaunchTask": "Backend:build:watch",
-      "killBehavior": "forceful"
-    },
-    {
-      "name": "Debug Stand Alone SERP",
-      "request": "launch",
-      "runtimeArgs": [
-        "--env-file=.secret.local",
-      ],
-      "env": {
-        "GCLOUD_PROJECT": "reader-6b7dc",
-        "PREFERRED_PROXY_COUNTRY": "hk",
-        "OVERRIDE_GOOGLE_DOMAIN": "www.google.com.hk",
-        "LD_PRELOAD": "/usr/local/lib/libcurl-impersonate-chrome.dylib"
-      },
-      "cwd": "${workspaceFolder}",
-      "program": "build/stand-alone/serp.js",
-      "skipFiles": [
-        "<node_internals>/**"
-      ],
-      "type": "node",
-      "outputCapture": "std",
-      "preLaunchTask": "Backend:build:watch",
-      "killBehavior": "forceful"
     },
   ]
 }

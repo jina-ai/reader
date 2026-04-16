@@ -1,15 +1,15 @@
 import { singleton } from 'tsyringe';
 import _ from 'lodash';
 import { TextItem } from 'pdfjs-dist/types/src/display/api';
-import { AssertionFailureError, AsyncService, HashManager } from 'civkit';
+import { AsyncService } from 'civkit/async-service';
 import { GlobalLogger } from './logger';
-import { PDFContent } from '../db/pdf';
 import dayjs from 'dayjs';
-import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
-import { randomUUID } from 'crypto';
 import type { PDFDocumentLoadingTask } from 'pdfjs-dist';
 import path from 'path';
 import { AsyncLocalContext } from './async-context';
+import { CanvasService } from './canvas';
+import { writeFile } from 'fs/promises';
+import { pathToFileURL } from 'url';
 const utc = require('dayjs/plugin/utc');  // Import the UTC plugin
 dayjs.extend(utc);  // Extend dayjs with the UTC plugin
 const timezone = require('dayjs/plugin/timezone');
@@ -17,8 +17,7 @@ dayjs.extend(timezone);
 
 const pPdfjs = import('pdfjs-dist/legacy/build/pdf.mjs');
 const nodeCmapUrl = path.resolve(require.resolve('pdfjs-dist'), '../../cmaps') + '/';
-
-const md5Hasher = new HashManager('md5', 'hex');
+// const standardFontsUrl = path.resolve(require.resolve('pdfjs-dist'), '../../standard_fonts') + '/';
 
 function stdDev(numbers: number[]) {
     const mean = _.mean(numbers);
@@ -45,6 +44,14 @@ function isRotatedByAtLeast35Degrees(transform?: [number, number, number, number
     return rotationAngle1 >= 35 || rotationAngle2 >= 35;
 }
 
+
+export interface ExtractedPDF {
+    meta?: Record<string, any>;
+    content: string;
+    text: string;
+    cached?: boolean;
+}
+
 @singleton()
 export class PDFExtractor extends AsyncService {
 
@@ -55,8 +62,8 @@ export class PDFExtractor extends AsyncService {
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected firebaseObjectStorage: FirebaseStorageBucketControl,
         protected asyncLocalContext: AsyncLocalContext,
+        protected canvasService: CanvasService,
     ) {
         super(...arguments);
     }
@@ -90,47 +97,23 @@ export class PDFExtractor extends AsyncService {
         };
     }
 
-    async extract(url: string | URL) {
-        let loadingTask: PDFDocumentLoadingTask;
-
-        if (typeof url === 'string' && this.isDataUrl(url)) {
-            const { data } = this.parseDataUrl(url);
-            const binary = Uint8Array.from(Buffer.from(data, 'base64'));
-            loadingTask = this.pdfjs.getDocument({
-                data: binary,
-                disableFontFace: true,
-                verbosity: 0,
-                cMapUrl: nodeCmapUrl,
-            });
-        } else {
-            loadingTask = this.pdfjs.getDocument({
-                url,
-                disableFontFace: true,
-                verbosity: 0,
-                cMapUrl: nodeCmapUrl,
-            });
-        }
-
-
-        const doc = await loadingTask.promise;
-        const meta = await doc.getMetadata();
-
-        const textItems: TextItem[][] = [];
-
-        for (const pg of _.range(0, doc.numPages)) {
-            const page = await doc.getPage(pg + 1);
-            const textContent = await page.getTextContent({ includeMarkedContent: true });
-            textItems.push((textContent.items as TextItem[]));
-        }
-
+    calcArticleHeightsStats(textItems: TextItem[][]) {
         const articleCharHeights: number[] = [];
         for (const textItem of textItems.flat()) {
             if (textItem.height) {
                 articleCharHeights.push(...Array(textItem.str.length).fill(textItem.height));
             }
         }
-        const articleAvgHeight = _.mean(articleCharHeights);
-        const articleStdDevHeight = stdDev(articleCharHeights);
+
+        return {
+            articleAvgHeight: _.mean(articleCharHeights),
+            articleStdDevHeight: stdDev(articleCharHeights)
+        };
+    }
+
+    digestTextItems(textItems: TextItem[][], options?: ReturnType<typeof this.calcArticleHeightsStats>) {
+        const { articleAvgHeight, articleStdDevHeight } = options || this.calcArticleHeightsStats(textItems);
+
         // const articleMedianHeight = articleCharHeights.sort()[Math.floor(articleCharHeights.length / 2)];
         const mdOps: Array<{
             text: string;
@@ -148,7 +131,7 @@ export class PDFExtractor extends AsyncService {
                 if (textItem.height) {
                     charHeights.push(...Array(textItem.str.length).fill(textItem.height));
                 }
-                rawChunks.push(`${textItem.str}${textItem.hasEOL ? '\n' : ''}`);
+                rawChunks.push(`${textItem.str || ''}${textItem.hasEOL ? '\n' : ''}`);
             }
 
             const avgHeight = _.mean(charHeights);
@@ -270,84 +253,119 @@ export class PDFExtractor extends AsyncService {
             mdChunks[0] = mdChunks[0].trimStart();
         }
 
-        return { meta: meta.info as Record<string, any>, content: mdChunks.join(''), text: rawChunks.join('') };
+        return { content: mdChunks.join(''), text: rawChunks.join('') } as ExtractedPDF;
     }
 
-    async cachedExtract(url: string, cacheTolerance: number = 1000 * 3600 * 24, alternativeUrl?: string) {
-        if (!url) {
-            return undefined;
-        }
-        let nameUrl = alternativeUrl || url;
-        const digest = md5Hasher.hash(nameUrl);
+    async extract(url: string | URL) {
+        let loadingTask: PDFDocumentLoadingTask;
 
-        if (this.isDataUrl(url)) {
-            nameUrl = `blob://pdf:${digest}`;
-        }
-
-        const cache: PDFContent | undefined = nameUrl.startsWith('blob:') ? undefined :
-            (await PDFContent.fromFirestoreQuery(PDFContent.COLLECTION.where('urlDigest', '==', digest).orderBy('createdAt', 'desc').limit(1)))?.[0];
-
-        if (cache) {
-            const age = Date.now() - cache?.createdAt.valueOf();
-            const stale = cache.createdAt.valueOf() < (Date.now() - cacheTolerance);
-            this.logger.info(`${stale ? 'Stale cache exists' : 'Cache hit'} for PDF ${nameUrl}, normalized digest: ${digest}, ${age}ms old, tolerance ${cacheTolerance}ms`, {
-                data: url, url: nameUrl, digest, age, stale, cacheTolerance
+        if (typeof url === 'string' && this.isDataUrl(url)) {
+            const { data } = this.parseDataUrl(url);
+            const binary = Uint8Array.from(Buffer.from(data, 'base64'));
+            loadingTask = this.pdfjs.getDocument({
+                data: binary,
+                // disableFontFace: true,
+                useSystemFonts: true,
+                verbosity: 0,
+                cMapUrl: nodeCmapUrl,
+                // standardFontDataUrl: standardFontsUrl,
             });
+        } else {
+            loadingTask = this.pdfjs.getDocument({
+                url,
+                // disableFontFace: true,
+                useSystemFonts: true,
+                verbosity: 0,
+                cMapUrl: nodeCmapUrl,
+                // standardFontDataUrl: standardFontsUrl,
+            });
+        }
 
-            if (!stale) {
-                if (cache.content && cache.text) {
-                    return {
-                        meta: cache.meta,
-                        content: cache.content,
-                        text: cache.text
-                    };
-                }
 
-                try {
-                    const r = await this.firebaseObjectStorage.downloadFile(`pdfs/${cache._id}`);
-                    let cached = JSON.parse(r.toString('utf-8'));
+        const doc = await loadingTask.promise;
+        const meta = await doc.getMetadata();
 
-                    return {
-                        meta: cached.meta,
-                        content: cached.content,
-                        text: cached.text
-                    };
-                } catch (err) {
-                    this.logger.warn(`Unable to load cached content for ${nameUrl}`, { err });
+        const textItems: TextItem[][] = [];
 
-                    return undefined;
-                }
+        for (const pg of _.range(0, doc.numPages)) {
+            const page = await doc.getPage(pg + 1);
+            const textContent = await page.getTextContent({ includeMarkedContent: true });
+            textItems.push((textContent.items as TextItem[]));
+        }
+
+        return { meta: meta.info as Record<string, any>, ...this.digestTextItems(textItems) } as ExtractedPDF;
+    }
+
+    async extractRendered(filePath: string, targetPath: string, pagesBeingRendered: number[] | Set<number> = [1, 2, 3]) {
+        const fileUrl = pathToFileURL(filePath).href;
+
+        const pageRenderSet = new Set(pagesBeingRendered);
+
+        const loadingTask = this.pdfjs.getDocument({
+            url: fileUrl,
+            // disableFontFace: true,
+            useSystemFonts: true,
+            verbosity: 0,
+            cMapUrl: nodeCmapUrl,
+        });
+
+
+        const doc = await loadingTask.promise;
+        const meta = await doc.getMetadata();
+
+        const vecs: {
+            page: number;
+            width?: number;
+            height?: number;
+            pngPath?: string;
+            textItems: TextItem[];
+        }[] = [];
+
+        for (const pg of _.range(0, doc.numPages)) {
+            const pn = pg + 1;
+            const page = await doc.getPage(pn);
+            const mixin: Partial<typeof vecs[number]> = {};
+            if (pageRenderSet.has(pn)) {
+                const viewport = page.getViewport({ scale: 2, });
+                const canvas = this.canvasService.canvas.createCanvas(viewport.width, viewport.height);
+                const c2d = canvas.getContext('2d');
+                await page.render({
+                    // @ts-ignore
+                    canvasContext: c2d,
+                    viewport: viewport,
+                }).promise;
+                const pngBuffer = canvas.toBuffer('image/png');
+                const fPath = path.join(targetPath, `_${pn}.png`);
+                await writeFile(fPath, pngBuffer, { flush: true });
+                Object.assign(mixin, {
+                    width: viewport.width,
+                    height: viewport.height,
+                    pngPath: fPath,
+                });
             }
+
+            const textContent = await page.getTextContent({ includeMarkedContent: true });
+            const vec = {
+                ...mixin,
+                page: pn,
+                textItems: textContent.items as TextItem[],
+            };
+            vecs.push(vec);
         }
 
-        let extracted;
+        const textItems = vecs.map((x) => x.textItems);
+        const articleStats = this.calcArticleHeightsStats(textItems);
 
-        try {
-            extracted = await this.extract(url);
-        } catch (err: any) {
-            this.logger.warn(`Unable to extract from pdf ${nameUrl}`, { err, url, nameUrl });
-            throw new AssertionFailureError(`Unable to process ${nameUrl} as pdf: ${err?.message}`);
-        }
-
-        if (!this.asyncLocalContext.ctx.DNT && !nameUrl.startsWith('blob:')) {
-            const theID = randomUUID();
-            await this.firebaseObjectStorage.saveFile(`pdfs/${theID}`,
-                Buffer.from(JSON.stringify(extracted), 'utf-8'), { contentType: 'application/json' });
-            PDFContent.save(
-                PDFContent.from({
-                    _id: theID,
-                    src: nameUrl,
-                    meta: extracted?.meta || {},
-                    urlDigest: digest,
-                    createdAt: new Date(),
-                    expireAt: new Date(Date.now() + this.cacheRetentionMs)
-                }).degradeForFireStore()
-            ).catch((r) => {
-                this.logger.warn(`Unable to cache PDF content for ${nameUrl}`, { err: r });
-            });
-        }
-
-        return extracted;
+        return {
+            ...this.digestTextItems(textItems, articleStats),
+            meta: meta.info as Record<string, any>,
+            pages: vecs.map((x) => {
+                return {
+                    ...this.digestTextItems([x.textItems], articleStats),
+                    ...x,
+                };
+            })
+        };
     }
 
     parsePdfDate(pdfDate: string | undefined) {

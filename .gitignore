@@ -70,6 +70,7 @@ toy*.ts
 
 .DS_Store
 build/
+tests-build/
 .firebase-emu/
 *.log
 .DS_Store

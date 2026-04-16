@@ -1,37 +1,44 @@
 import { AsyncService } from 'civkit/async-service';
 import { singleton } from 'tsyringe';
+import { Blob } from 'buffer';
 
-import { Curl, CurlCode, CurlFeature, HeaderInfo } from 'node-libcurl';
+import { Curl, CurlCode, CurlFeature, HeaderInfo, Browser, getChromeConfig } from '@nomagick/node-libcurl-impersonate';
 import { parseString as parseSetCookieString } from 'set-cookie-parser';
 
 import { ScrappingOptions } from './puppeteer';
 import { GlobalLogger } from './logger';
-import { AssertionFailureError, FancyFile } from 'civkit';
-import { ServiceBadAttemptError, ServiceBadApproachError } from './errors';
+import { AssertionFailureError } from 'civkit/civ-rpc';
+import { FancyFile } from 'civkit/fancy-file';
+
+import { ServiceBadAttemptError, ServiceBadApproachError, TargetFileTooLargeError } from './errors';
 import { TempFileManager } from '../services/temp-file';
-import { createBrotliDecompress, createInflate, createGunzip } from 'zlib';
-import { ZSTDDecompress } from 'simple-zstd';
 import _ from 'lodash';
-import { Readable } from 'stream';
+import { PassThrough, Readable } from 'stream';
 import { AsyncLocalContext } from './async-context';
 import { BlackHoleDetector } from './blackhole-detector';
+import { humanReadableDataSize } from 'civkit/readability';
 
-export interface CURLScrappingOptions extends ScrappingOptions {
+export interface CURLScrappingOptions<T = any> extends ScrappingOptions<T> {
     method?: string;
     body?: string | Buffer;
+    maxSize?: number;
 }
+
+export const REDIRECTION_CODES = new Set([301, 302, 303, 307, 308]);
 
 @singleton()
 export class CurlControl extends AsyncService {
 
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    chromeVersion: string = `132`;
+    chromeVersion: string = `136`;
     safariVersion: string = `537.36`;
     platform: string = `Linux`;
-    ua: string = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/${this.safariVersion} (KHTML, like Gecko) Chrome/${this.chromeVersion}.0.0.0 Safari/${this.safariVersion}`;
+    ua: string = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/${this.safariVersion} (KHTML, like Gecko) Chrome/${this.chromeVersion}.0.0.0 Safari/${this.safariVersion}`;
 
     lifeCycleTrack = new WeakMap();
+
+    impersonateCfg?: ReturnType<typeof getChromeConfig>;
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -58,6 +65,14 @@ export class CurlControl extends AsyncService {
         this.chromeVersion = ua.match(/Chrome\/(\d+)/)![1];
         this.safariVersion = ua.match(/AppleWebKit\/([\d\.]+)/)![1];
         this.ua = ua;
+        this.impersonateCfg = getChromeConfig({
+            version: this.chromeVersion,
+            fingerprint: {
+                ja3: '771,4865-4866-4867-49195-49199-49196-49200-52393-52392-49171-49172-156-157-47-53,10-16-17613-23-43-65037-13-65281-45-11-18-27-51-5-35-0-41,4588-29-23-24,0',
+                ja4: 't13d1517h2_002f,0035,009c,009d,1301,1302,1303,c013,c014,c02b,c02c,c02f,c030,cca8,cca9_0000,0005,000a,000b,000d,0012,0017,001b,0023,0029,002b,002d,0033,44cd,fe0d,ff01_0403,0804,0401,0503,0805,0501,0806,0601',
+                akami: '1:65536;2:0;4:6291456;6:262144|15663105|0|m,a,s,p'
+            }
+        });
     }
 
     curlImpersonateHeader(curl: Curl, headers?: object) {
@@ -75,9 +90,9 @@ export class CurlControl extends AsyncService {
         }
 
         const mixinHeaders: Record<string, string> = {
-            'Sec-Ch-Ua': `Not A(Brand";v="8", "Chromium";v="${this.chromeVersion}", "Google Chrome";v="${this.chromeVersion}"`,
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': `"${uaPlatform}"`,
+            'sec-ch-ua': `"Chromium";v="${this.chromeVersion}", "Google Chrome";v="${this.chromeVersion}", "Not.A/Brand";v="99"`,
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': `"${uaPlatform}"`,
             'Upgrade-Insecure-Requests': '1',
             'User-Agent': this.ua,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -85,8 +100,9 @@ export class CurlControl extends AsyncService {
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-User': '?1',
             'Sec-Fetch-Dest': 'document',
-            'Accept-Encoding': 'gzip, deflate, br, zstd',
+            // 'Accept-Encoding': 'gzip, deflate, br, zstd',
             'Accept-Language': 'en-US,en;q=0.9',
+            'Priority': 'u=0, i'
         };
         const headersCopy: Record<string, string | undefined> = { ...headers };
         for (const k of Object.keys(mixinHeaders)) {
@@ -108,15 +124,16 @@ export class CurlControl extends AsyncService {
         return curl;
     }
 
-    urlToFile1Shot(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
+    urlToStream(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
         return new Promise<{
             statusCode: number,
             statusText?: string,
-            data?: FancyFile,
+            data?: Readable,
             headers: HeaderInfo[],
         }>((resolve, reject) => {
+            const actx = this.asyncLocalContext.ctx;
             let contentType = '';
-            const curl = new Curl();
+            const curl = Curl.impersonate(this.impersonateCfg || Browser.Chrome);
             curl.enable(CurlFeature.StreamResponse);
             curl.setOpt('URL', urlToCrawl.toString());
             curl.setOpt(Curl.option.FOLLOWLOCATION, false);
@@ -129,6 +146,7 @@ export class CurlControl extends AsyncService {
                 curl.setOpt(Curl.option.CUSTOMREQUEST, crawlOpts.method.toUpperCase());
             }
             if (crawlOpts?.body) {
+                // @ts-ignore
                 curl.setOpt(Curl.option.POSTFIELDS, crawlOpts.body.toString());
             }
 
@@ -175,25 +193,35 @@ export class CurlControl extends AsyncService {
             if (crawlOpts?.proxyUrl) {
                 const proxyUrlCopy = new URL(crawlOpts.proxyUrl);
                 curl.setOpt(Curl.option.PROXY, proxyUrlCopy.href);
+                curl.setOpt(Curl.option.CONNECTTIMEOUT_MS, 6_000);
             }
 
             let curlStream: Readable | undefined;
+            let streamRecvCounter = 0;
             curl.on('error', (err, errCode) => {
-                curl.close();
-                this.logger.warn(`Curl ${urlToCrawl.origin}: ${err}`, { err, urlToCrawl });
-                const err2 = this.digestCurlCode(errCode, err.message) ||
-                    new AssertionFailureError(`Failed to access ${urlToCrawl.origin}: ${err.message}`);
-                err2.cause ??= err;
-                if (curlStream) {
-                    // For some reason, manually emitting error event is required for curlStream.
-                    curlStream.emit('error', err2);
-                    curlStream.destroy(err2);
-                }
-                reject(err2);
+                this.asyncLocalContext.bridge(actx, () => {
+                    curl.close();
+                    const err2 = this.digestCurlCode(errCode, err.message) ||
+                        new AssertionFailureError(`Failed to access ${urlToCrawl.origin}: ${err.message}`);
+                    err2.cause ??= err;
+                    if (curlStream) {
+                        // For some reason, manually emitting error event is required for curlStream.
+                        if (errCode === CurlCode.CURLE_HTTP2_STREAM && streamRecvCounter) {
+                            this.logger.warn(`Curl(${errCode}) ${urlToCrawl.origin}: ${err}, but some data was received, not emitting error to the stream.`, { err, urlToCrawl });
+                            curlStream.push(null);
+                            return;
+                        }
+                        curlStream.emit('error', err2);
+                        curlStream.destroy(err2);
+                    } else {
+                        this.logger.warn(`Curl(${errCode}) ${urlToCrawl.origin}: ${err}`, { err, urlToCrawl });
+                    }
+                    reject(err2);
+                });
             });
             curl.setOpt(Curl.option.MAXFILESIZE, 4 * 1024 * 1024 * 1024); // 4GB
             let status = -1;
-            let statusText: string|undefined;
+            let statusText: string | undefined;
             let contentEncoding = '';
             curl.once('end', () => {
                 if (curlStream) {
@@ -203,9 +231,7 @@ export class CurlControl extends AsyncService {
                 curl.close();
             });
             curl.on('stream', (stream, statusCode, headers) => {
-                this.logger.debug(`CURL: [${statusCode}] ${urlToCrawl.origin}`, { statusCode });
                 status = statusCode;
-                curlStream = stream;
                 for (const headerSet of (headers as HeaderInfo[])) {
                     for (const [k, v] of Object.entries(headerSet)) {
                         if (k.trim().endsWith(':')) {
@@ -237,78 +263,46 @@ export class CurlControl extends AsyncService {
                     }
                 }
 
-                if ([301, 302, 303, 307, 308].includes(statusCode)) {
-                    if (stream) {
-                        stream.resume();
+                curlStream = stream;
+                stream.on('data', (buf) => {
+                    if (buf.length > 0) {
+                        streamRecvCounter += buf.length;
                     }
-                    resolve({
-                        statusCode: status,
-                        statusText,
-                        data: undefined,
-                        headers: headers as HeaderInfo[],
+                });
+                const passThrough = new PassThrough();
+                stream.pipe(passThrough);
+                stream.once('error', (err) => {
+                    passThrough.destroy(err);
+                });
+                stream = passThrough;
+                stream.once('end', () => {
+                    this.asyncLocalContext.bridge(actx, () => {
+                        this.logger.debug(`CURL: [${statusCode}${statusText ? ` ${statusText}` : ''}] ${urlToCrawl.origin} ${humanReadableDataSize(streamRecvCounter)} ${contentType} ${contentEncoding}`, {
+                            statusCode, statusText, traffic: streamRecvCounter, contentType, contentEncoding
+                        });
+                    });
+                });
+
+                if (
+                    REDIRECTION_CODES.has(statusCode) &&
+                    headers.some((h) => h.hasOwnProperty('Location') || h.hasOwnProperty('location'))
+                ) {
+                    stream.resume();
+                    stream.once('end', () => {
+                        resolve({
+                            statusCode: status,
+                            statusText,
+                            data: undefined,
+                            headers: headers as HeaderInfo[],
+                        });
                     });
                     return;
                 }
 
-                if (!stream) {
-                    resolve({
-                        statusCode: status,
-                        statusText,
-                        data: undefined,
-                        headers: headers as HeaderInfo[],
-                    });
-                    return;
-                }
-
-                switch (contentEncoding) {
-                    case 'gzip': {
-                        const decompressed = createGunzip();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => {
-                            decompressed.destroy(err);
-                        });
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'deflate': {
-                        const decompressed = createInflate();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => {
-                            decompressed.destroy(err);
-                        });
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'br': {
-                        const decompressed = createBrotliDecompress();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => {
-                            decompressed.destroy(err);
-                        });
-                        stream = decompressed;
-                        break;
-                    }
-                    case 'zstd': {
-                        const decompressed = ZSTDDecompress();
-                        stream.pipe(decompressed);
-                        stream.once('error', (err) => {
-                            decompressed.destroy(err);
-                        });
-                        stream = decompressed;
-                        break;
-                    }
-                    default: {
-                        break;
-                    }
-                }
-
-                const fpath = this.tempFileManager.alloc();
-                const fancyFile = FancyFile.auto(stream, fpath);
-                this.tempFileManager.bindPathTo(fancyFile, fpath);
                 resolve({
                     statusCode: status,
                     statusText,
-                    data: fancyFile,
+                    data: stream,
                     headers: headers as HeaderInfo[],
                 });
             });
@@ -324,11 +318,27 @@ export class CurlControl extends AsyncService {
         let nextHopUrl = urlToCrawl;
         const fakeHeaderInfos: HeaderInfo[] = [];
         do {
-            const r = await this.urlToFile1Shot(nextHopUrl, opts);
+            const s = await this.urlToStream(nextHopUrl, opts);
+            const r = { ...s } as {
+                statusCode: number,
+                statusText?: string,
+                data?: FancyFile,
+                headers: HeaderInfo[],
+            };
 
-            if ([301, 302, 303, 307, 308].includes(r.statusCode)) {
+            const headers = r.headers[r.headers.length - 1];
+            const claimedSize = parseInt(headers['Content-Length'] || headers['content-length']);
+            if (crawlOpts?.maxSize && claimedSize > crawlOpts.maxSize) {
+                throw new TargetFileTooLargeError(`Target file is too large: ${humanReadableDataSize(claimedSize)} > ${humanReadableDataSize(crawlOpts.maxSize)}`);
+            }
+            if (r.data) {
+                const fpath = this.tempFileManager.alloc();
+                const fancyFile = FancyFile.auto(r.data, fpath);
+                this.tempFileManager.bindPathTo(fancyFile, fpath);
+                r.data = fancyFile;
+            }
+            if (REDIRECTION_CODES.has(r.statusCode)) {
                 fakeHeaderInfos.push(...r.headers);
-                const headers = r.headers[r.headers.length - 1];
                 const location: string | undefined = headers.Location || headers.location;
 
                 const setCookieHeader = headers['Set-Cookie'] || headers['set-cookie'];
@@ -344,6 +354,13 @@ export class CurlControl extends AsyncService {
                 }
 
                 if (!location && !setCookieHeader) {
+                    let sizeAcc = 0;
+                    s.data!.on('data', (chunk) => {
+                        sizeAcc += chunk.length;
+                        if (crawlOpts?.maxSize && sizeAcc > crawlOpts.maxSize) {
+                            s.data!.destroy(new TargetFileTooLargeError(`Max size exceeded: ${humanReadableDataSize(sizeAcc)}`));
+                        }
+                    });
                     // Follow curl behavior
                     return {
                         statusCode: r.statusCode,
@@ -360,6 +377,14 @@ export class CurlControl extends AsyncService {
                 continue;
             }
 
+            let sizeAcc = 0;
+            s.data!.on('data', (chunk) => {
+                sizeAcc += chunk.length;
+                if (crawlOpts?.maxSize && sizeAcc > crawlOpts.maxSize) {
+                    s.data!.destroy(new TargetFileTooLargeError(`Max size exceeded: ${humanReadableDataSize(sizeAcc)}`));
+                }
+            });
+
             return {
                 statusCode: r.statusCode,
                 statusText: r.statusText,
@@ -375,14 +400,20 @@ export class CurlControl extends AsyncService {
         const curlResult = await this.urlToFile(targetUrl, crawlOpts);
         this.blackHoleDetector.itWorked();
         let finalURL = targetUrl;
-        const sideLoadOpts: CURLScrappingOptions['sideLoad'] = {
+        const sideLoadOpts: CURLScrappingOptions<FancyFile>['sideLoad'] = {
             impersonate: {},
             proxyOrigin: {},
         };
         for (const headers of curlResult.headers) {
+            const potentialLastResult = sideLoadOpts.impersonate[finalURL.href];
             sideLoadOpts.impersonate[finalURL.href] = {
                 status: headers.result?.code || -1,
-                headers: _.omit(headers, 'result'),
+                headers: _.mergeWith(potentialLastResult?.headers || {}, _.omit(headers, 'result'), (objValue, srcValue) => {
+                    if (Array.isArray(objValue) && Array.isArray(srcValue)) {
+                        return [...objValue, ...srcValue];
+                    }
+                    return undefined;
+                }),
                 contentType: headers['Content-Type'] || headers['content-type'],
             };
             if (crawlOpts?.proxyUrl) {
@@ -421,6 +452,160 @@ export class CurlControl extends AsyncService {
         };
     }
 
+    async urlToBlob(urlToCrawl: URL, crawlOpts?: CURLScrappingOptions) {
+        let leftRedirection = 6;
+        let cookieRedirects = 0;
+        let opts = { ...crawlOpts };
+        let nextHopUrl = urlToCrawl;
+        const fakeHeaderInfos: HeaderInfo[] = [];
+        do {
+            const s = await this.urlToStream(nextHopUrl, opts);
+            const r = { ...s } as {
+                statusCode: number,
+                statusText?: string,
+                data?: Blob,
+                headers: HeaderInfo[],
+            };
+
+
+            const headers = r.headers[r.headers.length - 1];
+            const claimedSize = parseInt(headers['Content-Length'] || headers['content-length']);
+            if (crawlOpts?.maxSize && claimedSize > crawlOpts.maxSize) {
+                throw new TargetFileTooLargeError(`Target file is too large: ${humanReadableDataSize(claimedSize)} > ${humanReadableDataSize(crawlOpts.maxSize)}`);
+            }
+            if (REDIRECTION_CODES.has(r.statusCode)) {
+                fakeHeaderInfos.push(...r.headers);
+                const location: string | undefined = headers.Location || headers.location;
+
+                const setCookieHeader = headers['Set-Cookie'] || headers['set-cookie'];
+                if (setCookieHeader) {
+                    const cookieAssignments = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
+                    const parsed = cookieAssignments.filter(Boolean).map((x) => parseSetCookieString(x, { decodeValues: true }));
+                    if (parsed.length) {
+                        opts.cookies = [...(opts.cookies || []), ...parsed];
+                    }
+                    if (!location) {
+                        cookieRedirects += 1;
+                    }
+                }
+
+                if (!location && !setCookieHeader) {
+                    // Follow curl behavior
+                    if (s.data) {
+                        const chunks: Buffer[] = [];
+                        let sizeAcc = 0;
+                        s.data.on('data', (chunk) => {
+                            chunks.push(chunk);
+                            sizeAcc += chunk.length;
+                            if (crawlOpts?.maxSize && sizeAcc > crawlOpts.maxSize) {
+                                s.data!.destroy(new TargetFileTooLargeError(`Max size exceeded: ${humanReadableDataSize(sizeAcc)}`));
+                            }
+                        });
+                        await new Promise((resolve, reject) => {
+                            s.data!.once('end', resolve);
+                            s.data!.once('error', reject);
+                        });
+                        r.data = new Blob(chunks, { type: headers['Content-Type'] || headers['content-type'] });
+                    }
+                    return {
+                        statusCode: r.statusCode,
+                        data: r.data,
+                        headers: fakeHeaderInfos.concat(r.headers),
+                    };
+                }
+                if (!location && cookieRedirects > 1) {
+                    throw new ServiceBadApproachError(`Failed to access ${urlToCrawl}: Browser required to solve complex cookie preconditions.`);
+                }
+
+                nextHopUrl = new URL(location || '', nextHopUrl);
+                leftRedirection -= 1;
+                continue;
+            }
+
+            if (s.data) {
+                const chunks: Buffer[] = [];
+                let sizeAcc = 0;
+                s.data.on('data', (chunk) => {
+                    chunks.push(chunk);
+                    sizeAcc += chunk.length;
+                    if (crawlOpts?.maxSize && sizeAcc > crawlOpts.maxSize) {
+                        s.data!.destroy(new TargetFileTooLargeError(`Max size exceeded: ${humanReadableDataSize(sizeAcc)}`));
+                    }
+                });
+                await new Promise((resolve, reject) => {
+                    s.data!.once('end', resolve);
+                    s.data!.once('error', reject);
+                });
+                r.data = new Blob(chunks, { type: headers['Content-Type'] || headers['content-type'] });
+            }
+
+            return {
+                statusCode: r.statusCode,
+                statusText: r.statusText,
+                data: r.data,
+                headers: fakeHeaderInfos.concat(r.headers),
+            };
+        } while (leftRedirection > 0);
+
+        throw new ServiceBadAttemptError(`Failed to access ${urlToCrawl}: Too many redirections.`);
+    }
+
+    async sideLoadBlob(targetUrl: URL, crawlOpts?: CURLScrappingOptions) {
+        const curlResult = await this.urlToBlob(targetUrl, crawlOpts);
+        this.blackHoleDetector.itWorked();
+        let finalURL = targetUrl;
+        const sideLoadOpts: CURLScrappingOptions<Blob>['sideLoad'] = {
+            impersonate: {},
+            proxyOrigin: {},
+        };
+        for (const headers of curlResult.headers) {
+            const potentialLastResult = sideLoadOpts.impersonate[finalURL.href];
+            sideLoadOpts.impersonate[finalURL.href] = {
+                status: headers.result?.code || -1,
+                headers: _.mergeWith(potentialLastResult?.headers || {}, _.omit(headers, 'result'), (objValue, srcValue) => {
+                    if (Array.isArray(objValue) && Array.isArray(srcValue)) {
+                        return [...objValue, ...srcValue];
+                    }
+                    return undefined;
+                }),
+                contentType: headers['Content-Type'] || headers['content-type'],
+            };
+            if (crawlOpts?.proxyUrl) {
+                sideLoadOpts.proxyOrigin[finalURL.origin] = crawlOpts.proxyUrl;
+            }
+            if (headers.result?.code && [301, 302, 307, 308].includes(headers.result.code)) {
+                const location = headers.Location || headers.location;
+                if (location) {
+                    finalURL = new URL(location, finalURL);
+                }
+            }
+        }
+        const lastHeaders = curlResult.headers[curlResult.headers.length - 1];
+        const contentType = (lastHeaders['Content-Type'] || lastHeaders['content-type'])?.toLowerCase() || (curlResult.data?.type) || 'application/octet-stream';
+        const contentDisposition = lastHeaders['Content-Disposition'] || lastHeaders['content-disposition'];
+        const fileName = contentDisposition?.match(/filename="([^"]+)"/i)?.[1] || finalURL.pathname.split('/').pop();
+
+        if (sideLoadOpts.impersonate[finalURL.href] && (curlResult.data?.size)) {
+            sideLoadOpts.impersonate[finalURL.href].body = curlResult.data;
+        }
+
+        // This should keep the file from being garbage collected and deleted until this asyncContext/request is done.
+        this.lifeCycleTrack.set(this.asyncLocalContext.ctx, curlResult.data);
+
+        return {
+            finalURL,
+            sideLoadOpts,
+            chain: curlResult.headers,
+            status: curlResult.statusCode,
+            statusText: curlResult.statusText,
+            headers: lastHeaders,
+            contentType,
+            contentDisposition,
+            fileName,
+            file: curlResult.data
+        };
+    }
+
     digestCurlCode(code: CurlCode, msg: string) {
         switch (code) {
             // 400 User errors
@@ -436,6 +621,7 @@ export class CurlControl extends AsyncService {
             }
 
             // Retryable errors
+            case CurlCode.CURLE_PROXY:
             case CurlCode.CURLE_REMOTE_ACCESS_DENIED:
             case CurlCode.CURLE_SEND_ERROR:
             case CurlCode.CURLE_RECV_ERROR:

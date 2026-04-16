@@ -1,10 +1,10 @@
 import { container, singleton } from 'tsyringe';
 import { AsyncService } from 'civkit/async-service';
-import { SecretExposer } from '../shared/services/secrets';
 import { GlobalLogger } from './logger';
-import { CloudFlareHTTP } from '../shared/3rd-party/cloud-flare';
+import { CloudFlareHTTP } from '../3rd-party/cloud-flare';
 import { HTTPServiceError } from 'civkit/http';
 import { ServiceNodeResourceDrainError } from './errors';
+import { EnvConfig } from './envconfig';
 
 @singleton()
 export class CFBrowserRendering extends AsyncService {
@@ -14,7 +14,7 @@ export class CFBrowserRendering extends AsyncService {
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected secretExposer: SecretExposer,
+        protected envConfig: EnvConfig,
     ) {
         super(...arguments);
     }
@@ -22,7 +22,7 @@ export class CFBrowserRendering extends AsyncService {
 
     override async init() {
         await this.dependencyReady();
-        const [account, key] = this.secretExposer.CLOUD_FLARE_API_KEY?.split(':');
+        const [account, key] = this.envConfig.CLOUD_FLARE_API_KEY?.split(':');
         this.client = new CloudFlareHTTP(account, key);
 
         this.emit('ready');

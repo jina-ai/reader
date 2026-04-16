@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "esModuleInterop": true,
+    "strict": false,
+    "outDir": "../tests-build",
+    "rootDir": ".",
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "declaration": false
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}

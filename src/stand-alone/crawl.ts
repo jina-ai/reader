@@ -162,8 +162,10 @@ const instance = container.resolve(CrawlStandAloneServer);
 
 export default instance;
 
-if (process.env.NODE_ENV?.includes('dry-run')) {
-    instance.serviceReady().then(() => finalizer.terminate());
-} else {
-    instance.serviceReady().then((s) => s.h2c().listen(parseInt(process.env.PORT || '') || 3000));
+if (require.main === module) {
+    if (process.env.NODE_ENV?.includes('dry-run')) {
+        instance.serviceReady().then(() => finalizer.terminate());
+    } else {
+        instance.serviceReady().then((s) => s.h2c().listen(parseInt(process.env.PORT || '') || 3000));
+    }
 }
