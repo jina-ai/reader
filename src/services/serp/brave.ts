@@ -27,7 +27,9 @@ export class BraveSearchService extends AsyncService {
         await this.dependencyReady();
         this.emit('ready');
 
-        this.client = new BraveSearchHTTP(this.envConfig.BRAVE_SEARCH_API_KEY);
+        if (this.envConfig.BRAVE_SEARCH_API_KEY) {
+            this.client = new BraveSearchHTTP(this.envConfig.BRAVE_SEARCH_API_KEY);
+        }
     }
 
     async webSearch(query: { q: string; num?: number; gl?: string; hl?: string; page?: number; nfpr?: boolean; }) {
