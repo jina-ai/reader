@@ -5,6 +5,7 @@
         "noImplicitReturns": true,
         "noUnusedLocals": true,
         "outDir": "build",
+        "rootDir": "src",
         "sourceMap": true,
         "strict": true,
         "allowJs": true,

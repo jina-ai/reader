@@ -9,7 +9,8 @@
     "debug": "npm run build && npm run dev",
     "start": "node ./build/stand-alone/crawl.js",
     "dry-run": "NODE_ENV=dry-run node ./build/stand-alone/search.js",
-    "test:e2e": "tsc -p tests/tsconfig.json && node tests-build/run.js"
+    "test:e2e": "tsc -p tests/tsconfig.json && node tests-build/run.js",
+    "test:unit": "tsc -p tests/tsconfig.json && node tests-build/run-unit.js"
   },
   "engines": {
     "node": ">=22"
