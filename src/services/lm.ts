@@ -4,8 +4,8 @@ import { singleton } from 'tsyringe';
 import { PageSnapshot } from './puppeteer';
 import { GlobalLogger } from './logger';
 import _ from 'lodash';
-import { AssertionFailureError } from 'civkit';
-import { LLMManager } from '../shared/services/common-llm';
+import { AssertionFailureError } from 'civkit/civ-rpc';
+import { LLMManager } from './common-llm';
 import { JSDomControl } from './jsdom';
 
 const tripleBackTick = '```';
@@ -88,7 +88,7 @@ export class LmControl extends AsyncService {
                     repetition_penalty: 1.13,
                     presence_penalty: 0.25,
                     frequency_penalty: 0.25,
-                    max_tokens: 8192,
+                    max_tokens: 4096,
                 }
             },
             maxTry: 1,

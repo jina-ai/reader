@@ -6,8 +6,8 @@ import { HashManager } from 'civkit/hash';
 import { marshalErrorLike } from 'civkit/lang';
 
 import { GlobalLogger } from './logger';
-import { FirebaseStorageBucketControl } from '../shared/services/firebase-storage-bucket';
 import { Threaded } from '../services/threaded';
+import { StorageLayer } from '../db/noop-storage';
 
 
 export const md5Hasher = new HashManager('md5', 'hex');
@@ -19,7 +19,7 @@ export class RobotsTxtService extends AsyncService {
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected firebaseStorageBucketControl: FirebaseStorageBucketControl,
+        protected storageLayer: StorageLayer,
     ) {
         super(...arguments);
     }
@@ -33,7 +33,7 @@ export class RobotsTxtService extends AsyncService {
         const digest = md5Hasher.hash(origin.toLowerCase());
         const cacheLoc = `robots-txt/${digest}`;
         let buff;
-        buff = await this.firebaseStorageBucketControl.downloadFile(cacheLoc).catch(() => undefined);
+        buff = await this.storageLayer.readFile(cacheLoc).catch(() => undefined);
         if (buff) {
             return buff.toString();
         }
@@ -44,8 +44,8 @@ export class RobotsTxtService extends AsyncService {
         }
         buff = Buffer.from(await r.arrayBuffer());
 
-        this.firebaseStorageBucketControl.saveFile(cacheLoc, buff, {
-            contentType: 'text/plain'
+        this.storageLayer.storeFile(cacheLoc, buff, {
+            'Content-Type': 'text/plain'
         }).catch((err) => {
             this.logger.warn(`Failed to save robots.txt to cache: ${err}`, { err: marshalErrorLike(err) });
         });
@@ -59,7 +59,7 @@ export class RobotsTxtService extends AsyncService {
         try {
             robotTxt = await this.getCachedRobotTxt(url.origin);
         } catch (err) {
-            if (err instanceof DownstreamServiceFailureError) {
+            if (err instanceof DownstreamServiceFailureError || err instanceof TypeError) {
                 // Remote server is reachable but cannot provide a robot.txt; this is treated as public access
                 return true;
             }

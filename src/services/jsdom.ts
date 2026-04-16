@@ -1,14 +1,15 @@
+/// <reference lib="dom" />
 import { container, singleton } from 'tsyringe';
 import { GlobalLogger } from './logger';
 import { ExtendedSnapshot, ImgBrief, PageSnapshot } from './puppeteer';
 import { Readability } from '@mozilla/readability';
-import TurndownService from 'turndown';
 import { Threaded } from '../services/threaded';
 import type { ExtraScrappingOptions } from '../api/crawler';
 import { tailwindClasses } from '../utils/tailwind-classes';
-import { countGPTToken } from '../shared/utils/openai';
+import { countGPTToken } from '../utils/openai';
 import { AsyncService } from 'civkit/async-service';
 import { ApplicationError, AssertionFailureError } from 'civkit/civ-rpc';
+import { MarkifyService } from './markify';
 
 const pLinkedom = import('linkedom');
 
@@ -67,7 +68,11 @@ export class JSDomControl extends AsyncService {
         jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
         if (options?.withIframe) {
             jsdom.window.document.querySelectorAll('iframe[src],frame[src]').forEach((x) => {
-                const src = x.getAttribute('src');
+                const origSrc = x.getAttribute('src');
+                if (!origSrc) {
+                    return;
+                }
+                const src = new URL(origSrc, snapshot.rebase || snapshot.href).toString();
                 const thisSnapshot = snapshot.childFrames?.find((f) => f.href === src);
                 if (options?.withIframe === 'quoted') {
                     const blockquoteElem = jsdom.window.document.createElement('blockquote');
@@ -135,6 +140,7 @@ export class JSDomControl extends AsyncService {
         }
         const textNodes: HTMLElement[] = [];
         let rootDoc: Document;
+        let bewareHeadHtmlUnexpectedlyPreserved = false;
         if (allNodes.length === 1 && allNodes[0].nodeName === '#document' && (allNodes[0] as any).documentElement) {
             rootDoc = allNodes[0] as any;
             if (rootDoc.body?.innerText) {
@@ -142,6 +148,8 @@ export class JSDomControl extends AsyncService {
             }
         } else {
             rootDoc = this.linkedom.parseHTML('<html><body></body></html>').window.document;
+            rootDoc.head.innerHTML = jsdom.window.document.head?.innerHTML || '';
+            bewareHeadHtmlUnexpectedlyPreserved = true;
             for (const n of allNodes) {
                 rootDoc.body.appendChild(n);
                 rootDoc.body.appendChild(rootDoc.createTextNode('\n\n'));
@@ -150,6 +158,59 @@ export class JSDomControl extends AsyncService {
                 }
             }
         }
+        const metadata: Record<string, any> = {};
+        const lang = rootDoc.documentElement.getAttribute('lang');
+        if (lang) {
+            metadata.lang = lang;
+        }
+        rootDoc.head?.querySelectorAll('meta[content]').forEach((el) => {
+            const name = el.getAttribute('name') || el.getAttribute('property');
+            if (!name) {
+                return;
+            }
+            const val = el.getAttribute('content') || '';
+            const curVal = Reflect.get(metadata, name);
+            if (Array.isArray(curVal)) {
+                curVal.push(val);
+            } else if (curVal) {
+                Reflect.set(metadata, name, [curVal, val]);
+            } else {
+                Reflect.set(metadata, name, val);
+            }
+        });
+
+        const baseURI = snapshot.rebase || snapshot.href;
+        const external = {} as { [rel: string]: { [href: string]: { [k: string]: string; }; }; };
+        rootDoc.head?.querySelectorAll('link[rel][href]').forEach((el) => {
+            const attributes: Record<string, string> = {};
+            el.getAttributeNames().forEach((attrName) => {
+                attributes[attrName] = el.getAttribute(attrName) || '';
+            });
+            const rels = attributes['rel']?.split(/\s+/g).filter(Boolean) || [];
+            if (!rels?.length) {
+                return;
+            }
+            let href = attributes['href'] || '';
+            if (href) {
+                try {
+                    href = new URL(href, baseURI).href;
+                } catch (err) {
+                    // void 0;
+                }
+
+            }
+            delete attributes.rel;
+            delete attributes.href;
+
+            for (const rel of rels) {
+                external[rel] ??= {};
+                external[rel][href] ??= {};
+                Object.assign(external[rel][href], attributes);
+            }
+        });
+        delete external['stylesheet'];
+        delete external['shortcut'];
+
         const textChunks = textNodes.map((x) => {
             const clone = x.cloneNode(true) as HTMLElement;
             clone.querySelectorAll('script,style,link,svg').forEach((s) => s.remove());
@@ -157,11 +218,13 @@ export class JSDomControl extends AsyncService {
             return clone.innerText;
         });
 
-        let parsed;
-        try {
-            parsed = new Readability(rootDoc.cloneNode(true) as any).parse();
-        } catch (err: any) {
-            this.logger.warn(`Failed to parse selected element`, { err });
+        let parsed: any = snapshot.parsed;
+        if (options?.readabilityRequired && (!parsed || options?.targetSelector)) {
+            try {
+                parsed = new Readability(rootDoc.cloneNode(true) as any).parse();
+            } catch (err: any) {
+                this.logger.warn(`Failed to parse selected element`, { err });
+            }
         }
 
         const imgSet = new Set<string>();
@@ -200,12 +263,18 @@ export class JSDomControl extends AsyncService {
             ...snapshot,
             title: snapshot.title || jsdom.window.document.title,
             description: snapshot.description ||
-                (jsdom.window.document.head?.querySelector('meta[name="description"]')?.getAttribute('content') ?? ''),
+                (jsdom.window.document.head?.querySelector('meta[name$="description"][content],meta[property$="description"][content]')?.getAttribute('content') ?? ''),
             parsed,
             html: rootDoc.documentElement.outerHTML,
             text: textChunks.join('\n'),
             imgs: (snapshot.imgs || rebuiltImgs)?.filter((x) => imgSet.has(x.src)) || [],
+            metadata,
+            external,
         } as PageSnapshot;
+        if (bewareHeadHtmlUnexpectedlyPreserved) {
+            rootDoc.head!.innerHTML = '';
+            r.html = rootDoc.documentElement.outerHTML;
+        }
 
         const dt = Date.now() - t0;
         if (dt > 1000) {
@@ -219,11 +288,14 @@ export class JSDomControl extends AsyncService {
     async inferSnapshot(snapshot: PageSnapshot) {
         const t0 = Date.now();
         const extendedSnapshot = { ...snapshot } as ExtendedSnapshot;
+        let documentElement;
         try {
-            const jsdom = this.linkedom.parseHTML(snapshot.html);
+            documentElement = this.snippetToElement(snapshot.html, snapshot.href);
+            const dt = Date.now() - t0;
+            this.logger.debug(`Parsing of jsdom took ${dt}ms`, { url: snapshot.href, dt });
 
-            jsdom.window.document.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
-            const links = Array.from(jsdom.window.document.querySelectorAll('a[href]'))
+            documentElement.querySelectorAll('svg').forEach((x) => x.innerHTML = '');
+            const links = Array.from(documentElement.querySelectorAll('a[href]'))
                 .map((x: any) => [x.textContent.replace(/\s+/g, ' ').trim(), x.getAttribute('href'),])
                 .map(([text, href]) => {
                     if (!href) {
@@ -241,7 +313,7 @@ export class JSDomControl extends AsyncService {
 
             extendedSnapshot.links = links;
 
-            const imgs = Array.from(jsdom.window.document.querySelectorAll('img[src],img[data-src]'))
+            const imgs = Array.from(documentElement.querySelectorAll('img[src],img[data-src]'))
                 .map((x: any) => {
                     let linkPreferredSrc = x.getAttribute('src') || '';
                     if (linkPreferredSrc.startsWith('data:')) {
@@ -267,9 +339,11 @@ export class JSDomControl extends AsyncService {
         const dt = Date.now() - t0;
         if (dt > 1000) {
             this.logger.warn(`Performance issue: Inferring snapshot took ${dt}ms`, { url: snapshot.href, dt });
+        } else {
+            this.logger.debug(`Inferring snapshot took ${dt}ms`, { url: snapshot.href, dt });
         }
 
-        return extendedSnapshot;
+        return { documentElement, snapshot: extendedSnapshot } as const;
     }
 
     cleanRedundantEmptyLines(text: string) {
@@ -342,7 +416,10 @@ export class JSDomControl extends AsyncService {
     }
 
     snippetToElement(snippet?: string, url?: string) {
-        const parsed = this.linkedom.parseHTML(snippet || '<html><body></body></html>');
+        let parsed = this.linkedom.parseHTML(snippet || '<html><body></body></html>');
+        if (!parsed.window.document.documentElement) {
+            parsed = this.linkedom.parseHTML(`<html><body>${snippet || ''}</body></html>`);
+        }
 
         // Hack for turndown gfm table plugin.
         parsed.window.document.querySelectorAll('table').forEach((x) => {
@@ -352,18 +429,24 @@ export class JSDomControl extends AsyncService {
             value: function () { return this; },
         });
 
+        if (url?.startsWith('https://jina.ai/reader')) {
+            const signature = parsed.window.document.createElement('p');
+            signature.textContent = 'Welcome home!';
+            parsed.window.document.body.insertBefore(signature, parsed.window.document.body.firstChild);
+        }
+
         return parsed.window.document.documentElement;
     }
 
-    runTurndown(turndownService: TurndownService, html: TurndownService.Node | string) {
+    runMarkify(markifyService: MarkifyService, html: HTMLElement) {
         const t0 = Date.now();
 
         try {
-            return turndownService.turndown(html);
+            return markifyService.markify(html);
         } finally {
             const dt = Date.now() - t0;
             if (dt > 1000) {
-                this.logger.warn(`Performance issue: Turndown took ${dt}ms`, { dt });
+                this.logger.warn(`Performance issue: Markify took ${dt}ms`, { dt });
             }
         }
     }
@@ -381,6 +464,146 @@ export class JSDomControl extends AsyncService {
             title: jsdom.window.document.title,
             text,
             tokens: countGPTToken(text.replaceAll(/[\s\r\n\t]+/g, ' ')),
+        };
+    }
+
+    @Threaded()
+    async xmlTextToSnapshot(sourceXML: string, url: URL) {
+        const xmlDom = new this.linkedom.DOMParser().parseFromString(sourceXML, 'text/xml');
+
+        const rootTagName = xmlDom.documentElement.nodeName.toLowerCase();
+
+        if (rootTagName === 'rss') {
+            const channel: Element = xmlDom.querySelector('rss channel');
+            if (channel) {
+                const snapshot = {
+                    title: channel.querySelector('title')?.textContent || '',
+                    href: url.href,
+                    description: channel.querySelector('description')?.textContent || '',
+                    text: channel.textContent || '',
+                    html: sourceXML,
+                    traits: ['blob'],
+                    metadata: {
+                    } as any,
+                };
+
+                const links = [] as { title?: string; href: string; description?: string; date?: string; }[];
+
+                for (const elem of channel.children) {
+                    if (elem.tagName.toLowerCase() !== 'item') {
+                        snapshot.metadata[elem.tagName.toLowerCase()] = elem.textContent || '';
+                        continue;
+                    }
+
+                    links.push({
+                        title: elem.querySelector('title')?.textContent || undefined,
+                        href: elem.querySelector('link')?.textContent || '',
+                        description: elem.querySelector('description')?.textContent || undefined,
+                        date: elem.querySelector('pubDate')?.textContent || undefined,
+                    });
+                }
+
+                const altHtml = `<html><head><title>${snapshot.title}</title><meta name="description" content="${snapshot.description}"></head><body>${links.map((l) => `<div><h3><a href="${l.href}">${l.title || ''}</a></h3><p>${l.description || ''}</p><a href="${l.href || ''}">${l.href || ''}</a><br /><time>${l.date || ''}</time></div>`).join('\n')}</body></html>`;
+
+                snapshot.html = altHtml;
+
+                return snapshot;
+            }
+        } else if (rootTagName === 'feed') {
+            const feed = xmlDom.querySelector('feed');
+            if (feed) {
+                const snapshot = {
+                    title: xmlDom.querySelector('feed > title')?.textContent || '',
+                    href: url.href,
+                    description: xmlDom.querySelector('feed > subtitle')?.textContent || '',
+                    text: xmlDom.documentElement.textContent || '',
+                    html: sourceXML,
+                    traits: ['blob'],
+                    metadata: {
+                    } as any,
+                };
+
+                const links = [] as { title?: string; href: string; description?: string; date?: string; }[];
+
+                for (const elem of feed.children) {
+                    if (elem.tagName.toLowerCase() !== 'link') {
+                        snapshot.metadata[elem.tagName.toLowerCase()] = elem.textContent || '';
+                        continue;
+                    }
+
+                    links.push({
+                        title: elem.querySelector('title')?.textContent || undefined,
+                        href: elem.querySelector('link')?.getAttribute('href') || '',
+                        description: elem.querySelector('summary')?.textContent || undefined,
+                        date: elem.querySelector('updated')?.textContent || undefined,
+                    });
+                }
+
+                const altHtml = `<html><head><title>${snapshot.title}</title><meta name="description" content="${snapshot.description}"></head><body>${links.map((l) => `<div><h3><a href="${l.href}">${l.title || ''}</a></h3><p>${l.description || ''}</p><a href="${l.href || ''}">${l.href || ''}</a><br /><time>${l.date || ''}</time></div>`).join('\n')}</body></html>`;
+
+                snapshot.html = altHtml;
+
+                return snapshot;
+            }
+        } else if (rootTagName === 'sitemapindex') {
+            const snapshot = {
+                title: 'Sitemap Index',
+                href: url.href,
+                description: '',
+                text: xmlDom.documentElement.textContent || '',
+                html: sourceXML,
+                traits: ['blob'],
+                metadata: {
+                } as any,
+            };
+
+            const links = [] as { href: string; lastmod?: string; }[];
+
+            for (const sitemap of xmlDom.querySelectorAll('sitemapindex sitemap')) {
+                links.push({
+                    href: sitemap.querySelector('loc')?.textContent || '',
+                    lastmod: sitemap.querySelector('lastmod')?.textContent || undefined,
+                });
+            }
+
+            const altHtml = `<html><head><title>${snapshot.title}</title><meta name="description" content="${snapshot.description}"></head><body>${links.map((l) => `<div><a href="${l.href}">${l.href}</a><br /><time>${l.lastmod || ''}</time></div>`).join('\n')}</body></html>`;
+
+            snapshot.html = altHtml;
+
+            return snapshot;
+        } else if (rootTagName === 'urlset') {
+            const snapshot = {
+                title: 'Sitemap',
+                href: url.href,
+                description: '',
+                text: xmlDom.documentElement.textContent || '',
+                html: sourceXML,
+                traits: ['blob'],
+                metadata: {
+                } as any,
+            };
+
+            const links = [] as { href: string; lastmod?: string; }[];
+
+            for (const urlElem of xmlDom.querySelectorAll('urlset url')) {
+                links.push({
+                    href: urlElem.querySelector('loc')?.textContent || '',
+                    lastmod: urlElem.querySelector('lastmod')?.textContent || undefined,
+                });
+            }
+
+            const altHtml = `<html><head><title>${snapshot.title}</title><meta name="description" content="${snapshot.description}"></head><body>${links.map((l) => `<div><a href="${l.href}">${l.href}</a><br /><time>${l.lastmod || ''}</time></div>`).join('\n')}</body></html>`;
+
+            snapshot.html = altHtml;
+
+            return snapshot;
+        }
+
+        return {
+            title: xmlDom.documentElement.tagName,
+            description: '',
+            text: xmlDom.documentElement.textContent || sourceXML,
+            html: sourceXML,
         };
     }
 }

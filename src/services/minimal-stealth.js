@@ -570,6 +570,10 @@ export function minimalStealth() {
 
     utils.init();
 
+    if (!('WebGL2RenderingContext' in window)) {
+        return;
+    }
+
     const getParameterProxyHandler = {
         apply: function (target, ctx, args) {
             const param = (args || [])[0]

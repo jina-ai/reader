@@ -1,37 +1,52 @@
-import { AssertionFailureError, AsyncService, HashManager } from 'civkit';
+import { AsyncService } from 'civkit/async-service';
+import { HashManager } from 'civkit/hash';
+import { AssertionFailureError } from 'civkit/civ-rpc';
 import { singleton } from 'tsyringe';
 import { GlobalLogger } from './logger';
 import { CanvasService } from './canvas';
-import { ImageInterrogationManager } from '../shared/services/common-iminterrogate';
+import { ImageInterrogationManager } from './common-iminterrogate';
 import { ImgBrief } from './puppeteer';
-import { ImgAlt } from '../db/img-alt';
 import { AsyncLocalContext } from './async-context';
+import { ImgAlt } from '../db/models';
+import { StorageLayer } from '../db/noop-storage';
+import { LLMManager } from './common-llm';
 
 const md5Hasher = new HashManager('md5', 'hex');
 
 @singleton()
 export class AltTextService extends AsyncService {
 
-    altsToIgnore = 'image,img,photo,picture,pic,alt,figure,fig'.split(',');
+    altsToIgnore = 'image,img,photo,picture,pic,alt,figure,fig,图片'.split(',');
     logger = this.globalLogger.child({ service: this.constructor.name });
+
+    model = 'google/gemini-2.5-flash-lite';
 
     constructor(
         protected globalLogger: GlobalLogger,
         protected imageInterrogator: ImageInterrogationManager,
         protected canvasService: CanvasService,
-        protected asyncLocalContext: AsyncLocalContext
+        protected asyncLocalContext: AsyncLocalContext,
+        protected storageLayer: StorageLayer,
+        protected llmManager: LLMManager,
     ) {
         super(...arguments);
     }
 
     override async init() {
         await this.dependencyReady();
+
+        if (process.env.GCLOUD_PROJECT) {
+            this.model = 'vertex-gemini-2.5-flash-lite';
+        } else if (!this.llmManager.hasModel(this.model)) {
+            await this.llmManager.importOpenRouterModel(this.model);
+        }
+
         this.emit('ready');
     }
 
-    async caption(url: string) {
+    async caption(input: string | Buffer, overrideModel?: string) {
         try {
-            const img = await this.canvasService.loadImage(url);
+            const img = await this.canvasService.loadImage(input);
             const contentTypeHint = Reflect.get(img, 'contentType');
             if (Math.min(img.naturalHeight, img.naturalWidth) <= 1) {
                 return `A ${img.naturalWidth}x${img.naturalHeight} image, likely be a tacker probe`;
@@ -45,19 +60,60 @@ export class AltTextService extends AsyncService {
             const svgHint = contentTypeHint.includes('svg') ? `Beware this image is a SVG rendered on a gray background, the gray background is not part of the image.\n\n` : '';
             const svgSystemHint = contentTypeHint.includes('svg') ? ` Sometimes the system renders SVG on a gray background. When this happens, you must not include the gray background in the description.` : '';
 
-            const r = await this.imageInterrogator.interrogate('vertex-gemini-2.0-flash', {
+            const r = await this.imageInterrogator.interrogate(overrideModel || this.model, {
                 image: exported,
-                prompt: `${svgHint}Give a concise image caption descriptive sentence in third person. Start directly with the description.`,
-                system: `You are BLIP2, an image caption model. You will generate Alt Text (in web pages) for any image for a11y purposes. You must not start with "This image is sth...", instead, start direly with "sth..."${svgSystemHint}`,
+                prompt: `${svgHint}Give a concise image caption descriptive sentence in third person. Start directly with the subject.`,
+                system: `You are BLIP2, an image captioning model. You will generate Alt Text (in web pages) for any image for a11y purposes. You must not start with "This image is sth...", instead, start direly with "sth..."${svgSystemHint}`,
             });
 
             return r.replaceAll(/[\n\"]|(\.\s*$)/g, '').trim();
         } catch (err) {
-            throw new AssertionFailureError({ message: `Could not generate alt text for url ${url}`, cause: err });
+            throw new AssertionFailureError({
+                message: `Could not generate alt text for ${typeof input === 'string' ? `url ${input}` : 'buffer'}`,
+                cause: err
+            });
         }
     }
 
-    async getAltText(imgBrief: ImgBrief) {
+    async vqa(
+        input: string | Buffer,
+        instruction: string = 'Give a professional, accurate, concise description for this image.',
+        overrideModel?: string
+    ) {
+        try {
+            const img = await this.canvasService.loadImage(input);
+            const contentTypeHint = Reflect.get(img, 'contentType');
+            if (Math.min(img.naturalHeight, img.naturalWidth) <= 1) {
+                return `A ${img.naturalWidth}x${img.naturalHeight} image, likely be a tacker probe`;
+            }
+            if (Math.min(img.naturalHeight, img.naturalWidth) < 64) {
+                return `A ${img.naturalWidth}x${img.naturalHeight} small image, likely a logo, icon or avatar`;
+            }
+            const resized = this.canvasService.fitImageToSquareBox(img, 1024);
+            const exported = await this.canvasService.canvasToBuffer(resized, 'image/png');
+
+            const svgHint = contentTypeHint.includes('svg') ? `Beware this image is a SVG rendered on a gray background, the gray background is not part of the image.\n\n` : '';
+
+            const r = await this.imageInterrogator.interrogate(overrideModel || this.model, {
+                image: exported,
+                prompt: `${svgHint}${instruction}`,
+                max_tokens: 768,
+                temperature: 0,
+                modelSpecific: {
+                    stop: ['.', '\n']
+                }
+            });
+
+            return r.replaceAll(/[\n\"]|(\.\s*$)/g, '').trim();
+        } catch (err) {
+            throw new AssertionFailureError({
+                message: `Could not generate alt text for ${typeof input === 'string' ? `url ${input}` : 'buffer'}`,
+                cause: err
+            });
+        }
+    }
+
+    async getAltText(imgBrief: ImgBrief, overrideModel?: string) {
         if (!imgBrief.src) {
             return undefined;
         }
@@ -65,7 +121,6 @@ export class AltTextService extends AsyncService {
             return imgBrief.alt;
         }
         const digest = md5Hasher.hash(imgBrief.src);
-        const shortDigest = Buffer.from(digest, 'hex').toString('base64url');
         let dims: number[] = [];
         do {
             if (imgBrief.loaded) {
@@ -93,7 +148,7 @@ export class AltTextService extends AsyncService {
             return `A ${dims[0]}x${dims[1]} small image, likely a logo, icon or avatar`;
         }
 
-        const existing = await ImgAlt.fromFirestore(shortDigest);
+        const existing = await this.storageLayer.findImageAlt({ urlDigest: digest });
 
         if (existing) {
             return existing.generatedAlt || existing.originalAlt || '';
@@ -102,7 +157,7 @@ export class AltTextService extends AsyncService {
         let generatedCaption = '';
 
         try {
-            generatedCaption = await this.caption(imgBrief.src);
+            generatedCaption = await this.caption(imgBrief.buff || imgBrief.src, overrideModel);
         } catch (err) {
             this.logger.warn(`Unable to generate alt text for ${imgBrief.src}`, { err });
         }
@@ -115,19 +170,20 @@ export class AltTextService extends AsyncService {
         // Don't try again until the next day
         const expireMixin = generatedCaption ? {} : { expireAt: new Date(Date.now() + 1000 * 3600 * 24) };
 
-        await ImgAlt.COLLECTION.doc(shortDigest).set(
-            {
-                _id: shortDigest,
-                src: imgBrief.src || '',
-                width: imgBrief.naturalWidth || 0,
-                height: imgBrief.naturalHeight || 0,
-                urlDigest: digest,
-                originalAlt: imgBrief.alt || '',
-                generatedAlt: generatedCaption || '',
-                createdAt: new Date(),
-                ...expireMixin
-            }, { merge: true }
-        );
+        const cache = ImgAlt.from({
+            _id: digest,
+            src: imgBrief.src || '',
+            width: imgBrief.naturalWidth || 0,
+            height: imgBrief.naturalHeight || 0,
+            urlDigest: digest,
+            originalAlt: imgBrief.alt || '',
+            generatedAlt: generatedCaption || '',
+            createdAt: new Date(),
+            ...expireMixin
+        });
+        await this.storageLayer.storeImageAlt(cache).catch((err) => {
+            this.logger.warn(`Unable to cache alt text for ${imgBrief.src}`, { err });
+        });
 
         return generatedCaption;
     }

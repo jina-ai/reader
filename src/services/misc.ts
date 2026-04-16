@@ -1,12 +1,14 @@
 import { singleton } from 'tsyringe';
 import { AsyncService } from 'civkit/async-service';
 import { ParamValidationError } from 'civkit/civ-rpc';
-import { SecurityCompromiseError } from '../shared/lib/errors';
 import { isIP } from 'node:net';
 import { isIPInNonPublicRange } from '../utils/ip';
 import { GlobalLogger } from './logger';
 import { lookup } from 'node:dns/promises';
 import { Threaded } from './threaded';
+import { SecurityCompromiseError } from './errors';
+import { GeoIPService } from './geoip';
+import _ from 'lodash';
 
 const normalizeUrl = require('@esm2cjs/normalize-url').default;
 
@@ -17,6 +19,7 @@ export class MiscService extends AsyncService {
 
     constructor(
         protected globalLogger: GlobalLogger,
+        protected geoIpService: GeoIPService,
     ) {
         super(...arguments);
     }
@@ -98,9 +101,22 @@ export class MiscService extends AsyncService {
             }
         }
 
+        let hintCountry: string | undefined;
+        if (ips.length) {
+            const hints = await this.geoIpService.lookupCities(ips);
+            const board: Record<string, number> = {};
+            for (const x of hints) {
+                if (x.country?.code) {
+                    board[x.country.code] = (board[x.country.code] || 0) + 1;
+                }
+            }
+            hintCountry = _.maxBy(Array.from(Object.entries(board)), 1)?.[0];
+        }
+
         return {
             url: result,
-            ips
+            ips,
+            hintCountry,
         };
     }
 

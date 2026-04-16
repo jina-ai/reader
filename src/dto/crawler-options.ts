@@ -4,6 +4,8 @@ import { Cookie, parseString as parseSetCookieString } from 'set-cookie-parser';
 import { Context } from '../services/registry';
 import { TurnDownTweakableOptions } from './turndown-tweakable-options';
 import type { PageSnapshot } from '../services/puppeteer';
+import { PseudoBoolean } from '../lib/pseudo-boolean';
+import _ from 'lodash';
 
 export enum CONTENT_FORMAT {
     CONTENT = 'content',
@@ -32,20 +34,38 @@ export enum RESPOND_TIMING {
     NETWORK_IDLE = 'network-idle',
 }
 
+export enum CHUNKING_STRATEGY {
+    ENABLED = 'true',
+    ENABLED1 = 'h1',
+    ENABLED2 = 'h2',
+    ENABLED3 = 'h3',
+    ENABLED4 = 'h4',
+    ENABLED5 = 'h5',
+    STRUCTURED = 'structured',
+    STRUCTURED1 = 's1',
+    STRUCTURED2 = 's2',
+    STRUCTURED3 = 's3',
+    STRUCTURED4 = 's4',
+    STRUCTURED5 = 's5',
+}
+
+
 const CONTENT_FORMAT_VALUES = new Set<string>(Object.values(CONTENT_FORMAT));
 
 export const IMAGE_RETENTION_MODES = ['none', 'all', 'alt', 'all_p', 'alt_p'] as const;
 const IMAGE_RETENTION_MODE_VALUES = new Set<string>(IMAGE_RETENTION_MODES);
+export const LINK_RETENTION_MODES = ['none', 'all', 'text', 'gpt-oss'] as const;
+const LINK_RETENTION_MODE_VALUES = new Set<string>(LINK_RETENTION_MODES);
 export const BASE_URL_MODES = ['initial', 'final'] as const;
 const BASE_URL_MODE_VALUES = new Set<string>(BASE_URL_MODES);
 
 class Viewport extends AutoCastable {
     @Prop({
-        default: 1024
+        default: 1280
     })
     width!: number;
     @Prop({
-        default: 1024
+        default: 1280
     })
     height!: number;
     @Prop()
@@ -175,6 +195,16 @@ class Viewport extends AutoCastable {
                     in: 'header',
                     schema: { type: 'string' }
                 },
+                'X-Retain-Links': {
+                    description: `Link retention modes.\n\n` +
+                        `Supported modes: \n` +
+                        `- all: all links\n` +
+                        `- none: no links\n` +
+                        `- text: only link text\n` +
+                        `- gpt-oss: gpt-oss link citation format \`【{id}†.*】\`\n\n`,
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
                 'X-Retain-Images': {
                     description: `Image retention modes.\n\n` +
                         `Supported modes: \n` +
@@ -217,7 +247,12 @@ class Viewport extends AutoCastable {
                     schema: { type: 'string' }
                 },
                 'X-Token-Budget': {
-                    description: 'Specify a budget in tokens.\n\nIf the resulting token cost exceeds the budget, the request is rejected.',
+                    description: 'Specify a budget in tokens.\n\nIf the resulting token cost exceeds the budget, the request is rejected.\n\nNote this parameter is ignored for the search endpoint.',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Max-Tokens': {
+                    description: 'Trim the response content at a maximum number of tokens.',
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -239,6 +274,16 @@ class Viewport extends AutoCastable {
                 },
                 'X-Base': {
                     description: 'Select base modes of relative URLs.\n\nSupported: initial, final',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Remove-Overlay': {
+                    description: 'Specify whether to remove overlay elements from the page.',
+                    in: 'header',
+                    schema: { type: 'string' }
+                },
+                'X-Markdown-Chunking': {
+                    description: `Opt-in markdown chunking.\n\nSupported values: \n${Object.values(CHUNKING_STRATEGY).map(x => `- ${x}`).join('\n')}\n\nNote if you are expecting text return, the chunking is done by injecting character \\u001D\n\n`,
                     in: 'header',
                     schema: { type: 'string' }
                 },
@@ -282,7 +327,6 @@ class Viewport extends AutoCastable {
     }
 })
 export class CrawlerOptions extends AutoCastable {
-
     @Prop()
     url?: string;
 
@@ -302,6 +346,12 @@ export class CrawlerOptions extends AutoCastable {
     pdf?: FancyFile | string;
 
     @Prop({
+        desc: 'Base64 encoded file.',
+        type: [FancyFile, String]
+    })
+    file?: FancyFile | string;
+
+    @Prop({
         default: CONTENT_FORMAT.CONTENT,
         type: [CONTENT_FORMAT, String]
     })
@@ -314,6 +364,9 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop({ default: 'all', type: IMAGE_RETENTION_MODE_VALUES })
     retainImages?: typeof IMAGE_RETENTION_MODES[number];
+
+    @Prop({ default: 'all', type: LINK_RETENTION_MODE_VALUES })
+    retainLinks?: typeof LINK_RETENTION_MODES[number];
 
     @Prop({
         default: false,
@@ -329,6 +382,11 @@ export class CrawlerOptions extends AutoCastable {
         default: false,
     })
     noCache!: boolean;
+
+    @Prop({
+        default: false,
+    })
+    removeOverlay!: boolean;
 
     @Prop({
         default: false,
@@ -354,7 +412,7 @@ export class CrawlerOptions extends AutoCastable {
 
     @Prop({
         default: false,
-        type: [String, Boolean]
+        type: [PseudoBoolean, String],
     })
     withIframe!: boolean | 'quoted';
 
@@ -429,7 +487,23 @@ export class CrawlerOptions extends AutoCastable {
     })
     respondTiming?: RESPOND_TIMING;
 
+    @Prop({
+        type: [CHUNKING_STRATEGY, String],
+    })
+    markdownChunking?: string;
+
+    @Prop({
+        validate: (v: number) => v >= 500,
+    })
+    maxTokens?: number;
+
+    @Prop({
+        dictOf: String,
+    })
+    customHeader?: { [k: string]: string; };
+
     _hintIps?: string[];
+    _hintCountry?: string;
 
     static override from(input: any) {
         const instance = super.from(input) as CrawlerOptions;
@@ -484,6 +558,13 @@ export class CrawlerOptions extends AutoCastable {
         if (instance.withGeneratedAlt) {
             instance.retainImages = 'all_p';
         }
+        const retainLinks = ctx?.get('x-retain-links');
+        if (retainLinks && LINK_RETENTION_MODE_VALUES.has(retainLinks)) {
+            instance.retainLinks = retainLinks as any;
+        }
+        if (instance.retainLinks === 'gpt-oss') {
+            instance.withLinksSummary = 'gpt-oss';
+        }
         const noCache = ctx?.get('x-no-cache');
         if (noCache) {
             instance.noCache = Boolean(noCache);
@@ -516,6 +597,11 @@ export class CrawlerOptions extends AutoCastable {
         instance.waitForSelector ??= (waitForSelector?.length ? waitForSelector : undefined) || instance.targetSelector;
         const overrideUserAgent = ctx?.get('x-user-agent') || undefined;
         instance.userAgent ??= overrideUserAgent;
+
+        const removeOverlay = ctx?.get('x-remove-overlay')?.toLowerCase();
+        if (removeOverlay) {
+            instance.removeOverlay = ['no', 'none', 'false']?.includes(removeOverlay) ? false : true;
+        }
 
         const engine = ctx?.get('x-engine');
         if (engine) {
@@ -552,7 +638,7 @@ export class CrawlerOptions extends AutoCastable {
         }
 
         const cookies: Cookie[] = [];
-        const setCookieHeaders = (ctx?.get('x-set-cookie')?.split(', ') || (instance.setCookies as any as string[])).filter(Boolean);
+        const setCookieHeaders = (ctx?.get('x-set-cookie')?.split(', ') || instance.setCookies as any as string[] || []).filter(Boolean);
         if (Array.isArray(setCookieHeaders)) {
             for (const setCookie of setCookieHeaders) {
                 cookies.push({
@@ -576,6 +662,12 @@ export class CrawlerOptions extends AutoCastable {
         const tokenBudget = ctx?.get('x-token-budget');
         instance.tokenBudget ??= parseInt(tokenBudget || '') || undefined;
 
+        const maxTokens = ctx?.get('x-max-tokens');
+        instance.maxTokens ??= parseInt(maxTokens || '') || undefined;
+
+        const markdownChunking = ctx?.get('x-markdown-chunking');
+        instance.markdownChunking ??= markdownChunking || undefined;
+
         const baseMode = ctx?.get('x-base');
         if (baseMode) {
             instance.base = baseMode as any;
@@ -594,10 +686,13 @@ export class CrawlerOptions extends AutoCastable {
         }
 
         if (ctx) {
-            instance.markdown ??= TurnDownTweakableOptions.fromCtx(ctx);
+            const mdOptions = TurnDownTweakableOptions.fromCtx(ctx);
+            if (!_.isEmpty(mdOptions)) {
+                instance.markdown ??= mdOptions;
+            }
         }
 
-        return instance;
+        return super.from(instance) as CrawlerOptions;
     }
 
     get presumedRespondTiming() {
@@ -605,6 +700,9 @@ export class CrawlerOptions extends AutoCastable {
             return this.respondTiming;
         }
         if (this.timeout && this.timeout >= 20) {
+            return RESPOND_TIMING.NETWORK_IDLE;
+        }
+        if (this.withIframe) {
             return RESPOND_TIMING.NETWORK_IDLE;
         }
         if (this.respondWith.includes('shot') || this.respondWith.includes('vlm')) {
@@ -678,6 +776,12 @@ export class CrawlerOptions extends AutoCastable {
         if (this.viewport) {
             return false;
         }
+        if (this.instruction) {
+            return false;
+        }
+        if (this.removeOverlay) {
+            return false;
+        }
 
         return true;
     }
@@ -713,6 +817,31 @@ export class CrawlerOptions extends AutoCastable {
         }
 
         return true;
+    }
+
+    readabilityRequired() {
+        if (this.presumedRespondTiming === RESPOND_TIMING.VISIBLE_CONTENT) {
+            return true;
+        }
+        if (!this.respondWith || this.respondWith.includes('content')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    toJSON() {
+        return _.omit(this, 'pdf', 'html', 'file');
+    }
+
+    customizedProps() {
+        const defaults = (this.constructor as typeof CrawlerOptions).from({}) as this;
+        return _.omitBy(this, (value, key) => {
+            if (['pdf', 'file', 'html'].includes(key)) {
+                return true;
+            }
+            return _.isEqual(value, Reflect.get(defaults, key));
+        });
     }
 }
 

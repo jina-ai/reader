@@ -3,37 +3,32 @@ import {
     RPCHost, RPCReflection, assignMeta, RawString,
     ParamValidationError,
     assignTransferProtocolMeta,
+    AssertionFailureError,
 } from 'civkit/civ-rpc';
 import { marshalErrorLike } from 'civkit/lang';
 import _ from 'lodash';
-
-import { RateLimitControl, RateLimitDesc, RateLimitTriggeredError } from '../shared/services/rate-limit';
 
 import { GlobalLogger } from '../services/logger';
 import { AsyncLocalContext } from '../services/async-context';
 import { Context, Ctx, Method, Param, RPCReflect } from '../services/registry';
 import { OutputServerEventStream } from '../lib/transform-server-event-stream';
-import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
-import { InsufficientBalanceError } from '../services/errors';
-import { WORLD_COUNTRIES, WORLD_LANGUAGES } from '../shared/3rd-party/serper-search';
-import { GoogleSERP } from '../services/serp/google';
+// import { JinaEmbeddingsAuthDTO } from '../dto/jina-embeddings-auth';
+import { WORLD_COUNTRIES, WORLD_LANGUAGES } from '../3rd-party/serper-search';
+import { GoogleSERP, GoogleSERPOldFashion } from '../services/serp/google';
 import { WebSearchEntry } from '../services/serp/compat';
 import { CrawlerOptions } from '../dto/crawler-options';
 import { ScrappingOptions } from '../services/serp/puppeteer';
 import { objHashMd5B64Of } from 'civkit/hash';
-import { SERPResult } from '../db/searched';
 import { SerperBingSearchService, SerperGoogleSearchService } from '../services/serp/serper';
-import type { JinaEmbeddingsTokenAccount } from '../shared/db/jina-embeddings-token-account';
-import { LRUCache } from 'lru-cache';
-import { API_CALL_STATUS } from '../shared/db/api-roll';
-import { InternalJinaSerpService } from '../services/serp/internal';
+import { CommonGoogleSERP } from '../services/serp/common-serp';
+import { BingSERP } from '../services/serp/bing';
+import { bcp47ToIso639_3 } from '../utils/languages';
+import { StorageLayer } from '../db/noop-storage';
+import { BaseAuthDTO } from '../dto/base-auth';
+import { SERPResult } from '../db/models';
+import { EnvConfig } from '../services/envconfig';
 
 const WORLD_COUNTRY_CODES = Object.keys(WORLD_COUNTRIES).map((x) => x.toLowerCase());
-
-type RateLimitCache = {
-    blockedUntil?: Date;
-    user?: JinaEmbeddingsTokenAccount;
-};
 
 const indexProto = {
     toString: function (): string {
@@ -57,16 +52,7 @@ export class SerpHost extends RPCHost {
 
     targetResultCount = 5;
 
-    highFreqKeyCache = new LRUCache<string, RateLimitCache>({
-        max: 256,
-        ttl: 60 * 60 * 1000,
-        updateAgeOnGet: false,
-        updateAgeOnHas: false,
-    });
-
-    batchedCaches: SERPResult[] = [];
-
-    async getIndex(ctx: Context, auth?: JinaEmbeddingsAuthDTO) {
+    async getIndex(ctx: Context, auth?: BaseAuthDTO) {
         const indexObject: Record<string, string | number | undefined> = Object.create(indexProto);
         Object.assign(indexObject, {
             usage1: 'https://r.jina.ai/YOUR_URL',
@@ -76,9 +62,11 @@ export class SerpHost extends RPCHost {
         });
 
         if (auth && auth.user) {
-            indexObject[''] = undefined;
-            indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
-            indexObject.balanceLeft = auth.user.wallet.total_balance;
+            // if (auth instanceof JinaEmbeddingsAuthDTO) {
+            //     indexObject[''] = undefined;
+            //     indexObject.authenticatedAs = `${auth.user.user_id} (${auth.user.full_name})`;
+            //     indexObject.balanceLeft = auth.user.wallet.total_balance;
+            // }
         } else {
             indexObject.note = 'Authentication is required to use this endpoint. Please provide a valid API key via Authorization header.';
         }
@@ -88,34 +76,17 @@ export class SerpHost extends RPCHost {
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected rateLimitControl: RateLimitControl,
         protected threadLocal: AsyncLocalContext,
+        protected envConfig: EnvConfig,
         protected googleSerp: GoogleSERP,
+        protected googleSerpOld: GoogleSERPOldFashion,
         protected serperGoogle: SerperGoogleSearchService,
         protected serperBing: SerperBingSearchService,
-        protected jinaSerp: InternalJinaSerpService,
+        protected commonGoogleSerp: CommonGoogleSERP,
+        protected bingSERP: BingSERP,
+        protected storageLayer: StorageLayer,
     ) {
         super(...arguments);
-
-        setInterval(() => {
-            const thisBatch = this.batchedCaches;
-            this.batchedCaches = [];
-            if (!thisBatch.length) {
-                return;
-            }
-            const batch = SERPResult.DB.batch();
-
-            for (const x of thisBatch) {
-                batch.set(SERPResult.COLLECTION.doc(), x.degradeForFireStore());
-            }
-            batch.commit()
-                .then(() => {
-                    this.logger.debug(`Saved ${thisBatch.length} caches by batch`);
-                })
-                .catch((err) => {
-                    this.logger.warn(`Failed to cache search result in batch`, { err });
-                });
-        }, 1000 * 10 + Math.round(1000 * Math.random())).unref();
     }
 
     override async init() {
@@ -148,29 +119,22 @@ export class SerpHost extends RPCHost {
         @RPCReflect() rpcReflect: RPCReflection,
         @Ctx() ctx: Context,
         crawlerOptions: CrawlerOptions,
-        auth: JinaEmbeddingsAuthDTO,
+        auth: BaseAuthDTO,
         @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
         variant: 'web' | 'images' | 'news',
         @Param('q') q?: string,
         @Param('provider', { type: new Set(['google', 'bing']) })
+        @Param('engine', { type: new Set(['google', 'bing']) })
         searchEngine?: 'google' | 'bing',
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
-        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) _hl?: string,
+        @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
         @Param('page') page?: number,
         @Param('fallback') fallback?: boolean,
+        @Param('nfpr') nfpr?: boolean,
     ) {
-        const authToken = auth.bearerToken;
-        let highFreqKey: RateLimitCache | undefined;
-        if (authToken && this.highFreqKeyCache.has(authToken)) {
-            highFreqKey = this.highFreqKeyCache.get(authToken)!;
-            auth.user = highFreqKey.user;
-            auth.uid = highFreqKey.user?.user_id;
-        }
-
-        const uid = await auth.solveUID();
         if (!q) {
             if (ctx.path === '/') {
                 const indexObject = await this.getIndex(ctx, auth);
@@ -187,119 +151,16 @@ export class SerpHost extends RPCHost {
                 message: `Required but not provided`
             });
         }
-        // Return content by default
-        const user = await auth.assertUser();
-        if (!(user.wallet.total_balance > 0)) {
-            throw new InsufficientBalanceError(`Account balance not enough to run this query, please recharge.`);
-        }
-
-        if (highFreqKey?.blockedUntil) {
-            const now = new Date();
-            const blockedTimeRemaining = (highFreqKey.blockedUntil.valueOf() - now.valueOf());
-            if (blockedTimeRemaining > 0) {
-                this.logger.warn(`Rate limit triggered for ${uid}, this request should have been blocked`);
-                // throw RateLimitTriggeredError.from({
-                //     message: `Per UID rate limit exceeded (async)`,
-                //     retryAfter: Math.ceil(blockedTimeRemaining / 1000),
-                // });
-            }
-        }
-
-        const PREMIUM_KEY_LIMIT = 400;
-        const rateLimitPolicy = auth.getRateLimits('SEARCH') || [
-            parseInt(user.metadata?.speed_level) >= 2 ?
-                RateLimitDesc.from({
-                    occurrence: PREMIUM_KEY_LIMIT,
-                    periodSeconds: 60
-                }) :
-                RateLimitDesc.from({
-                    occurrence: 40,
-                    periodSeconds: 60
-                })
-        ];
-
-        const apiRollPromise = this.rateLimitControl.simpleRPCUidBasedLimit(
-            rpcReflect, uid!, ['SEARCH'],
-            ...rateLimitPolicy
-        );
-
-        if (!highFreqKey) {
-            // Normal path
-            await apiRollPromise;
-
-            if (rateLimitPolicy.some(
-                (x) => {
-                    const rpm = x.occurrence / (x.periodSeconds / 60);
-                    if (rpm >= PREMIUM_KEY_LIMIT) {
-                        return true;
-                    }
-
-                    return false;
-                })
-            ) {
-                this.highFreqKeyCache.set(auth.bearerToken!, {
-                    user,
-                });
-            }
-        } else {
-            // High freq key path
-            apiRollPromise.then(
-                // Rate limit not triggered, make sure not blocking.
-                () => {
-                    delete highFreqKey.blockedUntil;
-                },
-                // Rate limit triggered
-                (err) => {
-                    if (!(err instanceof RateLimitTriggeredError)) {
-                        return;
-                    }
-                    const now = Date.now();
-                    let tgtDate;
-                    if (err.retryAfterDate) {
-                        tgtDate = err.retryAfterDate;
-                    } else if (err.retryAfter) {
-                        tgtDate = new Date(now + err.retryAfter * 1000);
-                    }
-
-                    if (tgtDate) {
-                        const dt = tgtDate.valueOf() - now;
-                        highFreqKey.blockedUntil = tgtDate;
-                        setTimeout(() => {
-                            if (highFreqKey.blockedUntil === tgtDate) {
-                                delete highFreqKey.blockedUntil;
-                            }
-                        }, dt).unref();
-                    }
-                }
-            ).finally(async () => {
-                // Always asynchronously update user(wallet);
-                const user = await auth.getBrief().catch(() => undefined);
-                if (user) {
-                    highFreqKey.user = user;
-                }
-            });
-        }
 
         let chargeAmount = 0;
-        rpcReflect.finally(async () => {
-            if (chargeAmount) {
-                auth.reportUsage(chargeAmount, `reader-search`).catch((err) => {
-                    this.logger.warn(`Unable to report usage for ${uid}`, { err: marshalErrorLike(err) });
-                });
-                try {
-                    const apiRoll = await apiRollPromise;
-                    apiRoll.chargeAmount = chargeAmount;
-                } catch (err) {
-                    await this.rateLimitControl.record({
-                        uid,
-                        tags: [rpcReflect.name.toUpperCase()],
-                        status: API_CALL_STATUS.SUCCESS,
-                        chargeAmount,
-                    }).save().catch((err) => {
-                        this.logger.warn(`Failed to save rate limit record`, { err: marshalErrorLike(err) });
-                    });
-                }
-            }
+        const {
+            reportOptions,
+            reportUsage
+        } = await this.storageLayer.rateLimit(ctx, rpcReflect, auth as any);
+
+        rpcReflect.finally(() => {
+            reportOptions?.(crawlerOptions.customizedProps());
+            reportUsage?.(chargeAmount, 'reader-search');
         });
 
         let chargeAmountScaler = 1;
@@ -318,9 +179,10 @@ export class SerpHost extends RPCHost {
             q,
             num,
             gl,
-            // hl,
+            hl,
             location,
             page,
+            nfpr,
         }, crawlerOptions);
 
 
@@ -451,27 +313,31 @@ export class SerpHost extends RPCHost {
         return result;
     }
 
-    *iterProviders(preference?: string, variant?: string) {
+    *iterProviders(preference?: string) {
         if (preference === 'bing') {
-            yield this.serperBing;
-            yield this.serperGoogle;
-            yield this.googleSerp;
-
+            if (this.envConfig.SERPER_SEARCH_API_KEY) {
+                yield this.serperBing;
+            }
+            yield this.bingSERP;
             return;
         }
 
         if (preference === 'google') {
             yield this.googleSerp;
-            yield this.googleSerp;
-            yield this.serperGoogle;
+            if (this.envConfig.SERPER_SEARCH_API_KEY) {
+                yield this.serperGoogle;
+            }
+            yield this.commonGoogleSerp;
 
             return;
         }
 
-        // yield variant === 'web' ? this.jinaSerp : this.serperGoogle;
-        yield this.serperGoogle
-        yield this.serperGoogle;
+        if (this.envConfig.SERPER_SEARCH_API_KEY) {
+            yield this.serperGoogle;
+        }
         yield this.googleSerp;
+        yield this.bingSERP;
+        yield this.commonGoogleSerp;
     }
 
     async cachedSearch(variant: 'web' | 'news' | 'images', query: Record<string, any>, opts: CrawlerOptions) {
@@ -481,11 +347,7 @@ export class SerpHost extends RPCHost {
         const noCache = opts.noCache;
         let cache;
         if (!noCache) {
-            cache = (await SERPResult.fromFirestoreQuery(
-                SERPResult.COLLECTION.where('queryDigest', '==', queryDigest)
-                    .orderBy('createdAt', 'desc')
-                    .limit(1)
-            ))[0];
+            cache = await this.storageLayer.findSERPResult({ queryDigest });
             if (cache) {
                 const age = Date.now() - cache.createdAt.valueOf();
                 const stale = cache.createdAt.valueOf() < (Date.now() - this.cacheValidMs);
@@ -504,24 +366,29 @@ export class SerpHost extends RPCHost {
             let r: any[] | undefined;
             let lastError;
             outerLoop:
-            for (const client of this.iterProviders(provider, variant)) {
+            for (const client of this.iterProviders(provider)) {
                 const t0 = Date.now();
-                try {
-                    switch (variant) {
-                        case 'images': {
-                            r = await Reflect.apply(client.imageSearch, client, [query, scrappingOptions]);
-                            break;
-                        }
-                        case 'news': {
-                            r = await Reflect.apply(client.newsSearch, client, [query, scrappingOptions]);
-                            break;
-                        }
-                        case 'web':
-                        default: {
-                            r = await Reflect.apply(client.webSearch, client, [query, scrappingOptions]);
-                            break;
-                        }
+                let func;
+                switch (variant) {
+                    case 'images': {
+                        func = Reflect.get(client, 'imageSearch');
+                        break;
                     }
+                    case 'news': {
+                        func = Reflect.get(client, 'newsSearch');
+                        break;
+                    }
+                    case 'web':
+                    default: {
+                        func = Reflect.get(client, 'webSearch');
+                        break;
+                    }
+                }
+                if (!func) {
+                    continue;
+                }
+                try {
+                    r = await Reflect.apply(func, client, [query, scrappingOptions]);
                     const dt = Date.now() - t0;
                     this.logger.info(`Search took ${dt}ms, ${client.constructor.name}(${variant})`, { searchDt: dt, variant, client: client.constructor.name });
                     break outerLoop;
@@ -541,9 +408,24 @@ export class SerpHost extends RPCHost {
                     createdAt: nowDate,
                     expireAt: new Date(nowDate.valueOf() + this.cacheRetentionMs)
                 });
-                this.batchedCaches.push(record);
+                Reflect.deleteProperty(record, '_id');
+                this.storageLayer.storeSERPResult(record).catch((err) => {
+                    this.logger.warn(`Failed to save search result`, { err: marshalErrorLike(err) });
+                });
+                if (variant === 'web') {
+                    r.map((x) => {
+                        this.storageLayer.indexWebSearchEntry(x, {
+                            geolocation: query.gl?.toLowerCase(),
+                            language: bcp47ToIso639_3(query.hl),
+                        }).catch((err) => {
+                            this.logger.warn(`Failed to index SERP result`, { err });
+                        });
+                    });
+                }
             } else if (lastError) {
                 throw lastError;
+            } else if (!r) {
+                throw new AssertionFailureError(`No provider can do ${variant} search atm.`);
             }
 
             return r;

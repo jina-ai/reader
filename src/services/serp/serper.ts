@@ -1,13 +1,13 @@
 
 import { singleton } from 'tsyringe';
 import { GlobalLogger } from '../logger';
-import { SecretExposer } from '../../shared/services/secrets';
 import { AsyncLocalContext } from '../async-context';
-import { SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse } from '../../shared/3rd-party/serper-search';
+import { SerperBingHTTP, SerperGoogleHTTP, SerperImageSearchResponse, SerperNewsSearchResponse, SerperSearchQueryParams, SerperWebSearchResponse } from '../../3rd-party/serper-search';
 import { BlackHoleDetector } from '../blackhole-detector';
 import { Context } from '../registry';
 import { AsyncService } from 'civkit/async-service';
 import { AutoCastable, Prop, RPC_CALL_ENVIRONMENT } from 'civkit/civ-rpc';
+import { EnvConfig } from '../envconfig';
 
 @singleton()
 export class SerperGoogleSearchService extends AsyncService {
@@ -18,7 +18,7 @@ export class SerperGoogleSearchService extends AsyncService {
 
     constructor(
         protected globalLogger: GlobalLogger,
-        protected secretExposer: SecretExposer,
+        protected envConfig: EnvConfig,
         protected threadLocal: AsyncLocalContext,
         protected blackHoleDetector: BlackHoleDetector,
     ) {
@@ -29,7 +29,7 @@ export class SerperGoogleSearchService extends AsyncService {
         await this.dependencyReady();
         this.emit('ready');
 
-        this.client = new SerperGoogleHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.client = new SerperGoogleHTTP(this.envConfig.SERPER_SEARCH_API_KEY);
     }
 
 
@@ -87,7 +87,7 @@ export class SerperBingSearchService extends SerperGoogleSearchService {
         await this.dependencyReady();
         this.emit('ready');
 
-        this.client = new SerperBingHTTP(this.secretExposer.SERPER_SEARCH_API_KEY);
+        this.client = new SerperBingHTTP(this.envConfig.SERPER_SEARCH_API_KEY);
     }
 }
 

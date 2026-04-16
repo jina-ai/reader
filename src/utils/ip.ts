@@ -149,6 +149,7 @@ const nonPublicNetworks6 = [
     'ff00::/8',
 
     '::127.0.0.0/104',
+    '::1/128',
     '::/128',
 ];
 
@@ -164,4 +165,65 @@ export function isIPInNonPublicRange(ip: string) {
     }
 
     return false;
+}
+
+
+export function ipBufferToString(ipBuff: Buffer) {
+    if (ipBuff.byteLength === 4) {
+        // IPv4
+        return Array.from(ipBuff).join('.');
+    }
+
+    if (ipBuff.byteLength !== 16) {
+        throw new Error('Invalid buffer length');
+    }
+
+    // IPv6
+    const parts = [];
+    for (let i = 0; i < ipBuff.byteLength; i += 2) {
+        const chunk = ipBuff.readUInt16BE(i);
+        if (chunk === 0) {
+            parts.push('');
+            continue;
+        }
+        parts.push(chunk.toString(16));
+    }
+
+    const l2Parts = [];
+
+    let consecutiveZeros = 0;
+    let maxConsecutiveZeros = 0;
+    for (const part of parts) {
+        if (!part) {
+            consecutiveZeros++;
+            if (consecutiveZeros > maxConsecutiveZeros) {
+                maxConsecutiveZeros = consecutiveZeros;
+            }
+            continue;
+        }
+        if (consecutiveZeros) {
+            l2Parts.push(consecutiveZeros);
+            consecutiveZeros = 0;
+        }
+        l2Parts.push(part);
+    }
+    if (consecutiveZeros) {
+        l2Parts.push(consecutiveZeros);
+    }
+
+    const draft = l2Parts.map((x)=> {
+        if (x === maxConsecutiveZeros) {
+            return '';
+        }
+        if (typeof x === 'number') {
+            return '0';
+        }
+        return x;
+    }).join(':');
+
+    if (l2Parts[l2Parts.length - 1] === maxConsecutiveZeros) {
+        return `${draft}:`;
+    }
+
+    return draft;
 }

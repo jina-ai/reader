@@ -1,5 +1,7 @@
 import { singleton, container } from 'tsyringe';
-import { AsyncService, mimeOf, ParamValidationError, SubmittedDataMalformedError, /* downloadFile */ } from 'civkit';
+import { ParamValidationError, SubmittedDataMalformedError, /* downloadFile */ } from 'civkit/civ-rpc';
+import { AsyncService } from 'civkit/async-service';
+import { mimeOf } from 'civkit/mime';
 import { readFile } from 'fs/promises';
 
 import type canvas from '@napi-rs/canvas';
@@ -153,6 +155,38 @@ export class CanvasService extends AsyncService {
 
         const resizedWidth = Math.round(aspectRatio > 1 ? size : size * aspectRatio);
         const resizedHeight = Math.round(aspectRatio > 1 ? size / aspectRatio : size);
+
+        const canvasInstance = this.canvas.createCanvas(resizedWidth, resizedHeight);
+        const ctx = canvasInstance.getContext('2d');
+        ctx.drawImage(image, 0, 0, image.width, image.height, 0, 0, resizedWidth, resizedHeight);
+        // this.logger.debug(`Resized to ${ resizedWidth }x${ resizedHeight } in ${ Date.now() - t0 } ms`);
+
+        return canvasInstance;
+    }
+
+    fitImageToBox(image: canvas.Image | canvas.Canvas, maxWidth: number, maxHeight: number) {
+        // this.logger.debug(`Fitting image(${ image.width }x${ image.height }) to ${ maxWidth }x${ maxHeight } box`);
+        // const t0 = Date.now();
+        if (image.width <= maxWidth && image.height <= maxHeight) {
+            if (image instanceof this.canvas.Canvas) {
+                return image;
+            }
+            const canvasInstance = this.canvas.createCanvas(image.width, image.height);
+            const ctx = canvasInstance.getContext('2d');
+            ctx.drawImage(image, 0, 0, image.width, image.height, 0, 0, canvasInstance.width, canvasInstance.height);
+            // this.logger.debug(`No need to resize, copied to canvas in ${ Date.now() - t0 } ms`);
+
+            return canvasInstance;
+        }
+        const aspectRatio = image.width / image.height;
+
+        let resizedWidth = maxWidth;
+        let resizedHeight = Math.round(maxWidth / aspectRatio);
+
+        if (resizedHeight > maxHeight) {
+            resizedHeight = maxHeight;
+            resizedWidth = Math.round(maxHeight * aspectRatio);
+        }
 
         const canvasInstance = this.canvas.createCanvas(resizedWidth, resizedHeight);
         const ctx = canvasInstance.getContext('2d');

@@ -4,12 +4,6 @@ import { isMainThread } from 'worker_threads';
 import { GlobalLogger } from './logger';
 
 const realProcessExit = process.exit;
-process.exit = ((code?: number) => {
-    if (isMainThread) {
-        return;
-    }
-    return realProcessExit(code);
-}) as typeof process.exit;
 
 @singleton()
 export class FinalizerService extends AbstractFinalizerService {
@@ -33,6 +27,14 @@ export class FinalizerService extends AbstractFinalizerService {
 const instance = container.resolve(FinalizerService);
 export const { Finalizer } = instance.decorators();
 export default instance;
+
+process.exit = ((code?: number) => {
+    if (isMainThread) {
+        instance.terminate(code);
+        return;
+    }
+    return realProcessExit(code);
+}) as typeof process.exit;
 
 if (isMainThread) {
     instance.serviceReady();
