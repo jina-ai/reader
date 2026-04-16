@@ -98,18 +98,15 @@ describe('isScalarLike – primitive values', () => {
 
 describe('isScalarLike – boxed/wrapper objects', () => {
     it('returns true for a String object', () => {
-        // eslint-disable-next-line no-new-wrappers
-        assert.strictEqual(isScalarLike(new String('hi')), true);
+        assert.strictEqual(isScalarLike(new String('hi')), true); // eslint-disable-line no-new-wrappers
     });
 
     it('returns true for a Number object', () => {
-        // eslint-disable-next-line no-new-wrappers
-        assert.strictEqual(isScalarLike(new Number(1)), true);
+        assert.strictEqual(isScalarLike(new Number(1)), true); // eslint-disable-line no-new-wrappers
     });
 
     it('returns true for a Boolean object', () => {
-        // eslint-disable-next-line no-new-wrappers
-        assert.strictEqual(isScalarLike(new Boolean(false)), true);
+        assert.strictEqual(isScalarLike(new Boolean(false)), true); // eslint-disable-line no-new-wrappers
     });
 });
 

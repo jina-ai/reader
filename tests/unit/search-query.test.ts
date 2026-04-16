@@ -29,7 +29,7 @@ describe('parseSearchQuery – plain query passthrough', () => {
 
     it('trims leading/trailing whitespace', () => {
         const { query } = parseSearchQuery(makeParams('  hello  '));
-        assert.strictEqual(query.trim(), 'hello');
+        assert.strictEqual(query, 'hello');
     });
 });
 
@@ -46,7 +46,7 @@ describe('parseSearchQuery – site: operator', () => {
         assert.ok(Array.isArray(queryMixins.filter));
         const tldFilter = queryMixins.filter!.find((f: any) => f?.in?.path === 'tld');
         assert.ok(tldFilter, 'expected a tld filter entry for a bare domain');
-        assert.ok(tldFilter.in.value.includes('example.com'));
+        assert.deepStrictEqual(tldFilter.in.value, ['example.com']);
     });
 
     it('subdomain (e.g. www.example.com) is classified under domain path', () => {
@@ -54,7 +54,7 @@ describe('parseSearchQuery – site: operator', () => {
         assert.ok(Array.isArray(queryMixins.filter));
         const domainFilter = queryMixins.filter!.find((f: any) => f?.in?.path === 'domain');
         assert.ok(domainFilter, 'expected a domain filter entry for a subdomain');
-        assert.ok(domainFilter.in.value.includes('www.example.com'));
+        assert.deepStrictEqual(domainFilter.in.value, ['www.example.com']);
     });
 
     it('handles multiple site: operators in the same query', () => {
@@ -63,8 +63,7 @@ describe('parseSearchQuery – site: operator', () => {
         // Both foo.com and bar.com are bare domains → tld path
         const tldFilter = queryMixins.filter!.find((f: any) => f?.in?.path === 'tld');
         assert.ok(tldFilter, 'expected a tld filter');
-        assert.ok(tldFilter.in.value.includes('foo.com'));
-        assert.ok(tldFilter.in.value.includes('bar.com'));
+        assert.deepStrictEqual(tldFilter.in.value, ['foo.com', 'bar.com']);
     });
 
     it('uses tld path when the site value is a bare TLD', () => {
@@ -90,8 +89,7 @@ describe('parseSearchQuery – -site: operator', () => {
     it('handles multiple -site: operators', () => {
         const { queryMixins } = parseSearchQuery(makeParams('hello -site:a.com -site:b.com'));
         const values = queryMixins.mustNot!.map((f: any) => f?.equals?.value);
-        assert.ok(values.includes('a.com'));
-        assert.ok(values.includes('b.com'));
+        assert.deepStrictEqual(values.sort(), ['a.com', 'b.com']);
     });
 });
 
@@ -105,7 +103,7 @@ describe('parseSearchQuery – mixed operators', () => {
         assert.ok(query.includes('learning'));
         assert.ok(!query.includes('site:'));
         const domainFilter = queryMixins.filter!.find((f: any) => f?.in?.path === 'domain');
-        assert.ok(domainFilter?.in?.value?.includes('www.arxiv.org'));
+        assert.deepStrictEqual(domainFilter?.in?.value, ['www.arxiv.org']);
         const excluded = queryMixins.mustNot!.find((f: any) => f?.equals?.value === 'spam.com');
         assert.ok(excluded);
     });
