@@ -1,0 +1,20 @@
+# Jina Reader API
+
+> The Jina Reader API extracts clean, LLM-friendly text from any URL.
+
+## Base Endpoint
+`https://r.jina.ai/`
+
+## Usage
+Simply prefix the target URL with the base endpoint.
+
+### Basic Request
+GET https://r.jina.ai/<TARGET_URL>
+
+### Example
+Input: https://r.jina.ai/https://github.com/jina-ai/reader
+Output: Clean Markdown text of the target page.
+
+## Advanced Features
+- JSON Mode: Add header `Accept: application/json`
+- Search Mode: Use `https://s.jina.ai/<QUERY>`
