@@ -29,6 +29,7 @@ import { Readable } from 'stream';
 import { once } from 'events';
 import { Defer } from 'civkit/defer';
 import { BingSERP } from '../services/serp/bing';
+import { BraveSearchService } from '../services/serp/brave';
 import { bcp47ToIso639_3 } from '../utils/languages';
 import { parseSearchQuery } from '../utils/search-query';
 import { JSDomControl } from '../services/jsdom';
@@ -70,6 +71,7 @@ export class SearcherHost extends RPCHost {
         protected googleSERP: GoogleSERP,
         protected googleSERPOld: GoogleSERPOldFashion,
         protected bingSERP: BingSERP,
+        protected braveSearch: BraveSearchService,
         protected storageLayer: StorageLayer,
     ) {
         super(...arguments);
@@ -113,9 +115,9 @@ export class SearcherHost extends RPCHost {
         @Param('count', { validate: (v: number) => v >= 0 && v <= 20 })
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         count: number = 10,
-        @Param('provider', { type: new Set(['google', 'bing', 'reader']) })
-        @Param('engine', { type: new Set(['google', 'bing', 'reader']) })
-        searchEngine?: 'google' | 'bing' | 'reader',
+        @Param('provider', { type: new Set(['google', 'bing', 'brave', 'reader']) })
+        @Param('engine', { type: new Set(['google', 'bing', 'brave', 'reader']) })
+        searchEngine?: 'google' | 'bing' | 'brave' | 'reader',
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
         @Param('hl', { validate: (v: string) => WORLD_LANGUAGES.some(l => l.code === v) }) hl?: string,
         @Param('location') location?: string,
@@ -659,10 +661,20 @@ export class SearcherHost extends RPCHost {
             return;
         }
 
+        if (preference === 'brave') {
+            if (this.envConfig.BRAVE_SEARCH_API_KEY) {
+                yield this.braveSearch;
+            }
+            return;
+        }
+
         if (this.envConfig.SERPER_SEARCH_API_KEY) {
             yield this.serperGoogle;
         }
         yield this.googleSERP;
+        if (this.envConfig.BRAVE_SEARCH_API_KEY) {
+            yield this.braveSearch;
+        }
         yield this.bingSERP;
         yield this.commonGoogleSerp;
     }

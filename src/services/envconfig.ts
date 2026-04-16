@@ -22,6 +22,7 @@ const CONF_ENV = [
     'BRIGHTDATA_SERP_API_KEY',
 
     'SERPER_SEARCH_API_KEY',
+    'BRAVE_SEARCH_API_KEY',
     'CLOUD_FLARE_API_KEY',
 
 ] as const;

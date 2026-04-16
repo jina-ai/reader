@@ -22,6 +22,7 @@ import { objHashMd5B64Of } from 'civkit/hash';
 import { SerperBingSearchService, SerperGoogleSearchService } from '../services/serp/serper';
 import { CommonGoogleSERP } from '../services/serp/common-serp';
 import { BingSERP } from '../services/serp/bing';
+import { BraveSearchService } from '../services/serp/brave';
 import { bcp47ToIso639_3 } from '../utils/languages';
 import { StorageLayer } from '../db/noop-storage';
 import { BaseAuthDTO } from '../dto/base-auth';
@@ -84,6 +85,7 @@ export class SerpHost extends RPCHost {
         protected serperBing: SerperBingSearchService,
         protected commonGoogleSerp: CommonGoogleSERP,
         protected bingSERP: BingSERP,
+        protected braveSearch: BraveSearchService,
         protected storageLayer: StorageLayer,
     ) {
         super(...arguments);
@@ -123,9 +125,9 @@ export class SerpHost extends RPCHost {
         @Param('type', { type: new Set(['web', 'images', 'news']), default: 'web' })
         variant: 'web' | 'images' | 'news',
         @Param('q') q?: string,
-        @Param('provider', { type: new Set(['google', 'bing']) })
-        @Param('engine', { type: new Set(['google', 'bing']) })
-        searchEngine?: 'google' | 'bing',
+        @Param('provider', { type: new Set(['google', 'bing', 'brave']) })
+        @Param('engine', { type: new Set(['google', 'bing', 'brave']) })
+        searchEngine?: 'google' | 'bing' | 'brave',
         @Param('num', { validate: (v: number) => v >= 0 && v <= 20 })
         num?: number,
         @Param('gl', { validate: (v: string) => WORLD_COUNTRY_CODES.includes(v?.toLowerCase()) }) gl?: string,
@@ -332,10 +334,20 @@ export class SerpHost extends RPCHost {
             return;
         }
 
+        if (preference === 'brave') {
+            if (this.envConfig.BRAVE_SEARCH_API_KEY) {
+                yield this.braveSearch;
+            }
+            return;
+        }
+
         if (this.envConfig.SERPER_SEARCH_API_KEY) {
             yield this.serperGoogle;
         }
         yield this.googleSerp;
+        if (this.envConfig.BRAVE_SEARCH_API_KEY) {
+            yield this.braveSearch;
+        }
         yield this.bingSERP;
         yield this.commonGoogleSerp;
     }
