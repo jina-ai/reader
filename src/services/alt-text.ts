@@ -19,7 +19,7 @@ export class AltTextService extends AsyncService {
     altsToIgnore = 'image,img,photo,picture,pic,alt,figure,fig,图片'.split(',');
     logger = this.globalLogger.child({ service: this.constructor.name });
 
-    model = 'google/gemini-2.5-flash-lite';
+    model = 'google/gemini-3.1-flash-lite-preview';
 
     constructor(
         protected globalLogger: GlobalLogger,
@@ -36,7 +36,7 @@ export class AltTextService extends AsyncService {
         await this.dependencyReady();
 
         if (process.env.GCLOUD_PROJECT) {
-            this.model = 'vertex-gemini-2.5-flash-lite';
+            this.model = 'vertex-gemini-3.1-flash-lite';
         } else if (!this.llmManager.hasModel(this.model)) {
             await this.llmManager.importOpenRouterModel(this.model);
         }

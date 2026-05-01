@@ -40,7 +40,7 @@ export class LmControl extends AsyncService {
 
         const html = await this.jsdomControl.cleanHTMLforLMs(snapshot.html, 'script,link,style,textarea,select>option,svg');
 
-        const it = this.commonLLM.iterRun('vertex-gemini-1.5-flash-002', {
+        const it = this.commonLLM.iterRun('vertex-gemini-3.1-flash-lite', {
             prompt: [
                 `HTML: \n${html}\n\nSCREENSHOT: \n`,
                 typeof pageshot === 'string' ? new URL(pageshot) : pageshot,

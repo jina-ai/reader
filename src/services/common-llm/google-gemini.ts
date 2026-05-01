@@ -959,6 +959,26 @@ export class Gemini25Flash extends GeminiPro {
     static override windowSize = 1_000_000;
 }
 
+@injectable()
+export class Gemini31FlashLite extends GeminiPro {
+    static override description = 'Google Gemini 3.1 Flash Lite Preview';
+    static override aliases = ['gemini-3.1-flash-lite', 'gemini-3.1-flash-lite-preview'];
+    static override modelName = 'gemini-3.1-flash-lite-preview';
+    static override interleavedPromptSupported = true;
+    static override jsonModeSchemaSupported = true;
+    static override windowSize = 1_000_000;
+}
+
+@injectable()
+export class Gemini31Pro extends GeminiPro {
+    static override description = 'Google Gemini 3.1 Pro Preview';
+    static override aliases = ['gemini-3.1-pro', 'gemini-3.1-pro-preview'];
+    static override modelName = 'gemini-3.1-pro-preview';
+    static override interleavedPromptSupported = true;
+    static override jsonModeSchemaSupported = true;
+    static override windowSize = 1_000_000;
+}
+
 
 class TrimmedSchema extends AutoCastable {
 
