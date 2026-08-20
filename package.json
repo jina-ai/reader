@@ -21,7 +21,7 @@
   "engines": {
     "node": ">=22.15"
   },
-  "main": "build/index.js",
+  "main": "./build/stand-alone/crawl.js",
   "types": "./build/stand-alone/crawl.d.ts",
   "exports": {
     ".": "./build/stand-alone/crawl.js",
