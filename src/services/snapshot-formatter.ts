@@ -16,6 +16,7 @@ import type { CrawlerOptions } from '../dto/crawler-options';
 import { countGPTToken, tokenTrim } from '../utils/openai';
 import { MarkifyService, type MarkifyRule } from './markify';
 import { StorageLayer } from '../db/noop-storage';
+import { mirrorNotice } from './mirror-fallback';
 import { readFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import pseudoTransfer from './pseudo-transfer';
@@ -1012,6 +1013,13 @@ export class SnapshotFormatter extends AsyncService {
                 const msg = `Target URL returned error ${code}${text ? `: ${text}` : ''}`;
                 mixin.warning = `${mixin.warning}${mixin.warning ? '\n' : ''}${msg}`;
             }
+        }
+        // Mirror provenance: a snapshot served from a mirror must never
+        // be presented as if fetched from the original URL.
+        const mirrorWarning = mirrorNotice(snapshot);
+        if (mirrorWarning) {
+            mixin.warning ??= '';
+            mixin.warning = `${mixin.warning}${mixin.warning ? '\n' : ''}${mirrorWarning}`;
         }
 
         return { ...inferred, mixin };

@@ -112,6 +112,7 @@ You can control the behavior of the Reader API using request headers. The list b
 
   When omitted, Reader picks one based on `x-respond-with`, `x-timeout`, and `x-with-iframe`. See `presumedRespondTiming` in [src/dto/crawler-options.ts](./src/dto/crawler-options.ts) for the exact rules.
 - `x-with-generated-alt: true` — caption images on the page with a VLM.
+- `x-mirror-fallback: true` — opt-in mirror fallback. When the target blocks the reader (403/block page), retry the request through a public, read-only mirror of the same content (currently: Reddit thread URLs via a Redlib instance) and annotate the response so mirrored content is never silently presented as the original. Off by default; also enable server-wide with `MIRROR_FALLBACK=true`. See [Having trouble on some websites?](#having-trouble-on-some-websites) for the trust caveats.
 - `x-retain-images` — control how images survive into the output:
   - `all` (default) — keep `![alt](url)` markdown for every image.
   - `none` — drop images entirely.
@@ -280,6 +281,7 @@ Some sites push back against scrapers — bot challenges, geo blocks, stale CDN 
 - **Force the browser engine** with `-H 'x-engine: browser'`. The default `auto` engine prefers the lightweight curl path when it can; some sites only serve real content to a JS-capable browser.
 - **Route through the SaaS proxy** with `-H 'x-proxy: auto'` (key required). Reader's hosted proxy pool rotates residential / datacenter IPs and handles common anti-bot challenges automatically. You can also pin a country, e.g. `x-proxy: us` (see [Geo- and locale-sensitive scraping](./cookbooks.md#geo--and-locale-sensitive-scraping)).
 - **Bring your own proxy** with `-H 'x-proxy-url: <url>'`. As a last resort — when even the hosted proxy can't get through — buy a residential or ISP-grade proxy from a third-party provider (BrightData, Thordata, Oxylabs, etc.) and pass the URL directly. Supports `http`, `https`, `socks4`, `socks5`; for auth use `https://user:pass@host:port`.
+- **Opt-in mirror fallback** with `-H 'x-mirror-fallback: true'` (or `MIRROR_FALLBACK=true` server-wide). When a target blocks the reader outright, the request is retried through a public, read-only mirror of the same content — currently Reddit thread URLs via a Redlib instance — and the response is annotated with a warning naming the mirror. Two caveats: a mirror is run by a third party who can see the requested URLs, and public mirrors are disposable (they can go down or add bot gates at any time; gated/blocked/near-empty mirror results are skipped, not served). Never use it for pages that require a login: no credentials are ever sent to a mirror.
 
 If none of those help, please open an issue with the URL and the headers you tried — we'll take a look.
 

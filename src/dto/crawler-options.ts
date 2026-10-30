@@ -464,6 +464,12 @@ export class CrawlerOptions extends Coercible {
     })
     withGeneratedAlt?: boolean;
 
+    @Prop({
+        type: PseudoBoolean,
+        desc: 'Opt-in mirror fallback: when the target blocks the reader (403/block page), retry through a public read-only mirror and annotate the result. Off by default.',
+    })
+    mirrorFallback?: boolean;
+
     @Prop({ default: 'all', type: IMAGE_RETENTION_MODE_VALUES })
     retainImages?: typeof IMAGE_RETENTION_MODES[number];
 
@@ -669,6 +675,11 @@ export class CrawlerOptions extends Coercible {
         const withGeneratedAlt = ctx?.get('x-with-generated-alt');
         if (withGeneratedAlt) {
             instance.withGeneratedAlt = Boolean(withGeneratedAlt);
+        }
+        const mirrorFallback = ctx?.get('x-mirror-fallback');
+        if (mirrorFallback !== undefined && mirrorFallback !== null && mirrorFallback !== '') {
+            // PseudoBoolean.from (unlike Boolean(...)) maps 'false' to false.
+            instance.mirrorFallback = PseudoBoolean.from(mirrorFallback);
         }
         const withLinksSummary = ctx?.get('x-with-links-summary');
         if (withLinksSummary) {
