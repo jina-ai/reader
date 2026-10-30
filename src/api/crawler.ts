@@ -62,6 +62,7 @@ import { detectBuff, extOfMime } from 'civkit/mime';
 import { STATUS_CODES } from 'http';
 import { fileURLToPath } from 'url';
 import { BogoSitesControl } from '../services/bogo-sites';
+import { annotateMirrorSnapshot, isBlockSnapshot, isMirrorFallbackEnabled, isUsableMirrorSnapshot, mirrorCandidates, mirrorNotice } from '../services/mirror-fallback';
 
 
 export const sha256Hasher = new HashManager('sha256', 'hex');
@@ -873,6 +874,19 @@ export class CrawlerHost extends RPCHost {
             return;
         }
 
+        // Opt-in mirror fallback (off by default): when the target has
+        // configured mirrors and the feature is enabled, a blocked
+        // fetch is retried through a mirror instead of being served.
+        // Snapshots are buffered in that branch so the block page is
+        // never streamed to the caller before the mirror is tried.
+        if (crawlerOpts && isMirrorFallbackEnabled(crawlerOpts)) {
+            const mirrorUrls = mirrorCandidates(urlToCrawl);
+            if (mirrorUrls.length) {
+                yield* this.iterSnapshotsWithMirrorFallback(urlToCrawl, mirrorUrls, crawlOpts, crawlerOpts);
+                return;
+            }
+        }
+
         try {
             let badBlob = false;
             for await (const snapshot of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOpts)) {
@@ -900,6 +914,67 @@ export class CrawlerHost extends RPCHost {
             }
             throw err;
         }
+    }
+
+    /**
+     * Mirror-fallback variant of the snapshot loop, used only when the
+     * feature is enabled and the target has configured mirrors.
+     * Snapshots are buffered so a blocked final snapshot can be
+     * replaced by a mirror attempt instead of being served. When no
+     * mirror yields usable content, the original snapshots are yielded
+     * unchanged, preserving today's behavior. Blob-equivalent handling
+     * from the standard loop is intentionally not replicated here:
+     * mirror candidates only exist for Reddit thread URLs, which never
+     * produce blob snapshots.
+     */
+    private async *iterSnapshotsWithMirrorFallback(
+        urlToCrawl: URL,
+        mirrorUrls: URL[],
+        crawlOpts?: ExtraScrappingOptions,
+        crawlerOpts?: CrawlerOptions,
+    ) {
+        const original: (PageSnapshot | undefined)[] = [];
+        try {
+            for await (const snapshot of this.cachedScrap(urlToCrawl, crawlOpts, crawlerOpts)) {
+                if (snapshot?.status && crawlerOpts?.assertStatusCode && crawlerOpts.assertStatusCode !== snapshot.status) {
+                    throw new AssertionFailureError(`Expected status code ${crawlerOpts.assertStatusCode} but got ${snapshot.status}`);
+                }
+                original.push(snapshot);
+            }
+        } catch (err) {
+            if (err instanceof ServiceCrashedError) {
+                // Same as the standard path: give anything at hand (nothing here).
+                return;
+            }
+            throw err;
+        }
+
+        const last = original[original.length - 1];
+        if (last && isBlockSnapshot(last)) {
+            for (const mirrorUrl of mirrorUrls) {
+                const mirrored: (PageSnapshot | undefined)[] = [];
+                try {
+                    for await (const snapshot of this.cachedScrap(mirrorUrl, crawlOpts, crawlerOpts)) {
+                        mirrored.push(snapshot);
+                    }
+                } catch (err) {
+                    this.logger.warn(`Mirror fallback attempt failed for ${mirrorUrl} (mirror of ${urlToCrawl})`, { err });
+                    continue;
+                }
+                const mirrorLast = mirrored[mirrored.length - 1];
+                if (mirrorLast && isUsableMirrorSnapshot(mirrorLast)) {
+                    this.logger.info(`Mirror fallback served ${urlToCrawl} via ${mirrorUrl}`);
+                    for (const snapshot of mirrored) {
+                        yield snapshot
+                            ? annotateMirrorSnapshot(snapshot, urlToCrawl.toString(), mirrorUrl.toString())
+                            : snapshot;
+                    }
+                    return;
+                }
+            }
+        }
+
+        yield* original;
     }
 
     async *cachedScrap(urlToCrawl: URL, crawlOpts?: ExtraScrappingOptions, crawlerOpts?: CrawlerOptions) {
@@ -1548,6 +1623,7 @@ export class CrawlerHost extends RPCHost {
                 title: snapshot.title,
                 content: snapshot.parsed?.textContent,
                 url: presumedURL?.href || snapshot.href,
+                warning: mirrorNotice(snapshot),
             };
 
             return FormattedPageDto.from(output);
